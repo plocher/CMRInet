@@ -1,0 +1,11 @@
+# WiFi credentials (per-site; use secrets.h.example as the template)
+examples/**/secrets.h
+
+# OS / editor noise
+.DS_Store
+
+# Build artifacts
+build/
+*.bin
+*.elf
+*.map
