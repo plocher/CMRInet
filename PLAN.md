@@ -1,4 +1,14 @@
-# cpNode-Master — CMRINet Master (JMRI Emulator) Plan
+# CMRInet — CMRINet Master (JMRI Emulator) Plan
+
+> **Note (2026-08-12):** the architecture sections below ("Why a
+> separate library", "Protocol notes", "Core state machine") are
+> superseded by [docs/DESIGN.md](docs/DESIGN.md), which records the
+> agreed layer model, decisions D1-D12, and the transport contract.
+> Wire behavior follows
+> [docs/cmrinet-interop-profile-and-errata.md](docs/cmrinet-interop-profile-and-errata.md).
+> The goal, display semantics, validation, and phasing here still
+> stand, reinterpreted through DESIGN.md (see its revised Phase 1
+> scope).
 
 ## Goal
 A bench "JMRI Master" instrument: a Xiao-based board (no IOX expanders;

@@ -1,4 +1,4 @@
-# Handoff — cpNode-Master Phase 1 (tracer bullet)
+# Handoff — CMRInet Phase 1 (tracer bullet)
 
 Audience: a fresh agent starting implementation of this library.
 Scope, architecture, state machine, validation, and phasing are in
@@ -6,7 +6,7 @@ Scope, architecture, state machine, validation, and phasing are in
 lives outside this repo or was learned the hard way.
 
 ## Where things are
-- This repo: `~/Dropbox/Arduino/libraries/cpNode-Master` (you are here).
+- This repo: `~/Dropbox/Arduino/libraries/CMRInet` (you are here).
   `src/` and `examples/` are empty and waiting for Phase 1.
 - Slave library (protocol reference): `~/Dropbox/Arduino/libraries/cpNode/src/`
   - `cpNode.cpp` top-of-file comments document the CMRINet message
