@@ -36,11 +36,13 @@ product.
 ```
 Image contract (handles: bits, freshness, health)   <- THE product surface
         | implemented by (setup-time choice)
-  PolledCMRIHost                     [MQTTCMRIHost — future, no consumer]
-        |                                  |
-  packet seam (CMRITransport)         MQTT client, topics, LWT
-        |                                  (no packet seam at all)
-  SerialCMRI / Mock / TCP / MQTT-as-carrier
+  CMRIHost                    [future push engine — image seam, no
+        |                      consumer yet; named by its schema when
+        |                      it exists (the grammar permits MQTTHost)]
+  packet seam (CMRITransport)      its own MQTT client, topics, LWT
+        |                          (no packet seam at all)
+  SerialCMRITransport / MockCMRITransport /
+  TcpCMRITransport / MqttCMRITransport
 ```
 
 - The **image seam** is universal. Every strategy implements it. The
@@ -51,7 +53,7 @@ Image contract (handles: bits, freshness, health)   <- THE product surface
   TCP, mock, or MQTT-as-carrier. A native push strategy has no packet
   seam — its lower edge is its own client library.
 
-Choosing a strategy selects a compatibility domain: `PolledCMRIHost`
+Choosing a strategy selects a compatibility domain: `CMRIHost`
 keeps you in the CMRInet interop world (JMRI, fielded Nodes,
 gateways). A native push strategy leaves it, with the same sketch.
 
@@ -93,6 +95,24 @@ our handles do.
 Classes and docs use Host/Node, never master/slave or
 controller/client.
 
+Naming grammar: the head noun (last word) says what a thing IS;
+qualifiers stack in front of it — innermost = what it speaks,
+outermost = what it runs on.
+- Engines are [protocol] x [role]: `CMRIHost`, `CMRINode`. "Polled"
+  appears in no public name: CMRInet is inherently polled, so the
+  word is redundant, and a non-polled strategy would not be CMRInet,
+  so it must not carry the CMRI qualifier. A future push engine is
+  named by the protocol/schema it speaks, once that exists
+  (`MQTTHost` parses correctly under this grammar).
+- Transport implementations end with the interface they implement:
+  `SerialCMRITransport`, `MockCMRITransport`, `TcpCMRITransport`,
+  `MqttCMRITransport` — read "CMRI-transport over <medium>". Never
+  `SerialCMRI` or `CMRISerial` (headless shorthand).
+- Product-layer types are strategy-neutral and carry no protocol
+  qualifier at all: the node handle, `LinkState`, `NodeStats`, images.
+Earlier drafts used `PolledCMRIHost`/`PolledHost`/`PolledNode`
+interchangeably; those names are retired.
+
 ### D2. The sketch-facing contract is images plus freshness and health
 The per-node handle exposes output image writes, input image reads,
 input age, link state, and stats. It contains no poll vocabulary.
@@ -105,16 +125,17 @@ strategy-neutral header owned by no engine.
 Two different timeouts, kept apart:
 - **Reply-gate timeout** (~250 ms): how long the polled strategy holds
   the bus waiting for R. A shared-bus denial-of-service defense.
-  Lives in `PolledConfig`. Meaningless to other strategies.
+  Lives in the CMRI engine's config, never in the handle contract.
+  Meaningless to other strategies.
 - **Staleness threshold**: how old input data may be before the
   application should distrust it. Universal. Lives in the handle
   contract.
 
 ### D3. One strategy, two roles, three counterparty fidelities
 Build the polled strategy only, but both roles of it:
-- **PolledHost** — initiates: schedule, reply-gate timeout, re-init
+- **CMRIHost** — initiates: schedule, reply-gate timeout, re-init
   ladder.
-- **PolledNode** — reacts: UA match, I/T/P handling, R reply. It is
+- **CMRINode** — reacts: UA match, I/T/P handling, R reply. It is
   the test counterparty, the emulator core, and the eventual client
   library candidate. Building the Host's test rig builds it anyway.
 
@@ -122,9 +143,9 @@ Counterparty fidelity ladder, in build order:
 1. **Scripted replay** at the byte/packet level, for unit tests.
    Deliberately dumber than an emulator so pathological sequences
    from the research replay exactly.
-2. **Correct PolledNode**, compliant with the interop profile, for
+2. **Correct CMRINode**, compliant with the interop profile, for
    loopback integration tests and default emulated nodes.
-3. **Warty PolledNode**: configurable fielded defects (Adams 50 ms
+3. **Warty CMRINode**: configurable fielded defects (Adams 50 ms
    reply delay, third-SYN frame drop, DLE-blind flush, body shift,
    trailing I-body byte). The research reviews are its requirements.
 
@@ -194,14 +215,14 @@ wins, and the erratum (Part 1) records why.
 ### D11. The MQTT carrier transport is the third-party seam proof
 A `MqttCMRITransport` implemented by an independent party, against
 the transport contract alone, validates the packet seam. Acceptance:
-the desktop loopback rig (PolledHost to PolledNode) runs over it with
+the desktop loopback rig (CMRIHost to CMRINode) runs over it with
 zero engine changes and all mock-transport suites still passing.
 Dispatch only after the codec, engine, and mock transport exist.
 Speed is explicitly not a goal. It is a proof, not a product — see
 D12 for the product-shaped MQTT story.
 
 ### D12. The semantic gateway is the product's first application
-An ESP32 gateway device runs `PolledCMRIHost` at the RS-485 segment
+An ESP32 gateway device runs `CMRIHost` at the RS-485 segment
 (polling at wire speed) plus a thin topic-mirror app written against
 the image verbs: publish IB images and per-node state on change
 (retained), subscribe to OB image topics, gateway LWT for liveness.
@@ -269,7 +290,7 @@ Known implementer decisions for a message-carrier transport (MQTT):
 
 ```cpp
 CMRIHost host(transport);                       // config phase
-CMRINodeHandle& n = host.addNode(ua, NodeConfig{...});
+NodeHandle& n = host.addNode(ua, NodeConfig{...}); // handle name TBD (#2)
 host.onEvent(fn);                               // timeouts, re-inits, errors
 host.onTrace(fn);                               // TX/RX packets (monitor)
 host.begin();                                   // lock; no allocation after
@@ -290,17 +311,19 @@ Open items to settle during tracer-bullet implementation:
    the bench. `forceTransmit()` exists either way.
 2. Per-node input-change callback, or polled-only handle. Start
    polled-only. Add the callback only if diff-scanning hurts.
-3. Final name for the per-node handle (`CMRINodeHandle` here) so it
-   does not collide with the cpNode library's mental namespace.
+3. Final name for the per-node handle (`NodeHandle` placeholder —
+   issue #2). Constraints from D1's grammar: it is a product-layer
+   type, so it carries no CMRI qualifier; it must not collide with
+   the `CMRINode` engine nor the cpNode library's mental namespace.
 
 ## Test strategy
 
 - Unit: codec against byte vectors, including every pathological case
   in `comparison.md` §3 (the anti-checklist is the test plan). Engine
   against mock clock plus scripted-replay transport (fidelity 1).
-- Integration: desktop loopback, PolledHost to PolledNode over paired
+- Integration: desktop loopback, CMRIHost to CMRINode over paired
   mock transports (fidelity 2), later over `MqttCMRITransport` (D11).
-- Conformance/bench: warty PolledNode (fidelity 3), fault injection,
+- Conformance/bench: warty CMRINode (fidelity 3), fault injection,
   slow byte-spaced TX (classic Hosts sent gapped bytes; see profile
   2.2.6), oversized frames, truncations.
 - Hardware: the PLAN.md two-board bench (Xiao Host plus Xiao_I2C
@@ -308,10 +331,10 @@ Open items to settle during tracer-bullet implementation:
 
 ## Scope for the tracer bullet (Phase 1, revised)
 
-In: codec, serial transport, mock transport, PolledHost (P/R only),
-minimal handle (inputs, freshness, state), scripted-replay tests,
-OLED hit/miss display per PLAN.md.
-Out (sequenced, not abandoned): T and I sending (Phase 2), PolledNode
+In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost (P/R
+only), minimal handle (inputs, freshness, state), scripted-replay
+tests, OLED hit/miss display per PLAN.md.
+Out (sequenced, not abandoned): T and I sending (Phase 2), CMRINode
 emulator (Phase 2, as the loopback counterparty), MQTT carrier proof
 (after Phase 2), semantic gateway app (after the emulator), push
 strategy (no consumer), SUSIC/SMINI node types (bench roadmap).
