@@ -109,27 +109,61 @@ outermost = what it runs on.
   `MqttCMRITransport` — read "CMRI-transport over <medium>". Never
   `SerialCMRI` or `CMRISerial` (headless shorthand).
 - Product-layer types are strategy-neutral and carry no protocol
-  qualifier at all: the node handle, `LinkState`, `NodeStats`, images.
+  qualifier. They are qualified by *perspective* instead: the
+  `RemoteNode*` family is the Host's view of remote nodes —
+  `RemoteNodeHandle`, `RemoteNodeConfig`, `RemoteNodeState`,
+  `RemoteNodeStatistics` (issue #2).
+- `CMRI` never stacks directly onto a `Node`-family product name:
+  `CMRINode` is itself a type, so any such composition
+  (`CMRINodeStatistics`) parses two ways. `CMRINodeConfig` and
+  `CMRINodeStatistics` are therefore reserved for the device
+  engine's OWN types, where "the CMRINode's config/statistics" is
+  the correct parse. There is deliberately no `RemoteNode` type —
+  that absence keeps the `RemoteNode*` family single-parse.
+- Never abbreviate `Statistics` to `Stats`: `State`/`Stats` is a
+  one-letter trap.
+- No bare `Host*` product types: the sketch's host object IS the
+  strategy choice, so host-side types are engine-owned
+  (`CMRIHostConfig`, nested `CMRIHost::RemoteNodePolicy`, future
+  `CMRIHostStatistics`).
+
+Packaging: all public types live in `namespace CMRInet`, spelled by
+the grammar above — `CMRInet::CMRIHost`, not `CMRInet::Host`. The
+redundancy is load-bearing: examples and docs always use fully
+qualified names (safe in Arduino's hoisted prototypes), no global
+names are exported today, and because in-namespace identifiers are
+self-prefixed, exporting flat globals later via
+`using CMRInet::CMRIHost;` declarations stays a non-breaking option.
+A `namespace CMRI` was rejected: ArduinoCMRI defines a global
+`class CMRI`.
 Earlier drafts used `PolledCMRIHost`/`PolledHost`/`PolledNode`
-interchangeably; those names are retired.
+interchangeably; those names are retired, as are `CMRINodeHandle`,
+bare `Node*` product names, `LinkState`, `NodeStats`, and
+`LinkStats` (issue #2).
 
 ### D2. The sketch-facing contract is images plus freshness and health
-The per-node handle exposes output image writes, input image reads,
-input age, link state, and stats. It contains no poll vocabulary.
-Link states are strategy-neutral: UNINITIALIZED / ONLINE / STALE /
-OFFLINE. Stats split into a generic core (exchanges, errors,
-turnaround, staleness) and a strategy extension (polls, misses,
-re-inits). Handle, image, freshness, and health types live in a
+The per-node handle (`RemoteNodeHandle`) exposes output image writes,
+input image reads, input age, link state, and statistics. It contains
+no poll vocabulary. `RemoteNodeState` is strategy-neutral:
+UNINITIALIZED / ONLINE / STALE / OFFLINE. `RemoteNodeStatistics` is a
+single neutral type — `exchanges`, `noReplies`, `recoveries`,
+`errors`, turnaround, staleness age. Every exchange discipline has
+attempts, failures, and recoveries, so no strategy-extension type
+exists; the bench UI may *display* "polls/misses", but the API
+vocabulary stays neutral. Anything truly polled-only surfaces on
+engine-owned types (`CMRIHostStatistics`), never on the handle.
+Handle, image, freshness, and health types live in a
 strategy-neutral header owned by no engine.
 
 Two different timeouts, kept apart:
 - **Reply-gate timeout** (~250 ms): how long the polled strategy holds
   the bus waiting for R. A shared-bus denial-of-service defense.
-  Lives in the CMRI engine's config, never in the handle contract.
-  Meaningless to other strategies.
+  Lives in `CMRIHostConfig` (host-wide default) with per-node
+  overrides in `CMRIHost::RemoteNodePolicy`, never in the handle
+  contract. Meaningless to other strategies.
 - **Staleness threshold**: how old input data may be before the
   application should distrust it. Universal. Lives in the handle
-  contract.
+  contract (`RemoteNodeConfig`).
 
 ### D3. One strategy, two roles, three counterparty fidelities
 Build the polled strategy only, but both roles of it:
@@ -251,6 +285,8 @@ Scope: transports for the CMRInet polled strategy. Not a product-wide
 layer (see D4, one-product model).
 
 ```cpp
+namespace CMRInet {
+
 class CMRITransport {
  public:
   virtual void begin() = 0;                        // may allocate (D5)
@@ -258,8 +294,10 @@ class CMRITransport {
   virtual bool sendPacket(const CMRIPacket&) = 0;  // accepted != on the wire
   virtual bool sendComplete() const = 0;           // true once fully delivered
   virtual bool receivePacket(CMRIPacket&) = 0;     // whole validated packets only
-  virtual const LinkStats& stats() const = 0;      // link errors and liveness
+  virtual const LinkStatistics& stats() const = 0; // link errors and liveness
 };
+
+}  // namespace CMRInet
 ```
 
 Clause semantics (normative for implementers):
@@ -289,32 +327,46 @@ Known implementer decisions for a message-carrier transport (MQTT):
 ## Handle contract (strawman, pre-implementation)
 
 ```cpp
-CMRIHost host(transport);                       // config phase
-NodeHandle& n = host.addNode(ua, NodeConfig{...}); // handle name TBD (#2)
-host.onEvent(fn);                               // timeouts, re-inits, errors
-host.onTrace(fn);                               // TX/RX packets (monitor)
-host.begin();                                   // lock; no allocation after
+// ---- HOST sketch (bench, gateway) ----
+CMRInet::CMRIHost me(transport);                // config phase
+CMRInet::RemoteNodeHandle& node5 =
+    me.addRemoteNode(ua,
+        CMRInet::RemoteNodeConfig{...},         // neutral: staleness, enabled
+        CMRInet::CMRIHost::RemoteNodePolicy{...}); // polled knobs (optional)
+me.onEvent(fn);                                 // timeouts, re-inits, errors
+me.onTrace(fn);                                 // TX/RX packets (monitor)
+me.begin();                                     // lock; no allocation after
 
-host.tick(nowMs);                               // runtime, non-blocking
+me.tick(nowMs);                                 // runtime, non-blocking
 
-n.setOutputBit(bit, v);                         // marks dirty -> full-image T
-n.setOutputs(image, len);
-bool b       = n.inputBit(bit);                 // last good IB
-uint32_t age = n.inputAgeMs(nowMs);             // staleness (D2)
-LinkState s  = n.state();                       // UNINITIALIZED/ONLINE/STALE/OFFLINE
-const NodeStats& st = n.stats();
-n.setEnabled(false);                            // no removal (D5)
+node5.setOutputBit(bit, v);                     // marks dirty -> full-image T
+node5.setOutputs(image, len);
+bool b       = node5.inputBit(bit);             // last good IB
+uint32_t age = node5.inputAgeMs(nowMs);         // staleness (D2)
+CMRInet::RemoteNodeState s = node5.state();     // UNINITIALIZED/ONLINE/STALE/OFFLINE
+const CMRInet::RemoteNodeStatistics& st = node5.stats();
+node5.setEnabled(false);                        // no removal (D5)
 ```
+
+```cpp
+// ---- NODE (device) sketch ----
+CMRInet::CMRINode me(transport,
+    CMRInet::CMRINodeConfig{ .ua = 5, ... });   // engine's OWN types
+me.onOutputs(applyOB);                          // OB arrived -> drive pins
+me.begin();
+// loop(): me.setInputBit(bit, v); me.tick();
+// no RemoteNodeHandle here — a device holds no views of other nodes
+```
+
+The families cannot blur: a Host sketch manages *other* nodes through
+the `RemoteNode*` product family; a device sketch IS the machinery
+and touches only `CMRINode` and its own `CMRINode*` types.
 
 Open items to settle during tracer-bullet implementation:
 1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
    the bench. `forceTransmit()` exists either way.
 2. Per-node input-change callback, or polled-only handle. Start
    polled-only. Add the callback only if diff-scanning hurts.
-3. Final name for the per-node handle (`NodeHandle` placeholder —
-   issue #2). Constraints from D1's grammar: it is a product-layer
-   type, so it carries no CMRI qualifier; it must not collide with
-   the `CMRINode` engine nor the cpNode library's mental namespace.
 
 ## Test strategy
 
@@ -332,8 +384,8 @@ Open items to settle during tracer-bullet implementation:
 ## Scope for the tracer bullet (Phase 1, revised)
 
 In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost (P/R
-only), minimal handle (inputs, freshness, state), scripted-replay
-tests, OLED hit/miss display per PLAN.md.
+only), minimal `RemoteNodeHandle` (inputs, freshness, state),
+scripted-replay tests, OLED hit/miss display per PLAN.md.
 Out (sequenced, not abandoned): T and I sending (Phase 2), CMRINode
 emulator (Phase 2, as the loopback counterparty), MQTT carrier proof
 (after Phase 2), semantic gateway app (after the emulator), push
