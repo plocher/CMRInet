@@ -3,10 +3,6 @@
 // A packet is the protocol's logical datagram {UA, MT, body}. It is NOT
 // bytes on a wire: serial framing (SYN/0xFF preamble, STX/0x02, DLE/0x10
 // escaping, ETX/0x03) is the serial codec's business (CMRIFrameCodec.h).
-//
-// References:
-//   docs/DESIGN.md — Terms, D4, D7, D8.
-//   docs/cmrinet-interop-profile-and-errata.md — Part 2 (esp. E7 / 2.2.5).
 
 #pragma once
 
@@ -14,9 +10,10 @@
 #include <stdint.h>
 #include <string.h>
 
-// Geometry ceiling (DESIGN.md D8): compile-time knob so a '328-class build
-// can shrink packet buffers. The interop default is 256 logical body bytes,
-// counted after DLE removal (profile E7).
+// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time knobs,
+// so a '328-class build can shrink packet buffers.
+// VALIDATION: Interop v1.0 E7: the default is 256 logical body bytes,
+// counted after DLE removal.
 #ifndef CMRINET_MAX_BODY
 #define CMRINET_MAX_BODY 256
 #endif
@@ -24,18 +21,19 @@
 namespace CMRInet {
 
 // Protocol characters. This library always names a protocol character
-// together with its hex value (profile "Terms").
+// together with its hex value.
 constexpr uint8_t kSyn = 0xFFu;  // SYN/0xFF — TX preamble only, never escaped
 constexpr uint8_t kStx = 0x02u;  // STX/0x02 — frame start
 constexpr uint8_t kEtx = 0x03u;  // ETX/0x03 — frame end
 constexpr uint8_t kDle = 0x10u;  // DLE/0x10 — escape prefix
 
-// UA = Node address + 65 (profile "Terms").
+// VALIDATION: Interop v1.0 "Terms": UA = Node address + 65.
 constexpr uint8_t kUaOffset = 65u;
 
-// Message types the polled strategy speaks. The codec itself never
-// validates MT: fielded networks carry JMRI extensions (E/Q/D/W/A/C/M,
-// profile E9) and the codec must not choke on them.
+// Message types the polled strategy speaks.
+// VALIDATION: Interop v1.0 E9: the codec never validates MT — fielded
+// networks carry JMRI extensions (E/Q/D/W/A/C/M) and the codec must not
+// choke on them.
 namespace MessageType {
 constexpr uint8_t kInit = 'I';          // session setup
 constexpr uint8_t kPoll = 'P';          // media-access control
@@ -43,12 +41,12 @@ constexpr uint8_t kReceiveData = 'R';   // Node -> Host inputs
 constexpr uint8_t kTransmitData = 'T';  // Host -> Node outputs
 }  // namespace MessageType
 
-// Logical body ceiling, counted after DLE removal (profile E7).
+// Logical body ceiling, counted after DLE removal (E7).
 constexpr size_t kMaxBody = CMRINET_MAX_BODY;
 
-// Worst-case wire length of one frame: 2 SYN + STX + UA + MT + ETX plus a
-// fully escaped body at two bytes per data byte (profile 2.1.6: size the
-// TX staging buffer for full escaping).
+// VALIDATION: Interop v1.0 2.1.6: size the TX staging buffer for full
+// escaping — the worst case is 2 SYN + STX + UA + MT + ETX plus two
+// wire bytes per data byte.
 constexpr size_t kMaxWireFrame = 6u + 2u * kMaxBody;
 
 /// The direction-neutral packet value type: {UA, MT, body}.

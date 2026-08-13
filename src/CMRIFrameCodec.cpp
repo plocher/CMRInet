@@ -1,6 +1,8 @@
 // CMRIFrameCodec.cpp — CMRInet serial codec implementation.
 //
-// Rule references are to docs/cmrinet-interop-profile-and-errata.md Part 2.
+// VALIDATION: Interop v1.0 Part 2: wire behavior implements the
+// profile's TX (2.1.x) and RX (2.2.x) rules. Bare rule ids in this file
+// inherit this tag's version.
 
 #include "CMRIFrameCodec.h"
 

@@ -1,12 +1,14 @@
 // CMRIFrameCodec.h — the CMRInet serial codec: packet <-> wire bytes.
 //
-// Framing exists only to create message boundaries on a byte stream, so
-// this codec is owned by the serial transport layer (DESIGN.md D4). It has
-// no Arduino dependencies: time is injected as `nowMs` (DESIGN.md D6) and
-// bytes are plain uint8_t (DESIGN.md D7).
+// Framing exists only to create message boundaries on a byte stream. The
+// codec has no Arduino dependencies: time is injected as `nowMs` and
+// bytes are plain uint8_t, so desktop tests compile the exact sources.
 //
-// Wire behavior implements docs/cmrinet-interop-profile-and-errata.md
-// Part 2. Rule references below use its numbering (2.1.x TX, 2.2.x RX).
+// VALIDATION: Design v1.0 D4: framing belongs to the serial transport
+// layer. The engine above deals in packets, never bytes.
+// VALIDATION: Interop v1.0 Part 2: wire behavior implements the
+// profile's TX (2.1.x) and RX (2.2.x) rules. Bare rule ids in this file
+// inherit this tag's version.
 
 #pragma once
 
@@ -65,8 +67,9 @@ size_t encodeFrame(const CMRIPacket& packet, uint8_t* out, size_t capacity);
 /// - Bytes are uint8_t end to end; no signed-char comparisons
 ///   (rule 2.2.9).
 ///
-/// UA filtering and MT validation are deliberately NOT here — address
-/// filtering is not the transport's job (DESIGN.md transport contract).
+/// UA filtering and MT validation are deliberately NOT here.
+/// VALIDATION: Design v1.0 "Transport contract (packet seam)": address
+/// filtering is not the transport's job.
 class CMRIFrameDecoder {
  public:
   /// Decoder health counters, in transport-neutral terms. All start at 0.
@@ -94,8 +97,8 @@ class CMRIFrameDecoder {
   /// gaps between bytes (rule 2.2.6 exception).
   void setInterByteTimeoutMs(uint32_t ms) { interByteTimeoutMs_ = ms; }
 
-  /// Consume one received byte. `nowMs` is the caller's clock (injected
-  /// time, DESIGN.md D6) and must be monotonic. Returns true when this
+  /// Consume one received byte. `nowMs` is the caller's injected clock
+  /// (see CMRITime.h) and must be monotonic. Returns true when this
   /// byte completed a frame and a packet is now available via take().
   bool feed(uint8_t byte, uint32_t nowMs);
 

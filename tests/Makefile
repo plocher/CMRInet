@@ -1,7 +1,7 @@
 # Desktop unit tests for the CMRInet library.
 #
-# The library core has no Arduino dependencies (DESIGN.md D6/D7), so these
-# tests compile the exact library sources with the host compiler.
+# The library core has no Arduino dependencies, so these tests compile
+# the exact library sources with the host compiler.
 #
 # Run from the repo root:   make -C tests
 # Or from this directory:   make

@@ -1,12 +1,13 @@
 // test_codec.cpp — byte-vector tests for the CMRInet serial codec.
 //
 // The test plan is the anti-checklist in docs/research/comparison.md §3
-// plus the golden framing rules in the interop profile Part 2
-// (docs/cmrinet-interop-profile-and-errata.md). Each test names the rule
-// or defect it pins.
+// plus the golden framing rules of the interop profile Part 2. Each test
+// that pins a profile rule carries a VALIDATION tag (see
+// docs/agents/validation-comments.md). The rest pin fielded defects from
+// the research.
 //
-// Desktop-native: the codec has no Arduino dependencies (DESIGN.md D6/D7),
-// so these tests compile the exact library sources with the host compiler.
+// Desktop-native: the codec has no Arduino dependencies, so these tests
+// compile the exact library sources with the host compiler.
 
 #include <string.h>
 
@@ -53,8 +54,9 @@ static int feedAll(CMRIFrameDecoder& d, const uint8_t* bytes, size_t len,
 
 // ---------------------------------------------------------------- encoder
 
-// Golden vector: poll of node address 5. Rule 2.1.1: exactly two SYN/0xFF,
-// then STX/0x02, UA, MT, body, ETX/0x03.
+// VALIDATION: Interop v1.0 2.1.1: a frame is two SYN/0xFF, then
+// STX/0x02, UA, MT, body, ETX/0x03. Golden vector: poll of node
+// address 5.
 static void test_encode_poll_golden_vector(void) {
   const CMRIPacket p = makePacket(5, 'P', nullptr, 0);
   uint8_t wire[16] = {0};
@@ -64,8 +66,8 @@ static void test_encode_poll_golden_vector(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, wire, sizeof(expected));
 }
 
-// Rule 2.1.1 pinned: two SYNs — not one, not three (the third would drop
-// the frame on fielded ArduinoCMRI nodes).
+// VALIDATION: Interop v1.0 2.1.1: exactly two SYNs — not one, not
+// three (a third would drop the frame on fielded ArduinoCMRI nodes).
 static void test_encode_emits_exactly_two_syns(void) {
   const CMRIPacket p = makePacket(0, 'P', nullptr, 0);
   uint8_t wire[16] = {0};
@@ -76,7 +78,8 @@ static void test_encode_emits_exactly_two_syns(void) {
   TEST_ASSERT_EQUAL_HEX8(kStx, wire[2]);  // third byte is STX, not SYN
 }
 
-// Rule 2.1.2 / E1: STX/0x02, ETX/0x03, DLE/0x10 escaped in every body.
+// VALIDATION: Interop v1.0 2.1.2, E1: STX/0x02, ETX/0x03, DLE/0x10 are
+// escaped in every body.
 static void test_encode_escapes_protocol_chars_in_body(void) {
   const uint8_t body[] = {0x02, 0x03, 0x10, 0x41};
   const CMRIPacket p = makePacket(5, 'T', body, sizeof(body));
@@ -89,7 +92,8 @@ static void test_encode_escapes_protocol_chars_in_body(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, wire, sizeof(expected));
 }
 
-// Rule 2.1.3: SYN/0xFF in a body is data and is never escaped.
+// VALIDATION: Interop v1.0 2.1.3: SYN/0xFF in a body is data and is
+// never escaped.
 static void test_encode_never_escapes_syn_value(void) {
   const uint8_t body[] = {0xFF};
   const CMRIPacket p = makePacket(5, 'T', body, sizeof(body));
@@ -100,8 +104,9 @@ static void test_encode_never_escapes_syn_value(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, wire, sizeof(expected));
 }
 
-// E3: the JMRI C-type (CPNODE) I-message dialect — escaped body bytes
-// (E1 applies to I messages) and six raw, unescaped 0xFF pad bytes.
+// VALIDATION: Interop v1.0 E3: the JMRI C-type (CPNODE) I-message
+// dialect — escaped body bytes (E1 applies to I messages) and six raw,
+// unescaped 0xFF pad bytes.
 static void test_encode_jmri_ctype_init_body(void) {
   const uint8_t body[] = {'C',  0x00, 0x02, 0x00, 0x00, 0x04, 0x04,
                           0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -117,7 +122,8 @@ static void test_encode_jmri_ctype_init_body(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, wire, sizeof(expected));
 }
 
-// E7 / rule 2.1.6: a fully escaped max body exactly fills kMaxWireFrame.
+// VALIDATION: Interop v1.0 E7, 2.1.6: a fully escaped max body exactly
+// fills kMaxWireFrame.
 static void test_encode_max_body_worst_case_fits_staging(void) {
   uint8_t body[kMaxBody];
   memset(body, kDle, sizeof(body));  // every byte needs escaping
@@ -168,7 +174,8 @@ static void test_decode_roundtrip(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));
 }
 
-// Rule 2.2.1: hunt for a bare STX/0x02 — SYNs are not required.
+// VALIDATION: Interop v1.0 2.2.1: hunt for a bare STX/0x02 — SYNs are
+// not required.
 static void test_decode_accepts_frame_without_syns(void) {
   const uint8_t wire[] = {0x02, 0x46, 0x50, 0x03};
   CMRIFrameDecoder d;
@@ -180,8 +187,9 @@ static void test_decode_accepts_frame_without_syns(void) {
   TEST_ASSERT_EQUAL_UINT16(0, got.length);
 }
 
-// Rule 2.2.1: SYNs are not counted against a frame. ArduinoCMRI drops the
-// frame on a third SYN — the Host codec must not replicate that defect.
+// VALIDATION: Interop v1.0 2.2.1: SYNs are not counted against a
+// frame. ArduinoCMRI drops the frame on a third SYN — the Host codec
+// must not replicate that defect.
 static void test_decode_tolerates_extra_syns(void) {
   const uint8_t wire[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0x46, 0x50,
                           0x03};
@@ -192,8 +200,9 @@ static void test_decode_tolerates_extra_syns(void) {
   TEST_ASSERT_EQUAL_HEX8('P', got.mt);
 }
 
-// Rule 2.2.3: raw 0xFF inside a body is data; never resynchronize on it.
-// JMRI's C-type I bodies end with six raw 0xFF pads — this exact shape.
+// VALIDATION: Interop v1.0 2.2.3: raw 0xFF inside a body is data,
+// never a resynchronization point. JMRI's C-type I bodies end with six
+// raw 0xFF pads — this exact shape.
 static void test_decode_ff_in_body_is_data_no_resync(void) {
   const uint8_t body[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   const CMRIPacket sent = makePacket(5, 'I', body, sizeof(body));
@@ -208,9 +217,9 @@ static void test_decode_ff_in_body_is_data_no_resync(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));
 }
 
-// Rule 2.2.2: after DLE, the next byte is data with no interpretation —
-// including an escaped 0x03 in the LAST body position (JMRI's dangling-DLE
-// receiver bug ate the real ETX here).
+// VALIDATION: Interop v1.0 2.2.2: after DLE, the next byte is data
+// with no interpretation — including an escaped 0x03 in the LAST body
+// position (JMRI's dangling-DLE receiver bug ate the real ETX here).
 static void test_decode_escaped_etx_in_last_body_position(void) {
   const uint8_t wire[] = {0x02, 0x46, 0x52, 0x41, 0x10, 0x03, 0x03};
   CMRIFrameDecoder d;
@@ -222,8 +231,8 @@ static void test_decode_escaped_etx_in_last_body_position(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, got.body, sizeof(expected));
 }
 
-// Rule 2.2.2: DLE before the STX test — an escaped 0x02 mid-body is data,
-// not a frame restart.
+// VALIDATION: Interop v1.0 2.2.2: DLE processes before the STX test —
+// an escaped 0x02 mid-body is data, not a frame restart.
 static void test_decode_escaped_stx_in_body_is_data(void) {
   const uint8_t wire[] = {0x02, 0x46, 0x52, 0x10, 0x02, 0x03};
   CMRIFrameDecoder d;
@@ -235,8 +244,8 @@ static void test_decode_escaped_stx_in_body_is_data(void) {
   TEST_ASSERT_EQUAL_UINT32(0, d.statistics().framesRestarted);
 }
 
-// Rule 2.2.4: an unescaped STX/0x02 mid-frame resets the frame; nothing
-// received before it is kept.
+// VALIDATION: Interop v1.0 2.2.4: an unescaped STX/0x02 mid-frame
+// resets the frame. Nothing received before it is kept.
 static void test_decode_unescaped_stx_restarts_frame(void) {
   const uint8_t wire[] = {0x02, 0x46, 0x54, 0x41, 0x42,  // partial frame
                           0x02, 0x47, 0x50, 0x03};       // real frame
@@ -264,9 +273,9 @@ static void test_decode_pre_stx_noise_not_buffered(void) {
   TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, got.body, sizeof(expected));
 }
 
-// Rule 2.4.1: DLE processing stays active while hunting/discarding. An
-// escaped 0x02 seen between frames must not start a frame (a DLE-blind
-// hunt was a bug in two fielded Hosts).
+// VALIDATION: Interop v1.0 2.4.1: DLE processing stays active while
+// hunting/discarding. An escaped 0x02 seen between frames must not
+// start a frame (a DLE-blind hunt was a bug in two fielded Hosts).
 static void test_decode_hunt_is_dle_aware(void) {
   CMRIFrameDecoder d;
   // Escaped STX while hunting: everything through the stray ETX is debris
@@ -282,8 +291,9 @@ static void test_decode_hunt_is_dle_aware(void) {
   TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
 }
 
-// Rules 2.2.6/2.2.7: a frame that dies in a dangling DLE is discarded on
-// timeout, and the decoder recovers on the next frame.
+// VALIDATION: Interop v1.0 2.2.6, 2.2.7: a frame that dies in a
+// dangling DLE is discarded on timeout, and the decoder recovers on the
+// next frame.
 static void test_decode_dangling_dle_timeout_discards(void) {
   CMRIFrameDecoder d;
   d.setInterByteTimeoutMs(10);
@@ -303,9 +313,9 @@ static void test_decode_dangling_dle_timeout_discards(void) {
   TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
 }
 
-// Rule 2.2.6 / anti-checklist (blocking reads): a truncated frame is
-// abandoned when the next traffic arrives after the inter-byte gap, and
-// the new frame decodes cleanly.
+// VALIDATION: Interop v1.0 2.2.6: a truncated frame is abandoned when
+// the next traffic arrives after the inter-byte gap, and the new frame
+// decodes cleanly (anti-checklist: blocking reads).
 static void test_decode_truncated_frame_recovers_via_gap(void) {
   CMRIFrameDecoder d;
   d.setInterByteTimeoutMs(10);
@@ -321,9 +331,9 @@ static void test_decode_truncated_frame_recovers_via_gap(void) {
   TEST_ASSERT_EQUAL_UINT32(1, d.statistics().timeoutAborts);
 }
 
-// Rule 2.2.6 exception: with the timeout disabled (0), arbitrarily gapped
-// bytes still assemble — the reference Host lineage transmitted with
-// interpreter-scale gaps between bytes.
+// VALIDATION: Interop v1.0 2.2.6: with the timeout disabled (0),
+// arbitrarily gapped bytes still assemble — the reference Host lineage
+// transmitted with interpreter-scale gaps between bytes.
 static void test_decode_timeout_disabled_tolerates_gaps(void) {
   CMRIFrameDecoder d;
   d.setInterByteTimeoutMs(0);
@@ -344,8 +354,9 @@ static void test_decode_timeout_disabled_tolerates_gaps(void) {
   TEST_ASSERT_EQUAL_UINT32(0, d.statistics().timeoutAborts);
 }
 
-// Rule 2.2.5: guard before every store. An oversized body aborts the
-// frame, delivers nothing, and the decoder recovers.
+// VALIDATION: Interop v1.0 2.2.5: guard before every store. An
+// oversized body aborts the frame, delivers nothing, and the decoder
+// recovers.
 static void test_decode_oversized_body_aborts_and_recovers(void) {
   CMRIFrameDecoder d;
   const uint8_t header[] = {0x02, 0x46, 0x52};
@@ -388,8 +399,9 @@ static void test_decode_body_length_boundaries(void) {
   }
 }
 
-// Rule 2.2.8: parse into staging; nothing is visible until a valid ETX.
-// The QBASIC Host committed early and reported an occupied block VACANT.
+// VALIDATION: Interop v1.0 2.2.8: parse into staging — nothing is
+// visible until a valid ETX. The QBASIC Host committed early and
+// reported an occupied block VACANT.
 static void test_decode_commits_only_on_etx(void) {
   const uint8_t frame[] = {0x02, 0x46, 0x52, 0x41, 0x42, 0x03};
   CMRIFrameDecoder d;
@@ -449,8 +461,8 @@ static void test_decode_ready_slot_overrun_keeps_oldest(void) {
   TEST_ASSERT_FALSE(d.take(got));
 }
 
-// Rule 2.2.9 / anti-checklist (signed-char traps): high-value bytes in
-// every field survive intact.
+// VALIDATION: Interop v1.0 2.2.9: high-value bytes in every field
+// survive intact (anti-checklist: signed-char traps).
 static void test_decode_high_value_bytes(void) {
   const uint8_t body[] = {0x80, 0x9F, 0xFE, 0xFF};
   const CMRIPacket sent = makePacket(127, 'R', body, sizeof(body));  // UA 0xC0
