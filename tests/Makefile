@@ -12,24 +12,28 @@ CFLAGS    = -Wall -Wextra -g -Iunity
 CXXFLAGS  = -std=c++11 -Wall -Wextra -Werror -g -I../src -Iunity
 BUILD    := build
 
-TARGET   := $(BUILD)/test_codec
+LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/MockCMRITransport.cpp
+LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIPacket.h ../src/CMRInet.h \
+            ../src/CMRITime.h ../src/CMRITransport.h \
+            ../src/MockCMRITransport.h
+
+TESTS   := test_codec test_time test_mock_transport
+TARGETS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
 
 all: test
 
-test: $(TARGET)
-	./$(TARGET)
+test: $(TARGETS)
+	@for t in $(TARGETS); do ./$$t || exit 1; done
 
 $(BUILD)/unity.o: unity/unity.c unity/unity.h unity/unity_internals.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -c unity/unity.c -o $@
 
-$(TARGET): test_codec.cpp ../src/CMRIFrameCodec.cpp ../src/CMRIFrameCodec.h \
-           ../src/CMRIPacket.h ../src/CMRInet.h $(BUILD)/unity.o
+$(BUILD)/%: %.cpp $(LIB_SRCS) $(LIB_HDRS) $(BUILD)/unity.o
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) test_codec.cpp ../src/CMRIFrameCodec.cpp \
-	    $(BUILD)/unity.o -o $@
+	$(CXX) $(CXXFLAGS) $< $(LIB_SRCS) $(BUILD)/unity.o -o $@
 
 clean:
 	rm -rf $(BUILD)

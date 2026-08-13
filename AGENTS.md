@@ -14,6 +14,10 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.
 
+### Validation tags
+
+Code links to design and spec clauses with greppable `// VALIDATION:` comments, not prose citations. See `docs/agents/validation-comments.md` for the grammar and the re-verification workflow.
+
 ## Project orientation
 
 - Architecture and decisions: `docs/DESIGN.md` (D1-D12; read before any implementation work).

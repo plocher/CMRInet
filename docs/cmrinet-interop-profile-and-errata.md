@@ -1,6 +1,9 @@
 # CMRInet as Fielded: Interop Profile and Errata for LCS-9.10.1
 
 Status: working draft for review.
+Version: 1.0 (bump when any rule or erratum changes; `// VALIDATION:`
+tags in code cite this version — see
+`docs/agents/validation-comments.md`).
 Audience: LCS-9.10.1 authors, JMRI maintainers, and implementers of
 CMRInet Hosts and Nodes.
 Date: 2026-08-12.

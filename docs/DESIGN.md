@@ -1,6 +1,9 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
+Version: 1.0 (bump when any decision or contract in this document
+changes; `// VALIDATION:` tags in code cite this version — see
+`docs/agents/validation-comments.md`).
 This document supersedes the architecture portions of `PLAN.md`
 ("Why a separate library", "Protocol notes", "Core state machine").
 The bench-instrument goal, display semantics, and phasing in `PLAN.md`

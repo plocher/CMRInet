@@ -7,3 +7,6 @@
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
+#include "CMRITime.h"
+#include "CMRITransport.h"
+#include "MockCMRITransport.h"
