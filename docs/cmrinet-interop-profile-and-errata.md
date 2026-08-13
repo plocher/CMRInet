@@ -373,6 +373,28 @@ RS-485 line discipline, where the converter does not manage direction:
    SBHRS Unix port left IXON enabled, and one XOFF/0x13 data byte froze
    all Host transmit (review-CMRI-Controller-host.md, Finding 7).
 
+## 2.6 Bus topology and echo visibility
+
+1. The fielded norm is 4-wire: one pair carries Host-to-Node traffic
+   (the poll pair), the other carries Node-to-Host traffic (the reply
+   pair). Most historical deployments, and all current ones known to
+   the authors, use this topology.
+2. On 4-wire, a Node's receiver sits only on the poll pair. A Node
+   never hears its own reply, another Node's reply, or an echo of its
+   own transmission. The Host's receiver sits only on the reply pair
+   and never hears its own polls.
+3. Consequence for receiver hardening: fielded Node receivers have
+   never been exercised against 'R' traffic or self-echo. Host receive
+   defects stay latent for the same reason. On 4-wire the reply pair
+   carries only the polled Node's reply, so the missing JMRI UA/MT
+   check (rule 2.3.5) rarely misfires in the field.
+4. A 2-wire network, with both directions on one shared pair, is
+   electrically possible and historically documented, but rare. On
+   2-wire every receiver hears all traffic, including its own
+   transmissions. Rules 2.2.1 through 2.2.9, 2.3.5, and 2.4.1 then
+   stop being defense in depth and become load-bearing. Treat 2-wire
+   as a conformance scenario, not a deployment assumption.
+
 # Open questions for the revision
 
 1. Adopt or deprecate the JMRI protocol extensions: NDP 'O', message
