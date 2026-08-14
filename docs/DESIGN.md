@@ -318,6 +318,12 @@ Clause semantics (normative for implementers):
   transport-neutral terms, so the strategy folds them into node
   health without knowing the medium.
 - Allocation only in `begin()` (D5).
+- Lifecycle and ownership: the sketch constructs and configures the
+  transport; the engine calls `transport.begin()` exactly once, from
+  its own `begin()`. Sketches do not call the transport's `begin()`.
+  `begin()` establishes a clean initial state (buffers, stats, and —
+  in mocks — replay scripts). Test consequence, learned in #6: script
+  mock replies after `CMRIHost::begin()`, never before.
 
 Known implementer decisions for a message-carrier transport (MQTT):
 1. Topic scheme: per-UA topics are legal and preferred. The engine
