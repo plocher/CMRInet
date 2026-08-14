@@ -5,6 +5,24 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- `CMRInet::CMRIHost` (`src/CMRIHost.h/.cpp`) — the polled-strategy
+  Host engine, P/R slice: non-blocking `tick(nowMs)` poll schedule,
+  round-robin over enabled nodes, reply gate opened at `sendComplete()`
+  (default 250 ms, per-node override via nested `RemoteNodePolicy`),
+  UA/MT reply verification, geometry-checked commit, miss counting
+  with recovery and OFFLINE detection, poll pacing, and cumulative
+  `CMRIHostStatistics` (issue #6).
+- `CMRInet::RemoteNodeHandle`, `RemoteNodeConfig`, `RemoteNodeState`,
+  `RemoteNodeStatistics` (`src/RemoteNodeHandle.h`) — the
+  strategy-neutral per-node product surface: input image reads,
+  freshness age, health state, cumulative statistics, and
+  disable-only lifecycle. New `CMRINET_HOST_MAX_INPUT_BYTES` and
+  `CMRINET_HOST_MAX_NODES` geometry knobs.
+- 20 new Unity tests (`tests/test_host.cpp`) against the mock
+  transport and scripted replay rig, covering poll emission, reply
+  gating and overrides, reply verification, miss/recovery/offline
+  and staleness transitions, pacing, backpressure retry, and
+  byte-level gapped replay through the real decoder (issue #6).
 - `CMRInet::SerialCMRITransport` (`src/SerialCMRITransport.h/.cpp`) —
   the serial/RS-485 packet transport: codec integration, non-blocking
   TXEN discipline (assert, gapless write, flush to full drain via

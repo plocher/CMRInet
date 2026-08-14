@@ -12,14 +12,16 @@ CFLAGS    = -Wall -Wextra -g -Iunity
 CXXFLAGS  = -std=c++11 -Wall -Wextra -Werror -g -I../src -Iunity
 BUILD    := build
 
-LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/MockCMRITransport.cpp \
-            ../src/SerialCMRITransport.cpp
-LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIPacket.h ../src/CMRInet.h \
-            ../src/CMRISerialPort.h ../src/CMRITime.h ../src/CMRITransport.h \
-            ../src/MockCMRITransport.h ../src/SerialCMRITransport.h \
+LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/CMRIHost.cpp \
+            ../src/MockCMRITransport.cpp ../src/SerialCMRITransport.cpp
+LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRIPacket.h \
+            ../src/CMRInet.h ../src/CMRISerialPort.h ../src/CMRITime.h \
+            ../src/CMRITransport.h ../src/MockCMRITransport.h \
+            ../src/RemoteNodeHandle.h ../src/SerialCMRITransport.h \
             ../src/StreamCMRISerialPort.h
 
-TESTS   := test_codec test_time test_mock_transport test_serial_transport
+TESTS   := test_codec test_time test_mock_transport test_serial_transport \
+           test_host
 TARGETS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean

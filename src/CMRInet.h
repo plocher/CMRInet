@@ -7,10 +7,12 @@
 #pragma once
 
 #include "CMRIFrameCodec.h"
+#include "CMRIHost.h"
 #include "CMRIPacket.h"
 #include "CMRISerialPort.h"
 #include "CMRITime.h"
 #include "CMRITransport.h"
 #include "MockCMRITransport.h"
+#include "RemoteNodeHandle.h"
 #include "SerialCMRITransport.h"
 #include "StreamCMRISerialPort.h"  // Arduino-only; empty on desktop
