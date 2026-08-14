@@ -49,6 +49,13 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
 - Host TXEN choice: on 4-wire the Host is the only driver on the poll pair and could hold DE asserted permanently, as classic CMRI hosts did. Prefer identical TXEN discipline in both roles: it exercises the shipped code path and survives a later 2-wire jumpering.
 - Termination and biasing: the board has an on-board termination option. A short bench pair usually works unterminated, but decide deliberately and record what the bench uses, so timing anomalies are not chased into the wrong layer.
 - Loopback jumpers invert: outputs are active low, so out 0 reads back as in 1. Scenario assertions must apply the inversion.
+- **Loopback safety rule (hardware-protecting, non-negotiable): a pin pair joined by a loopback jumper must never have both ends configured as outputs.** Configure exactly one end as OUTPUT and the other as INPUT — or both as INPUTs. Two push-pull drivers fighting through a jumper wire is a hardware-damage risk, and nothing in the protocol or the expander prevents it. Every sketch flashed to a jumpered node must be defensively configured against its board's jumper map before upload.
+- Bench IOX32 jumper inventory (MRCS IOX32 boards on the stage-1 node, recorded at build time — issue #22):
+  - `0x20` — no loopback jumpers
+  - `0x21` — two jumpers
+  - `0x22` — all 8 port A pins jumpered to port B
+  - `0x23`, `0x24` — no loopback jumpers
+  Scenario guidance: use the unjumpered boards for pure input reads, `0x21`/`0x22` for loopback assertions once T lands (Phase 2). A scenario selects boards by I2C address; the sketch's direction map must honor the safety rule above for whichever boards it enables.
 - Power: both boards can run from Mac USB during bench work. Note any externally powered configuration in the scenario, since brownout during pattern bursts would masquerade as protocol faults.
 - Manual production-test wiring (card N outputs to card M inputs) is operator work, guided step by step by the runner. The bench does not attempt relay matrices or automated patch panels.
 
