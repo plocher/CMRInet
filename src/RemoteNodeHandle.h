@@ -18,25 +18,28 @@
 
 #include "CMRITime.h"
 
-// Geometry knob: the per-node input image capacity in bytes.
-// 
-// The default is chosen to work with JMRI's current maximum of 120
-// Smaller values might be needed if the host processor is memory limited.
+// Geometry knob: the per-node input image capacity in data bytes.
 //
-// A CPNODE with all 8x IO16 cards configured as input (plus onboard I/O
-// of 16 bits / 2  bytes) needs 128+16=144 bits / 16+2 = 18 bytes. 
+// The default is 118 — JMRI's exact data-byte ceiling (JMRI caps a
+// reply at 120 elements INCLUDING the UA and MT bytes, so 118 data
+// bytes). Matching the dominant fielded Host means any geometry this
+// Host accepts also works under JMRI: no configuration can work on
+// the bench and then silently fail in the field.
 //
-// A SUSIC card cage supported 32 slots total for input and output cards.
-// Assuming all were used for inputs, and filled with 32-bit / 4 byte cards,
-// 128 bytes would be needed.  Such a system is unlikely, so JMRI's limit
-// of 120 is a pragmatic and practical choice.
-//
-// Other than for spec conformance testing, there is no demand for a
-// full 256-byte protocol body (Interop E7). 
+// Raising the knob:
+// - 128 covers the largest Node ever fielded (a full SUSIC backplane:
+//   two 16-bay racks, 32 cards, 32-bit input cards in every slot) for
+//   beyond-JMRI bench work.
+// - 256 is the protocol ceiling (Interop E7); useful only for spec
+//   conformance testing.
+// Shrink it for memory-limited targets: a CPNODE with all 8x IO16
+// cards as inputs plus 16 onboard bits needs 18 bytes.
 // VALIDATION: Design v1.0 D8: geometry ceilings are compile-time
 // knobs.
+// VALIDATION: Interop v1.0 2.3.6: default to the JMRI-compatible
+// ceiling; larger capacities are bench/conformance options.
 #ifndef CMRINET_HOST_MAX_INPUT_BYTES
-#define CMRINET_HOST_MAX_INPUT_BYTES 120
+#define CMRINET_HOST_MAX_INPUT_BYTES 118
 #endif
 
 namespace CMRInet {

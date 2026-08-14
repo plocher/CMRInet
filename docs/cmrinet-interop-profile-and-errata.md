@@ -323,11 +323,15 @@ Receive policy:
    and decodes echoed traffic as sensor data
    (review-JMRI-cmri-host.md, Findings 5-6). The classic Hosts got this
    right.
-6. Accept replies of at least 128 data bytes — the largest fielded
-   Node (a full SUSIC backplane: two 16-bay racks, 32 cards of 32-bit
-   inputs) produces exactly 128. The spec's 256 is a protocol ceiling
-   with no fielded counterpart. Treat full-ceiling support as a
-   conformance-test option, not an interop requirement (E7).
+6. Default the per-node reply capacity to 118 data bytes — JMRI's
+   exact ceiling (JMRI caps a reply at 120 elements including UA and
+   MT). Any geometry a Host accepts under this default also works
+   under JMRI, so no configuration can pass on the bench and silently
+   fail under the dominant fielded Host. Make the ceiling a
+   compile-time option: 128 covers the largest Node ever fielded (a
+   full SUSIC backplane: two 16-bay racks, 32 cards of 32-bit inputs)
+   for beyond-JMRI bench work; 256 is the protocol ceiling, useful
+   only for conformance testing (E7).
 
 Scheduling and recovery:
 7. Use wall-clock timeouts, per byte and per message, configurable per
