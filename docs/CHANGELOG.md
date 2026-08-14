@@ -5,6 +5,24 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- `CMRInet::SerialCMRITransport` (`src/SerialCMRITransport.h/.cpp`) —
+  the serial/RS-485 packet transport: codec integration, non-blocking
+  TXEN discipline (assert, gapless write, flush to full drain via
+  wire-time estimate AND port drain report, deassert at once),
+  rate-derived default inter-byte timeout (overridable, 0 = tolerate
+  any gap), and decoder + UART error folding into `stats()`
+  (issue #5).
+- `CMRInet::CMRISerialPort` (`src/CMRISerialPort.h`) — the byte-port
+  seam under the serial transport (raw bytes, TXEN line, drain query,
+  character duration, hardware error count), so desktop tests drive
+  the exact TXEN/drain/timeout discipline that runs on hardware.
+- `CMRInet::StreamCMRISerialPort` (`src/StreamCMRISerialPort.h`,
+  Arduino-only) — adapter over an Arduino `Stream` plus optional TXEN
+  pin; stop-bit hook is the sketch's `Serial.begin(baud, SERIAL_8N2)`
+  plus the adapter's bits-per-character (default 8N2).
+- 14 new Unity tests (`tests/test_serial_transport.cpp`) against a
+  scriptable fake port, covering TXEN ordering, `sendComplete`
+  semantics, chunked writes, receive-during-drain, and stats.
 - `CMRInet::CMRITransport` (`src/CMRITransport.h`) — the packet-seam
   transport contract with `LinkStatistics`, per the DESIGN.md transport
   contract (issue #4).
