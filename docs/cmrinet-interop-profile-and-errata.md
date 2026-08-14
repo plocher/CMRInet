@@ -210,6 +210,17 @@ replies longer than 118 data bytes. Until that changes, a Node
 configuration that reports more than 118 input bytes does not
 interoperate with JMRI.
 
+Fielded reality check: the largest Node hardware ever built is a
+SUSIC backplane with two 16-bay card racks — 32 I/O cards total. With
+32-bit input cards in every slot, that is 128 data bytes, near 1000
+inputs. No fielded frame approaches 256 bytes, and JMRI's 118-byte
+cap never bit in practice. The cpNode/SMINI move to small distributed
+Nodes made such monolithic card cages obsolete (and ended their
+wiring jungles), so the fielded maximum will not grow. The 256
+ceiling matters only for conformance testing and as headroom for a
+possible future extension that carries more than bits — enums or
+bounded fixed-point values, conceptually like CAN bus signal packing.
+
 ## E8. Reply expectations for I and T are undefined
 
 Spec text: the spec defines a reply (R) only for P (p.7-8).
@@ -312,7 +323,15 @@ Receive policy:
    and decodes echoed traffic as sensor data
    (review-JMRI-cmri-host.md, Findings 5-6). The classic Hosts got this
    right.
-6. Accept replies up to 256 data bytes even though JMRI stops at 118.
+6. Default the per-node reply capacity to 118 data bytes — JMRI's
+   exact ceiling (JMRI caps a reply at 120 elements including UA and
+   MT). Any geometry a Host accepts under this default also works
+   under JMRI, so no configuration can pass on the bench and silently
+   fail under the dominant fielded Host. Make the ceiling a
+   compile-time option: 128 covers the largest Node ever fielded (a
+   full SUSIC backplane: two 16-bay racks, 32 cards of 32-bit inputs)
+   for beyond-JMRI bench work; 256 is the protocol ceiling, useful
+   only for conformance testing (E7).
 
 Scheduling and recovery:
 7. Use wall-clock timeouts, per byte and per message, configurable per
@@ -406,3 +425,7 @@ RS-485 line discipline, where the converter does not manage direction:
    types or retires the field (E4).
 5. Decide whether Node-side inter-byte timeouts become normative, given
    that the reference lineage transmitted with gaps (E6, profile 2.2.6).
+6. Decide the fate of body lengths above the fielded maximum of 128
+   data bytes (E7): a revision could reserve longer bodies for a
+   typed-payload extension — enums or bounded fixed-point values
+   rather than more bits, conceptually like CAN bus signal packing.
