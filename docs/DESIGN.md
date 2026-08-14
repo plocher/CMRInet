@@ -244,7 +244,9 @@ emulation option for A/B work.
 
 ### D10. Wire behavior follows the interop profile
 Framing, escaping (all bodies including I), SYN policy, stop bits,
-UA verification, buffer sizing (256-byte bodies, 2x TX staging), and
+UA verification, buffer sizing (frame decode at the 256-byte protocol
+ceiling; per-node reply images at the 128-byte fielded maximum by
+default, knob-raisable for conformance builds; 2x TX staging), and
 recovery rules implement `docs/cmrinet-interop-profile-and-errata.md`
 Part 2. Where the profile and the spec text disagree, the profile
 wins, and the erratum (Part 1) records why.
