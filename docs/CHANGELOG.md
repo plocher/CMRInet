@@ -5,6 +5,31 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Stage-1 bench validation (issue #7): the P/R tracer bullet ran on a
+  real wire — Mac desktop Host through a USB-RS485 adapter to the
+  flashed cpNode-Xiao (UA 95, 28800 8N2). Sustained run 1000/1000
+  exchanges with 0 misses and 0 decode errors (turnaround p50 23 /
+  max 41 ms); wrong-UA, unplug (OFFLINE, polling continues), and
+  reconnect (automatic recovery) negative tests all passed. JSONL
+  telemetry captures in `docs/bench/`.
+- `CMRIHost::onEvent()` / `onTrace()` (D7 listener seam) —
+  function-pointer listeners with a context cookie, locked at
+  `begin()`: engine events (reply accepted/rejected, miss, node state
+  change with old/new state) and TX/RX packet traces. 6 new tests
+  (issue #7).
+- Desktop Host harness (`extras/desktop/`, outside the Arduino
+  build): `PosixCMRISerialPort` — the byte-port seam over fully raw
+  termios (no IXON/IXOFF, per review-CMRI-Controller-host.md Finding
+  7), non-blocking, 8N2, macOS `IOSSIOSPEED` for the nonstandard
+  fielded 28800 rate — and `cmri_tracer`, a command-and-control CLI
+  around `CMRIHost`: verbs (`quiesce`/`resume`/`status`/`quit`) on
+  stdin, JSON-lines telemetry (monotonic seq, epoch marker,
+  cumulative counters) on stdout (issue #7).
+- Bench finding: USB serial adapters deliver RX bytes in
+  latency-timer chunks (FTDI default 16 ms), so arrival gaps are not
+  wire gaps; the rate-derived inter-byte timeout (~2 ms at 28800)
+  aborts healthy frames. The tracer defaults the override to 25 ms
+  (`--inter-byte-timeout-ms`).
 - `CMRInet::CMRIHost` (`src/CMRIHost.h/.cpp`) — the polled-strategy
   Host engine, P/R slice: non-blocking `tick(nowMs)` poll schedule,
   round-robin over enabled nodes, reply gate opened at `sendComplete()`
