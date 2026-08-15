@@ -1,6 +1,6 @@
 // CMRIFrameCodec.cpp — CMRInet serial codec implementation.
 //
-// VALIDATION: Interop v1.0 Part 2: wire behavior implements the
+// VALIDATION: Interop v1.1 Part 2: wire behavior implements the
 // profile's TX (2.1.x) and RX (2.2.x) rules. Bare rule ids in this file
 // inherit this tag's version.
 
@@ -55,10 +55,16 @@ size_t encodeFrame(const CMRIPacket& packet, uint8_t* out, size_t capacity) {
 
 bool CMRIFrameDecoder::feed(uint8_t byte, uint32_t nowMs) {
   // A stale partial frame dies before the new byte is considered
-  // (rule 2.2.6). unsigned subtraction is wrap-safe.
-  if (interByteTimeoutMs_ != 0 && (state_ != State::kHunt || escaped_) &&
-      (nowMs - lastByteMs_) > interByteTimeoutMs_) {
-    abandonFrame_();
+  // (rule 2.2.6). unsigned subtraction is wrap-safe. The same mid-frame
+  // gap is observed through the 2.2.6 grace-band table before the abort
+  // decision: a fatal gap stamps the maxGapMs watermark, then abandons.
+  const bool midFrame = (state_ != State::kHunt || escaped_);
+  if (midFrame) {
+    const uint32_t gap = nowMs - lastByteMs_;
+    observeGap_(gap);
+    if (interByteTimeoutMs_ != 0 && gap > interByteTimeoutMs_) {
+      abandonFrame_();
+    }
   }
   lastByteMs_ = nowMs;
 
@@ -109,6 +115,7 @@ bool CMRIFrameDecoder::expireIdle(uint32_t nowMs) {
   if ((nowMs - lastByteMs_) <= interByteTimeoutMs_) {
     return false;
   }
+  observeGap_(nowMs - lastByteMs_);
   const bool wasFrame = (state_ != State::kHunt);
   abandonFrame_();
   return wasFrame;
@@ -186,6 +193,35 @@ void CMRIFrameDecoder::handleData_(uint8_t byte) {
       }
       staging_.body[staging_.length++] = byte;
       break;
+  }
+}
+
+void CMRIFrameDecoder::observeGap_(uint32_t gapMs) {
+  // 2.2.6 grace-band observability. The codec does not diagnose root
+  // cause; it emits raw gap signal for a systemic viewer to correlate
+  // with UA and event timestamps on the telemetry line. Off entirely
+  // when the observation floor is 0 (the codec default — it does not
+  // know the baud rate, so transports set rate-derived thresholds).
+  if (slowGapLoMs_ == 0) {
+    return;  // observability off
+  }
+  if (gapMs < slowGapLoMs_) {
+    return;  // nominal region: record nothing (a tuned system stays zero)
+  }
+  // grace / slow / fatal: stamp the cumulative max-gap watermark. A
+  // fatal gap stamps it too — the abort-gap itself is the diagnostically
+  // critical measurement (it would have located the stage-2 2 s stall
+  // from telemetry alone).
+  if (gapMs > statistics_.maxGapMs) {
+    statistics_.maxGapMs = gapMs;
+  }
+  // slowGaps counts the suspect band [hi, abort) only. A fatal gap has
+  // its own counter (timeoutAborts, bumped by abandonFrame_), so it is
+  // not double-counted here. hi <= lo disables slowGaps (watermark-only).
+  const bool fatal =
+      (interByteTimeoutMs_ != 0 && gapMs > interByteTimeoutMs_);
+  if (!fatal && slowGapHiMs_ > slowGapLoMs_ && gapMs >= slowGapHiMs_) {
+    statistics_.slowGaps++;
   }
 }
 

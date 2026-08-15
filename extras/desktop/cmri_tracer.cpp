@@ -52,14 +52,29 @@ struct Options {
   // within the 250 ms reply gate. 0 disables the timeout entirely
   // (interop 2.2.6 conformance exception).
   uint32_t interByteTimeoutMs = 25;
+
+  // Receive gap-observability thresholds (interop 2.2.6 grace band).
+  // slowGapLoMs: the observation floor — gaps at/above this stamp the
+  // maxGapMs watermark. slowGapHiMs: the slowGaps trigger — gaps
+  // at/above this and below the abort limit increment slowGaps (the
+  // "took longer than expected" annotation). USB serial adapters
+  // deliver RX bytes in latency-timer chunks (FTDI default 16 ms), so
+  // the char-derived default (lo=1, hi=2) would annotate every
+  // between-chunk gap as slow. These USB-appropriate defaults keep the
+  // grace band above the chunk size; a genuine stall still stamps
+  // maxGapMs and aborts past the 25 ms limit. lo=0 disables
+  // observability; hi<=lo leaves watermark-only mode.
+  uint32_t slowGapLoMs = 1;
+  uint32_t slowGapHiMs = 20;
 };
 
 void usage(const char* argv0) {
   fprintf(stderr,
           "usage: %s --device <path> [--baud N] [--address N]\n"
           "          [--input-bytes N] [--reply-timeout-ms N]\n"
-          "          [--inter-byte-timeout-ms N] [--exchanges N]\n"
-          "          [--duration-s N]\n"
+          "          [--inter-byte-timeout-ms N]\n"
+          "          [--slow-gap-lo-ms N] [--slow-gap-hi-ms N]\n"
+          "          [--exchanges N] [--duration-s N]\n"
           "verbs on stdin: quiesce | resume | status | quit\n",
           argv0);
 }
@@ -86,6 +101,12 @@ bool parseOptions(int argc, char** argv, Options& opt) {
           static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
     } else if (strcmp(arg, "--inter-byte-timeout-ms") == 0 && hasValue) {
       opt.interByteTimeoutMs =
+          static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
+    } else if (strcmp(arg, "--slow-gap-lo-ms") == 0 && hasValue) {
+      opt.slowGapLoMs =
+          static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
+    } else if (strcmp(arg, "--slow-gap-hi-ms") == 0 && hasValue) {
+      opt.slowGapHiMs =
           static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
     } else if (strcmp(arg, "--exchanges") == 0 && hasValue) {
       opt.exchanges = static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
@@ -177,6 +198,7 @@ int main(int argc, char** argv) {
   // Override survives begin() (see Options: USB chunking is not wire
   // silence).
   transport.setInterByteTimeoutMs(opt.interByteTimeoutMs);
+  transport.setSlowGapThresholdsMs(opt.slowGapLoMs, opt.slowGapHiMs);
 
   CMRInet::CMRIHostConfig config;
   if (opt.replyTimeoutMs != 0) {

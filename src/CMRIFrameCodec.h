@@ -6,7 +6,7 @@
 //
 // VALIDATION: Design v1.0 D4: framing belongs to the serial transport
 // layer. The engine above deals in packets, never bytes.
-// VALIDATION: Interop v1.0 Part 2: wire behavior implements the
+// VALIDATION: Interop v1.1 Part 2: wire behavior implements the
 // profile's TX (2.1.x) and RX (2.2.x) rules. Bare rule ids in this file
 // inherit this tag's version.
 
@@ -81,6 +81,8 @@ class CMRIFrameDecoder {
     uint32_t overflowAborts = 0;   ///< body exceeded kMaxBody (2.2.5)
     uint32_t headerAborts = 0;     ///< ETX/0x03 before UA and MT arrived
     uint32_t droppedPackets = 0;   ///< frame completed while ready slot full
+    uint32_t slowGaps = 0;         ///< gaps in the suspect band [nominalHi, abort) (2.2.6)
+    uint32_t maxGapMs = 0;         ///< largest inter-byte gap seen mid-frame, ms (2.2.6)
   };
 
   /// Conservative default inter-byte timeout. The profile suggests two to
@@ -96,6 +98,28 @@ class CMRIFrameDecoder {
   /// because the reference Host lineage transmitted with interpreter-scale
   /// gaps between bytes (rule 2.2.6 exception).
   void setInterByteTimeoutMs(uint32_t ms) { interByteTimeoutMs_ = ms; }
+
+  /// Set the receive gap-observability thresholds in milliseconds.
+  /// `loMs` is the observation floor: inter-byte gaps at or above it stamp
+  /// the maxGapMs watermark. `hiMs` is the slowGaps trigger: gaps at or
+  /// above it AND below the abort limit increment slowGaps (the suspect
+  /// band). loMs = 0 disables observability entirely (the codec default —
+  /// the codec does not know the baud rate). hiMs <= loMs disables
+  /// slowGaps, leaving watermark-only mode. Transports should call this
+  /// with rate-derived values; the override survives begin().
+  /// VALIDATION: Interop v1.1 2.2.6: a receiver MAY keep a nominal
+  /// observation threshold below the abort limit and record gaps that
+  /// exceed it without abandoning the frame.
+  void setSlowGapThresholdsMs(uint32_t loMs, uint32_t hiMs) {
+    slowGapLoMs_ = loMs;
+    slowGapHiMs_ = hiMs;
+  }
+
+  /// The active observation floor (0 = observability off).
+  uint32_t slowGapLoMs() const { return slowGapLoMs_; }
+
+  /// The active slowGaps trigger (0 or <= lo = slowGaps disabled).
+  uint32_t slowGapHiMs() const { return slowGapHiMs_; }
 
   /// Consume one received byte. `nowMs` is the caller's injected clock
   /// (see CMRITime.h) and must be monotonic. Returns true when this
@@ -135,11 +159,14 @@ class CMRIFrameDecoder {
   void abandonFrame_();
   bool commitFrame_();
   void handleData_(uint8_t byte);
+  void observeGap_(uint32_t gapMs);
 
   State state_ = State::kHunt;
   bool escaped_ = false;     ///< a DLE/0x10 was seen; next byte is literal
   bool readyValid_ = false;  ///< ready_ holds an untaken packet
   uint32_t interByteTimeoutMs_ = kDefaultInterByteTimeoutMs;
+  uint32_t slowGapLoMs_ = 0;  ///< observation floor; 0 = off (2.2.6)
+  uint32_t slowGapHiMs_ = 0;  ///< slowGaps trigger; <= lo = watermark-only (2.2.6)
   uint32_t lastByteMs_ = 0;
   CMRIPacket staging_;  ///< frame under assembly (commit-on-ETX, 2.2.8)
   CMRIPacket ready_;    ///< last completed frame awaiting take()

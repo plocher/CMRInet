@@ -218,7 +218,7 @@ static void test_offline_after_miss_threshold_then_recovers(void) {
   TEST_ASSERT_EQUAL_UINT32(6, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
   // The silent node is still polled, and the next reply recovers it.
-  // VALIDATION: Interop v1.0 2.3.10: keep polling a silent Node
+  // VALIDATION: Interop v1.1 2.3.10: keep polling a silent Node
   // forever.
   runUntil(rig.host, 1531, 1600);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().recoveries);

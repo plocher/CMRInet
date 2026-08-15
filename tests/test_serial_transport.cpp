@@ -414,6 +414,57 @@ static void test_begin_resets_state(void) {
   TEST_ASSERT_FALSE(t.receivePacket(got));
 }
 
+// ------------------------------------------- gap observability (2.2.6)
+
+// The transport derives the observation floor and suspicion floor from
+// the port's character time, mirroring the inter-byte abort derivation.
+static void test_default_slow_gap_thresholds_derive_from_char_time(void) {
+  FakeCMRISerialPort port;  // 500 us/char
+  SerialCMRITransport t(port);
+  t.begin();
+  // lo = 1 char time (ceil 500 us) = 1 ms; hi = 3 char times = 2 ms.
+  TEST_ASSERT_EQUAL_UINT32(1, t.slowGapLoMs());
+  TEST_ASSERT_EQUAL_UINT32(2, t.slowGapHiMs());
+}
+
+// An explicit override survives begin() (same contract as the abort limit).
+static void test_slow_gap_override_survives_begin(void) {
+  FakeCMRISerialPort port;
+  SerialCMRITransport t(port);
+  t.setSlowGapThresholdsMs(5, 15);
+  t.begin();  // must not clobber the override
+  TEST_ASSERT_EQUAL_UINT32(5, t.slowGapLoMs());
+  TEST_ASSERT_EQUAL_UINT32(15, t.slowGapHiMs());
+}
+
+// A gapped frame observed end-to-end through the transport: the first
+// intra-frame gap lands in the slow band and surfaces via
+// decoderStatistics(), without aborting the exchange.
+static void test_slow_gap_observed_end_to_end_through_transport(void) {
+  FakeCMRISerialPort port;  // 500 us/char -> lo=1, hi=2 derived
+  SerialCMRITransport t(port);
+  t.setInterByteTimeoutMs(100);  // raise abort to open the slow band [2,100)
+  t.begin();
+
+  const uint8_t body[] = {0x41};
+  const CMRIPacket sent = makePacket(5, 'R', body, sizeof(body));
+  uint8_t wire[16];
+  const size_t n = encodeInto(sent, wire, sizeof(wire));
+  // wire = SYN SYN STX UA MT body ETX. Feed STX at t=0, the rest at
+  // t=50: the UA byte's gap is 50 ms (slow band), the rest are gapless.
+  port.queueRx(wire + 2, 1);      // STX
+  t.tick(0);
+  port.queueRx(wire + 3, n - 3);  // UA, MT, body, ETX
+  t.tick(50);
+
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(t.receivePacket(got));
+  TEST_ASSERT_EQUAL_HEX8(sent.ua, got.ua);
+  TEST_ASSERT_EQUAL_UINT32(1, t.decoderStatistics().slowGaps);
+  TEST_ASSERT_EQUAL_UINT32(50, t.decoderStatistics().maxGapMs);
+  TEST_ASSERT_EQUAL_UINT32(0, t.decoderStatistics().timeoutAborts);
+}
+
 // ------------------------------------------------------------------- main
 
 int main(void) {
@@ -432,5 +483,9 @@ int main(void) {
   RUN_TEST(test_timeout_override_and_disable);
   RUN_TEST(test_hardware_errors_surface_through_stats);
   RUN_TEST(test_begin_resets_state);
+  // gap observability (2.2.6 grace-band receive model)
+  RUN_TEST(test_default_slow_gap_thresholds_derive_from_char_time);
+  RUN_TEST(test_slow_gap_override_survives_begin);
+  RUN_TEST(test_slow_gap_observed_end_to_end_through_transport);
   return UNITY_END();
 }

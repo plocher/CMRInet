@@ -20,7 +20,7 @@
 //   to replay truncations, dangling DLEs, garbage, and slow gapped
 //   transmitters.
 //
-// VALIDATION: Interop v1.0 2.2.6: gapped byte injection exercises the
+// VALIDATION: Interop v1.1 2.2.6: gapped byte injection exercises the
 // receiver's inter-byte abandon rule under a deterministic clock.
 //
 // The replay script plays counterparty to the engine. Script steps fire

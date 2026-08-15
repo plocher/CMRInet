@@ -1,12 +1,19 @@
 # CMRInet as Fielded: Interop Profile and Errata for LCS-9.10.1
 
 Status: working draft for review.
-Version: 1.0 (bump when any rule or erratum changes; `// VALIDATION:`
+Version: 1.1 (bump when any rule or erratum changes; `// VALIDATION:`
 tags in code cite this version — see
 `docs/agents/validation-comments.md`).
 Audience: LCS-9.10.1 authors, JMRI maintainers, and implementers of
 CMRInet Hosts and Nodes.
-Date: 2026-08-12.
+Date: 2026-08-15.
+
+Change log:
+- v1.1 (2026-08-15): rule 2.2.6 extended with the nominal-observation /
+  max-gap-watermark receive clause (issue #26). The abort obligation is
+  unchanged; the addition is a MAY for implementers. v1.0 tags in code
+  are re-stamped to v1.1.
+- v1.0 (2026-08-12): initial working draft.
 
 ## Purpose
 
@@ -289,11 +296,27 @@ ecosystem as it exists today. They assume no spec revision.
 4. Reset the body index when STX/0x02 is found. Store no bytes before
    STX/0x02.
 5. Bound-check before every buffer store. Size for 256 data bytes.
-6. Abandon a partial frame when the inter-byte gap exceeds a limit.
-   Two to three character times is a reasonable default. Exception: a
-   conformance-grade Node receiver should tolerate arbitrary gaps,
-   because the reference Host lineage transmitted with interpreter-scale
-   gaps between bytes (review-QBASIC-CTC-host.md, F5).
+6. Abandon a partial frame when the inter-byte gap exceeds the abort
+   limit. Two to three character times is a reasonable abort default for
+   a clean UART; deployed Hosts run a more tolerant abort limit (tens of
+   milliseconds) with the reply-gate timeout as the truncation backstop.
+   Exception: a conformance-grade Node receiver should tolerate arbitrary
+   gaps (abort disabled), because the reference Host lineage transmitted
+   with interpreter-scale gaps between bytes
+   (review-QBASIC-CTC-host.md, F5).
+
+   A receiver MAY keep a second, lower nominal threshold below the abort
+   limit and record inter-byte gaps that exceed it without abandoning the
+   frame. This separates "took longer than expected" (a non-fatal
+   annotation) from "took so long I gave up" (the fatal abort), so
+   marginal wiring, wobbly nodes, and host tick stalls are visible in
+   telemetry without failing exchanges. The nominal threshold is a local
+   guess about the medium; it cannot root-cause a fault by itself, but it
+   feeds systemic analysis. A max-gap watermark records the largest
+   inter-byte gap seen, including the gap that triggers an abort. The
+   abort limit and the nominal threshold are independent: disabling the
+   abort (conformance) leaves observation on; disabling observation
+   leaves the abort on.
 7. Treat a frame that ends in DLE/0x10, or that ends without ETX/0x03,
    as an error. Discard it. Never act on a partial body.
 8. Parse into a staging buffer. Commit to the application only on a

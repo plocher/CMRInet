@@ -33,6 +33,11 @@ void SerialCMRITransport::begin() {
     interByteTimeoutMs_ = defaultInterByteTimeoutMs_();
   }
   decoder_.setInterByteTimeoutMs(interByteTimeoutMs_);
+  if (!slowGapOverridden_) {
+    slowGapLoMs_ = defaultSlowGapLoMs_();
+    slowGapHiMs_ = defaultSlowGapHiMs_();
+  }
+  decoder_.setSlowGapThresholdsMs(slowGapLoMs_, slowGapHiMs_);
 }
 
 void SerialCMRITransport::tick(uint32_t nowMs) {
@@ -123,7 +128,7 @@ void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
   // far below CPU rate, so this loop is bounded by the port's buffer.
   int byte = port_.readByte();
   while (byte >= 0) {
-    // VALIDATION: Interop v1.0 2.2.9: received bytes normalize to
+    // VALIDATION: Interop v1.1 2.2.9: received bytes normalize to
     // unsigned 8-bit values at the read.
     if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
       drainDecoder_();
@@ -166,6 +171,24 @@ uint32_t SerialCMRITransport::wireTimeMs_(size_t bytes) const {
 uint32_t SerialCMRITransport::defaultInterByteTimeoutMs_() const {
   // Three character times (interop 2.2.6), rounded up to the injected
   // clock's millisecond granularity, never below 1 ms.
+  const uint32_t ms = (3u * byteMicros_ + 999u) / 1000u;
+  return (ms == 0) ? 1u : ms;
+}
+
+uint32_t SerialCMRITransport::defaultSlowGapLoMs_() const {
+  // One character time: the streaming floor. Below this, bytes arrive
+  // contiguously and no gap is recorded. Rounded up to ms, min 1.
+  const uint32_t ms = (byteMicros_ + 999u) / 1000u;
+  return (ms == 0) ? 1u : ms;
+}
+
+uint32_t SerialCMRITransport::defaultSlowGapHiMs_() const {
+  // Three character times: the suspicion floor. Gaps at/above this and
+  // below the abort limit increment slowGaps. Rounded up to ms, min 1.
+  // At ms granularity this often coincides with the rate-derived abort
+  // default, so the slow band is widest when the abort limit is raised
+  // (USB chunking, deployed tolerance); lower hi to open the band on a
+  // clean UART.
   const uint32_t ms = (3u * byteMicros_ + 999u) / 1000u;
   return (ms == 0) ? 1u : ms;
 }

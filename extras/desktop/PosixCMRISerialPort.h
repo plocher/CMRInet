@@ -6,7 +6,7 @@
 // discipline of any kind. An R body legitimately carries raw 0x13
 // (DC3/XOFF — only 2/3/16 are escaped), and a cooked port would
 // silently freeze host TX on it.
-// VALIDATION: Interop v1.0 2.5.1: 8N2 default framing;
+// VALIDATION: Interop v1.1 2.5.1: 8N2 default framing;
 // byteDurationMicros() reflects the configured stop bits.
 // (Also: docs/research/review-CMRI-Controller-host.md Finding 7 — the
 // classic Unix Host shipped with IXON enabled and could be frozen by
@@ -40,7 +40,7 @@ class PosixCMRISerialPort : public CMRISerialPort {
 
   /// No-op: the 4-wire RS-422/485 adapter's driver permanently owns
   /// the poll pair, so there is no direction line to manage.
-  /// VALIDATION: Interop v1.0 2.3.14: the port is only the actuator;
+  /// VALIDATION: Interop v1.1 2.3.14: the port is only the actuator;
   /// a port on auto-direction hardware implements this as a no-op.
   void setTransmitEnable(bool enabled) override;
 

@@ -36,7 +36,7 @@
 // cards as inputs plus 16 onboard bits needs 18 bytes.
 // VALIDATION: Design v1.0 D8: geometry ceilings are compile-time
 // knobs.
-// VALIDATION: Interop v1.0 2.3.6: default to the JMRI-compatible
+// VALIDATION: Interop v1.1 2.3.6: default to the JMRI-compatible
 // ceiling; larger capacities are bench/conformance options.
 #ifndef CMRINET_HOST_MAX_INPUT_BYTES
 #define CMRINET_HOST_MAX_INPUT_BYTES 118
@@ -124,7 +124,7 @@ class RemoteNodeHandle {
 
   /// Age of the input image at `nowMs` (the caller's injected clock).
   /// Returns Age::kNeverMarked before the first good reply.
-  // VALIDATION: Interop v1.0 2.3.12: per-node freshness is API state.
+  // VALIDATION: Interop v1.1 2.3.12: per-node freshness is API state.
   // A Host must not hold stale inputs silently.
   uint32_t inputAgeMs(uint32_t nowMs) const { return freshness_.ms(nowMs); }
 

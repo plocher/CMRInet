@@ -13,7 +13,7 @@ RemoteNodeHandle* CMRIHost::addRemoteNode(uint8_t address,
                                           const RemoteNodeConfig& config,
                                           const RemoteNodePolicy& policy) {
   // Validation at intake: reject, never remap.
-  // VALIDATION: Interop v1.0 E9: Nodes must reject, not remap,
+  // VALIDATION: Interop v1.1 E9: Nodes must reject, not remap,
   // out-of-range addresses. The same rule applies to the Host's own
   // configuration.
   if (began_) {
@@ -74,7 +74,7 @@ void CMRIHost::tick(uint32_t nowMs) {
 /// While a poll is outstanding, the first packet whose UA matches the
 /// poll and whose MT is 'R' completes the exchange. Every other packet
 /// is counted and discarded.
-// VALIDATION: Interop v1.0 2.3.5: verify that a reply's UA matches
+// VALIDATION: Interop v1.1 2.3.5: verify that a reply's UA matches
 // the outstanding poll and that its MT is 'R'. Count and discard
 // everything else.
 void CMRIHost::drainReceive_(uint32_t nowMs) {
@@ -103,7 +103,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     // The node answered with the wrong geometry. The reply proves the
     // node is present, so the miss run ends, but the body is never
     // committed.
-    // VALIDATION: Interop v1.0 2.2.8: commit to the application only
+    // VALIDATION: Interop v1.1 2.2.8: commit to the application only
     // on a valid frame. A geometry mismatch is not valid data.
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
@@ -185,7 +185,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     }
     // No reply inside the gate. Count the miss and move to the next
     // node. The timed-out poll is never retransmitted.
-    // VALIDATION: Interop v1.0 2.3.9: do not retransmit a timed-out
+    // VALIDATION: Interop v1.1 2.3.9: do not retransmit a timed-out
     // message. Count the miss and poll the next Node.
     RemoteNodeHandle& node = nodes_[polledIndex_];
     ++node.statistics_.noReplies;

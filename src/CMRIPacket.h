@@ -12,7 +12,7 @@
 
 // VALIDATION: Design v1.0 D8: geometry ceilings are compile-time knobs,
 // so a '328-class build can shrink packet buffers.
-// VALIDATION: Interop v1.0 E7: the default is 256 logical body bytes,
+// VALIDATION: Interop v1.1 E7: the default is 256 logical body bytes,
 // counted after DLE removal.
 #ifndef CMRINET_MAX_BODY
 #define CMRINET_MAX_BODY 256
@@ -27,11 +27,11 @@ constexpr uint8_t kStx = 0x02u;  // STX/0x02 — frame start
 constexpr uint8_t kEtx = 0x03u;  // ETX/0x03 — frame end
 constexpr uint8_t kDle = 0x10u;  // DLE/0x10 — escape prefix
 
-// VALIDATION: Interop v1.0 "Terms": UA = Node address + 65.
+// VALIDATION: Interop v1.1 "Terms": UA = Node address + 65.
 constexpr uint8_t kUaOffset = 65u;
 
 // Message types the polled strategy speaks.
-// VALIDATION: Interop v1.0 E9: the codec never validates MT — fielded
+// VALIDATION: Interop v1.1 E9: the codec never validates MT — fielded
 // networks carry JMRI extensions (E/Q/D/W/A/C/M) and the codec must not
 // choke on them.
 namespace MessageType {
@@ -44,7 +44,7 @@ constexpr uint8_t kTransmitData = 'T';  // Host -> Node outputs
 // Logical body ceiling, counted after DLE removal (E7).
 constexpr size_t kMaxBody = CMRINET_MAX_BODY;
 
-// VALIDATION: Interop v1.0 2.1.6: size the TX staging buffer for full
+// VALIDATION: Interop v1.1 2.1.6: size the TX staging buffer for full
 // escaping — the worst case is 2 SYN + STX + UA + MT + ETX plus two
 // wire bytes per data byte.
 constexpr size_t kMaxWireFrame = 6u + 2u * kMaxBody;
