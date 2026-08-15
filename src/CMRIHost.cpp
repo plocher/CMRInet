@@ -80,6 +80,7 @@ void CMRIHost::tick(uint32_t nowMs) {
 void CMRIHost::drainReceive_(uint32_t nowMs) {
   CMRIPacket rx;
   while (transport_.receivePacket(rx)) {
+    emitTrace_(/*transmit=*/false, rx);
     if (phase_ != Phase::kAwaitReply) {
       ++statistics_.unsolicitedPackets;
       continue;
@@ -87,6 +88,7 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     RemoteNodeHandle& node = nodes_[polledIndex_];
     if (rx.ua != node.ua_ || rx.mt != MessageType::kReceiveData) {
       ++statistics_.repliesRejected;
+      emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs);
       continue;
     }
     acceptReply_(rx, nowMs);
@@ -106,6 +108,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
     node.statistics_.consecutiveMisses = 0;
+    emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs);
     finishExchange_(nowMs);
     return;
   }
@@ -121,6 +124,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   }
   node.statistics_.lastTurnaroundMs = nowMs - gateArmedMs_;
   ++statistics_.repliesAccepted;
+  emitEvent_(CMRIHostEventType::kReplyAccepted, node, nowMs);
   finishExchange_(nowMs);
 }
 
@@ -157,6 +161,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       return;
     }
     ++statistics_.pollsSent;
+    emitTrace_(/*transmit=*/true, poll_);
     phase_ = Phase::kAwaitSendComplete;
   }
 
@@ -185,6 +190,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     RemoteNodeHandle& node = nodes_[polledIndex_];
     ++node.statistics_.noReplies;
     ++node.statistics_.consecutiveMisses;
+    emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
     finishExchange_(nowMs);
   }
 }
@@ -207,6 +213,7 @@ bool CMRIHost::selectNextNode_() {
 void CMRIHost::updateNodeStates_(uint32_t nowMs) {
   for (size_t i = 0; i < nodeCount_; ++i) {
     RemoteNodeHandle& node = nodes_[i];
+    const RemoteNodeState previous = node.state_;
     if (node.statistics_.consecutiveMisses > config_.missThreshold) {
       node.state_ = RemoteNodeState::kOffline;
     } else if (!node.freshness_.marked()) {
@@ -217,6 +224,10 @@ void CMRIHost::updateNodeStates_(uint32_t nowMs) {
     } else {
       node.state_ = RemoteNodeState::kOnline;
     }
+    if (node.state_ != previous) {
+      emitEvent_(CMRIHostEventType::kNodeStateChanged, node, nowMs, previous,
+                 node.state_);
+    }
   }
 }
 
@@ -224,6 +235,32 @@ uint32_t CMRIHost::replyTimeoutFor_(size_t nodeIndex) const {
   const uint32_t perNode = policies_[nodeIndex].replyTimeoutMs;
   return (perNode == RemoteNodePolicy::kInheritHost) ? config_.replyTimeoutMs
                                                      : perNode;
+}
+
+/// Fire the event listener, if one is registered.
+// VALIDATION: Design v1.0 D7: observability is optional listener
+// registration; a null listener costs one branch.
+void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
+                          uint32_t nowMs, RemoteNodeState previousState,
+                          RemoteNodeState newState) {
+  if (eventListener_ == nullptr) {
+    return;
+  }
+  CMRIHostEvent event;
+  event.type = type;
+  event.node = &node;
+  event.nowMs = nowMs;
+  event.previousState = previousState;
+  event.newState = newState;
+  eventListener_(eventContext_, event);
+}
+
+/// Fire the trace listener, if one is registered.
+void CMRIHost::emitTrace_(bool transmit, const CMRIPacket& packet) {
+  if (traceListener_ == nullptr) {
+    return;
+  }
+  traceListener_(traceContext_, transmit, packet);
 }
 
 }  // namespace CMRInet

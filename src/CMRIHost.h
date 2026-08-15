@@ -53,6 +53,42 @@ struct CMRIHostConfig {
   uint32_t missThreshold = 5;
 };
 
+/// What the Host engine is reporting through its event listener.
+// VALIDATION: Design v1.0 D7: observability is listener registration
+// (JMRI pattern): metrics, monitor, and trace hooks are optional
+// listeners the linker drops when unused.
+enum class CMRIHostEventType : uint8_t {
+  kReplyAccepted,     ///< verified reply committed to the node image
+  kReplyRejected,     ///< reply discarded: UA/MT mismatch or bad geometry
+  kReplyTimeout,      ///< reply gate expired with no reply (a miss)
+  kNodeStateChanged,  ///< node health moved between states
+};
+
+/// One engine event. `node` is the node of the exchange or state
+/// change; it outlives the callback (nodes are never deallocated).
+/// `previousState`/`newState` are meaningful only for
+/// kNodeStateChanged.
+struct CMRIHostEvent {
+  CMRIHostEventType type = CMRIHostEventType::kReplyAccepted;
+  const RemoteNodeHandle* node = nullptr;
+  uint32_t nowMs = 0;
+  RemoteNodeState previousState = RemoteNodeState::kUninitialized;
+  RemoteNodeState newState = RemoteNodeState::kUninitialized;
+};
+
+/// Event listener. Plain function pointer with a context cookie
+/// (Design v1.0 D7: no std::function). Called from inside tick();
+/// listeners must not block and must not call back into the engine.
+using CMRIHostEventListener = void (*)(void* context,
+                                       const CMRIHostEvent& event);
+
+/// Trace listener: every packet the engine hands to the transport
+/// (transmit == true) and every packet the transport hands up
+/// (transmit == false), before verification. The packet reference is
+/// valid only for the duration of the call.
+using CMRIHostTraceListener = void (*)(void* context, bool transmit,
+                                       const CMRIPacket& packet);
+
 /// Host-wide counters. All counters start at 0 at begin(), increase
 /// monotonically, and never reset.
 struct CMRIHostStatistics {
@@ -119,6 +155,28 @@ class CMRIHost {
   RemoteNodeHandle* addRemoteNode(uint8_t address,
                                   const RemoteNodeConfig& config);
 
+  /// Register the optional event listener (nullptr to clear). Part of
+  /// the configuration phase: calls after begin() are ignored.
+  // VALIDATION: Design v1.0 D5: begin() locks the configuration.
+  void onEvent(CMRIHostEventListener listener, void* context = nullptr) {
+    if (began_) {
+      return;
+    }
+    eventListener_ = listener;
+    eventContext_ = context;
+  }
+
+  /// Register the optional TX/RX packet trace listener (nullptr to
+  /// clear). Part of the configuration phase: calls after begin() are
+  /// ignored.
+  void onTrace(CMRIHostTraceListener listener, void* context = nullptr) {
+    if (began_) {
+      return;
+    }
+    traceListener_ = listener;
+    traceContext_ = context;
+  }
+
   /// Lock the configuration and begin() the transport. Idempotent.
   void begin();
 
@@ -152,6 +210,11 @@ class CMRIHost {
   void finishExchange_(uint32_t nowMs);
   void updateNodeStates_(uint32_t nowMs);
   uint32_t replyTimeoutFor_(size_t nodeIndex) const;
+  void emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
+                  uint32_t nowMs,
+                  RemoteNodeState previousState = RemoteNodeState::kUninitialized,
+                  RemoteNodeState newState = RemoteNodeState::kUninitialized);
+  void emitTrace_(bool transmit, const CMRIPacket& packet);
 
   CMRITransport& transport_;
   CMRIHostConfig config_;
@@ -160,6 +223,11 @@ class CMRIHost {
   RemoteNodeHandle nodes_[kMaxNodes];
   RemoteNodePolicy policies_[kMaxNodes];
   size_t nodeCount_ = 0;
+
+  CMRIHostEventListener eventListener_ = nullptr;
+  void* eventContext_ = nullptr;
+  CMRIHostTraceListener traceListener_ = nullptr;
+  void* traceContext_ = nullptr;
 
   bool began_ = false;
   Phase phase_ = Phase::kIdle;

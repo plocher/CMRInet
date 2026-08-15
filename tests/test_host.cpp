@@ -13,6 +13,8 @@
 
 using CMRInet::CMRIHost;
 using CMRInet::CMRIHostConfig;
+using CMRInet::CMRIHostEvent;
+using CMRInet::CMRIHostEventType;
 using CMRInet::CMRIPacket;
 using CMRInet::encodeFrame;
 using CMRInet::kUaOffset;
@@ -318,6 +320,133 @@ static void test_exchange_completes_over_gapped_wire_bytes(void) {
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
 }
 
+// ----------------------------------------------------- listener seam (D7)
+
+/// Context cookie for the recording listeners below.
+struct ListenerLog {
+  int accepted = 0;
+  int rejected = 0;
+  int timeouts = 0;
+  int stateChanges = 0;
+  RemoteNodeState lastPreviousState = RemoteNodeState::kUninitialized;
+  RemoteNodeState lastNewState = RemoteNodeState::kUninitialized;
+  const RemoteNodeHandle* lastNode = nullptr;
+  uint32_t lastEventMs = 0;
+  int txTraces = 0;
+  int rxTraces = 0;
+  uint8_t lastTxMt = 0;
+  uint8_t lastRxMt = 0;
+};
+
+static void recordEvent(void* context, const CMRIHostEvent& event) {
+  ListenerLog& log = *static_cast<ListenerLog*>(context);
+  switch (event.type) {
+    case CMRIHostEventType::kReplyAccepted: ++log.accepted; break;
+    case CMRIHostEventType::kReplyRejected: ++log.rejected; break;
+    case CMRIHostEventType::kReplyTimeout: ++log.timeouts; break;
+    case CMRIHostEventType::kNodeStateChanged:
+      ++log.stateChanges;
+      log.lastPreviousState = event.previousState;
+      log.lastNewState = event.newState;
+      break;
+  }
+  log.lastNode = event.node;
+  log.lastEventMs = event.nowMs;
+}
+
+static void recordTrace(void* context, bool transmit,
+                        const CMRIPacket& packet) {
+  ListenerLog& log = *static_cast<ListenerLog*>(context);
+  if (transmit) {
+    ++log.txTraces;
+    log.lastTxMt = packet.mt;
+  } else {
+    ++log.rxTraces;
+    log.lastRxMt = packet.mt;
+  }
+}
+
+static void test_event_listener_sees_accept_and_state_change(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  rig.host.begin();
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, 0, 2);
+  TEST_ASSERT_EQUAL_INT(1, log.accepted);
+  TEST_ASSERT_EQUAL_PTR(rig.node, log.lastNode);
+  // kUninitialized -> kOnline fired exactly once.
+  TEST_ASSERT_EQUAL_INT(1, log.stateChanges);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, log.lastPreviousState);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, log.lastNewState);
+}
+
+static void test_event_listener_sees_timeout_and_offline_transition(void) {
+  Rig rig;  // no script: the node stays silent
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  rig.host.begin();
+  // Six miss cycles of (250 ms gate + 5 ms pacing) cross the threshold.
+  runUntil(rig.host, 0, 1530);
+  TEST_ASSERT_EQUAL_INT(6, log.timeouts);
+  TEST_ASSERT_EQUAL_INT(1, log.stateChanges);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, log.lastPreviousState);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, log.lastNewState);
+}
+
+static void test_event_listener_sees_rejected_reply(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  rig.host.begin();
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, 0, 2);
+  TEST_ASSERT_EQUAL_INT(1, log.rejected);
+  TEST_ASSERT_EQUAL_INT(0, log.accepted);
+}
+
+static void test_trace_listener_sees_both_directions(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onTrace(recordTrace, &log);
+  rig.host.begin();
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, 0, 2);
+  TEST_ASSERT_EQUAL_INT(1, log.txTraces);
+  TEST_ASSERT_EQUAL_HEX8('P', log.lastTxMt);
+  TEST_ASSERT_EQUAL_INT(1, log.rxTraces);
+  TEST_ASSERT_EQUAL_HEX8('R', log.lastRxMt);
+}
+
+static void test_listener_registration_locked_after_begin(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.begin();
+  rig.host.onEvent(recordEvent, &log);  // ignored: configuration is locked
+  rig.host.onTrace(recordTrace, &log);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, 0, 2);
+  TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
+  TEST_ASSERT_EQUAL_INT(0, log.accepted);
+  TEST_ASSERT_EQUAL_INT(0, log.txTraces);
+  TEST_ASSERT_EQUAL_INT(0, log.rxTraces);
+}
+
+static void test_null_listeners_are_harmless(void) {
+  Rig rig;  // default: no listeners registered
+  rig.host.onEvent(nullptr);
+  rig.host.onTrace(nullptr);
+  rig.host.begin();
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, 0, 2);
+  TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
+}
+
 // ------------------------------------------------------ configuration phase
 
 static void test_add_remote_node_validation(void) {
@@ -374,6 +503,12 @@ int main(void) {
   RUN_TEST(test_send_refusal_retries_without_blocking);
   RUN_TEST(test_unsolicited_packets_are_counted);
   RUN_TEST(test_exchange_completes_over_gapped_wire_bytes);
+  RUN_TEST(test_event_listener_sees_accept_and_state_change);
+  RUN_TEST(test_event_listener_sees_timeout_and_offline_transition);
+  RUN_TEST(test_event_listener_sees_rejected_reply);
+  RUN_TEST(test_trace_listener_sees_both_directions);
+  RUN_TEST(test_listener_registration_locked_after_begin);
+  RUN_TEST(test_null_listeners_are_harmless);
   RUN_TEST(test_add_remote_node_validation);
   RUN_TEST(test_node_table_capacity_is_enforced);
   return UNITY_END();
