@@ -41,7 +41,7 @@ obligation.
 
 Example:
 
-    // VALIDATION: Interop v1.0 2.2.6: a receiver abandons a partial
+    // VALIDATION: Interop v1.1 2.2.6: a receiver abandons a partial
     // frame when the inter-byte gap exceeds a local limit. The spec is
     // silent on recovery (erratum E6).
 

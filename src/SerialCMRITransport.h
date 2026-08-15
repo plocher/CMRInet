@@ -14,7 +14,7 @@
 // port adapter; protocol-level concerns stay in the strategy.
 //
 // TXEN discipline (assert, write, flush to full drain, deassert):
-// VALIDATION: Interop v1.0 2.3.14: assert TXEN, write the frame, flush
+// VALIDATION: Interop v1.1 2.3.14: assert TXEN, write the frame, flush
 // until the last byte leaves the shift register, then drop TXEN at
 // once. Nothing here blocks (Design v1.0 D6), so "flush" is a
 // non-blocking drain detector polled from tick(): TXEN drops when the
@@ -24,7 +24,7 @@
 // estimate, which includes the shift register.
 //
 // Receive never waits for transmit:
-// VALIDATION: Interop v1.0 2.3.15: a fast Node begins its reply while
+// VALIDATION: Interop v1.1 2.3.15: a fast Node begins its reply while
 // the Host's ETX/0x03 still drains, so the receive pump runs on every
 // tick, including mid-drain.
 //
@@ -105,7 +105,7 @@ class SerialCMRITransport : public CMRITransport {
   /// 2.2.6 exception). May be called before or after begin(); the
   /// override survives begin(). Without an override, begin() derives
   /// the default from the port's character time.
-  /// VALIDATION: Interop v1.0 2.2.6: abandon a partial frame when the
+  /// VALIDATION: Interop v1.1 2.2.6: abandon a partial frame when the
   /// inter-byte gap exceeds a limit; two to three character times is a
   /// reasonable default.
   void setInterByteTimeoutMs(uint32_t ms) {
@@ -116,6 +116,25 @@ class SerialCMRITransport : public CMRITransport {
 
   /// The active receive inter-byte timeout (0 = disabled).
   uint32_t interByteTimeoutMs() const { return interByteTimeoutMs_; }
+
+  /// Override the receive gap-observability thresholds (see
+  /// CMRIFrameDecoder::setSlowGapThresholdsMs). May be called before or
+  /// after begin(); the override survives begin(). Without an override,
+  /// begin() derives both from the port's character time: lo = one char
+  /// time (the streaming floor), hi = three char times (the suspicion
+  /// floor). lo = 0 disables observability.
+  void setSlowGapThresholdsMs(uint32_t loMs, uint32_t hiMs) {
+    slowGapLoMs_ = loMs;
+    slowGapHiMs_ = hiMs;
+    slowGapOverridden_ = true;
+    decoder_.setSlowGapThresholdsMs(loMs, hiMs);
+  }
+
+  /// The active observation floor (0 = observability off).
+  uint32_t slowGapLoMs() const { return slowGapLoMs_; }
+
+  /// The active slowGaps trigger (0 or <= lo = slowGaps disabled).
+  uint32_t slowGapHiMs() const { return slowGapHiMs_; }
 
   /// Frame-decoder health counters: the breakdown behind
   /// stats().decodeErrors (timeout aborts, dangling DLEs, restarts,
@@ -137,6 +156,8 @@ class SerialCMRITransport : public CMRITransport {
   void syncErrors_();
   uint32_t wireTimeMs_(size_t bytes) const;
   uint32_t defaultInterByteTimeoutMs_() const;
+  uint32_t defaultSlowGapLoMs_() const;
+  uint32_t defaultSlowGapHiMs_() const;
 
   CMRISerialPort& port_;
   CMRIFrameDecoder decoder_;
@@ -168,6 +189,9 @@ class SerialCMRITransport : public CMRITransport {
   uint32_t hardwareErrorBaseline_ = 0;
   uint32_t interByteTimeoutMs_ = CMRIFrameDecoder::kDefaultInterByteTimeoutMs;
   bool timeoutOverridden_ = false;
+  uint32_t slowGapLoMs_ = 0;   ///< observation floor; 0 = off (derived in begin)
+  uint32_t slowGapHiMs_ = 0;   ///< slowGaps trigger; <= lo = watermark-only
+  bool slowGapOverridden_ = false;
 };
 
 }  // namespace CMRInet

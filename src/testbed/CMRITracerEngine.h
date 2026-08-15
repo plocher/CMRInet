@@ -109,7 +109,7 @@ class CMRITracerEngine {
   /// "wallClock" on the desktop, "bootMs" on the Xiao).
   void emitEpoch(const char* anchorKey, const char* anchorValue) {
     epochMs_ = nowMs_;
-    emitLineAt_(nowMs_, "epoch", anchorKey, anchorValue);
+    emitLineAt_(nowMs_, "epoch", anchorKey, anchorValue, true);
   }
 
   /// Emit one telemetry line at the engine's current clock. `event`
@@ -173,7 +173,8 @@ class CMRITracerEngine {
 
   void emitLineAt_(uint32_t nowMs, const char* event,
                    const char* extraKey = nullptr,
-                   const char* extraValue = nullptr) {
+                   const char* extraValue = nullptr,
+                   bool emitConfig = false) {
     char inputsHex[2 * RemoteNodeHandle::kMaxInputBytes + 1] = "";
     const size_t inputLength = node_->inputLength();
     for (size_t i = 0; i < inputLength; ++i) {
@@ -183,6 +184,8 @@ class CMRITracerEngine {
     const CMRIHostStatistics& host = host_->statistics();
     const RemoteNodeStatistics& node = node_->statistics();
     const LinkStatistics& link = transport_->stats();
+    const CMRIFrameDecoder::Statistics& decoder =
+        transport_->decoderStatistics();
 
     int written = snprintf(
         line_, sizeof(line_),
@@ -193,13 +196,15 @@ class CMRITracerEngine {
         "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
         "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
         "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
-        "\"decodeErrors\":%u,\"inputs\":\"%s\"",
+        "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
+        "\"inputs\":\"%s\"",
         ++seq_, nowMs - epochMs_, event, image_, version_, node_->address(),
         node_->ua(), stateName(node_->state()), quiesced_ ? "true" : "false",
         host.pollsSent, host.pollSendRetries, host.repliesAccepted,
         node.noReplies, host.repliesRejected, host.unsolicitedPackets,
         node.exchanges, node.errors, node.recoveries, node.consecutiveMisses,
-        node.lastTurnaroundMs, link.decodeErrors, inputsHex);
+        node.lastTurnaroundMs, link.decodeErrors, decoder.slowGaps,
+        decoder.maxGapMs, inputsHex);
     if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
       written = static_cast<int>(sizeof(line_)) - 1;
     }
@@ -209,6 +214,23 @@ class CMRITracerEngine {
                    ",\"%s\":\"%s\"", extraKey, extraValue);
       if (extra > 0) {
         written += extra;
+        if (written >= static_cast<int>(sizeof(line_))) {
+          written = static_cast<int>(sizeof(line_)) - 1;
+        }
+      }
+    }
+    if (emitConfig) {
+      // The epoch line carries the gap-observability band as config (not
+      // signal): the three thresholds every counter below was collected
+      // against. A reader interprets slowGaps/maxGapMs against these.
+      const int cfg =
+          snprintf(line_ + written, sizeof(line_) - written,
+                   ",\"slowGapLoMs\":%u,\"slowGapHiMs\":%u,"
+                   "\"interByteTimeoutMs\":%u",
+                   transport_->slowGapLoMs(), transport_->slowGapHiMs(),
+                   transport_->interByteTimeoutMs());
+      if (cfg > 0) {
+        written += cfg;
         if (written >= static_cast<int>(sizeof(line_))) {
           written = static_cast<int>(sizeof(line_)) - 1;
         }

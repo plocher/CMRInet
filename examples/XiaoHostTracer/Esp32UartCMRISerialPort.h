@@ -19,7 +19,7 @@
 // holds through any stall and drops as soon as the last stop bit has
 // left the wire.
 //
-// VALIDATION: Interop v1.0 2.3.14: flush until the last byte leaves
+// VALIDATION: Interop v1.1 2.3.14: flush until the last byte leaves
 // the shift register, then drop TXEN at once. StreamCMRISerialPort's
 // own header directs cores with true TX-complete status to subclass
 // for exactly this.

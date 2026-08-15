@@ -10,7 +10,7 @@
 // before this port's begin(). Two stop bits is the transmit default
 // the fielded ecosystem expects; pass bitsPerChar 10 for an 8N1
 // network.
-// VALIDATION: Interop v1.0 2.5.1: transmit 8N2 by default; accept 8N1
+// VALIDATION: Interop v1.1 2.5.1: transmit 8N2 by default; accept 8N1
 // configuration where a network requires it (erratum E2). The
 // stop-bit hook is the sketch's Serial.begin() config plus this
 // adapter's bitsPerChar, which keeps the wire-time math honest.

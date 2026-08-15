@@ -5,6 +5,21 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Two-threshold receive-gap observability (issue #26): the frame
+  decoder now distinguishes "took longer than expected" from "took so
+  long I gave up." `CMRIFrameDecoder::Statistics` carries a cumulative
+  `slowGaps` counter (gaps in the suspect band [nominalHi, abort)) and a
+  `maxGapMs` watermark (the largest inter-byte gap seen mid-frame,
+  including the fatal abort-gap). `setSlowGapThresholdsMs(lo, hi)` sets
+  the band; lo=0 disables observability, hi<=lo leaves watermark-only.
+  `SerialCMRITransport` derives lo (1 char time) and hi (3 char times)
+  from the port character time; the override survives `begin()`. The
+  desktop tracer emits `slowGaps`/`maxGapMs` on every JSON line and the
+  three thresholds on the epoch line (`--slow-gap-lo-ms`,
+  `--slow-gap-hi-ms`, USB defaults 1/20). Interop profile 2.2.6 revised
+  to the grace-band receive model (profile v1.1; `VALIDATION` tags
+  re-stamped). This would have located the #21 2 s stall from telemetry
+  alone. 12 new tests (9 codec, 3 transport); 118 total passing.
 - Stage-2 bench validation (issue #21): the stage-1 scenario passed
   unchanged against the Xiao ESP32-C6 Host on the two-board crossover
   bench — smoke (UNINITIALIZED→ONLINE first reply), sustained

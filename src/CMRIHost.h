@@ -52,7 +52,7 @@ struct CMRIHostConfig {
 
   /// A node whose consecutive-miss count exceeds this value reports
   /// kOffline. Polling continues.
-  // VALIDATION: Interop v1.0 2.3.10: a silent Node is polled forever
+  // VALIDATION: Interop v1.1 2.3.10: a silent Node is polled forever
   // and its health state is exposed to the application.
   uint32_t missThreshold = 5;
 };
@@ -129,7 +129,7 @@ class CMRIHost {
 
     /// Reply-gate timeout for this node. kInheritHost selects the
     /// host-wide default.
-    // VALIDATION: Interop v1.0 2.3.7: timeouts are wall-clock and
+    // VALIDATION: Interop v1.1 2.3.7: timeouts are wall-clock and
     // configurable per Node, because reply latency is Node-version
     // dependent (2.3.8).
     uint32_t replyTimeoutMs = kInheritHost;
@@ -149,7 +149,7 @@ class CMRIHost {
   ///
   /// Addresses above 64 are legal here. The cpNode family cannot use
   /// them, so check the fleet before assigning one.
-  // VALIDATION: Interop v1.0 2.3.4: a Host supports UA 0-127 and
+  // VALIDATION: Interop v1.1 2.3.4: a Host supports UA 0-127 and
   // flags addresses above 64, which the cpNode family cannot use.
   RemoteNodeHandle* addRemoteNode(uint8_t address,
                                   const RemoteNodeConfig& config,

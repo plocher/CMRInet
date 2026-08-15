@@ -28,7 +28,7 @@ class CMRISerialPort {
  public:
   /// Prepare the port. The UART itself (baud, character framing) is
   /// configured by the sketch or adapter before or during begin().
-  /// VALIDATION: Interop v1.0 2.5.1: transmit 8N2 by default; accept
+  /// VALIDATION: Interop v1.1 2.5.1: transmit 8N2 by default; accept
   /// 8N1 configuration where a network requires it (erratum E2). The
   /// stop-bit choice is the adapter's configuration hook, and
   /// byteDurationMicros() must reflect it.
@@ -52,7 +52,7 @@ class CMRISerialPort {
   /// Drive the RS-485 driver-enable line. A port on a converter that
   /// manages direction itself (auto-direction hardware) implements
   /// this as a no-op.
-  /// VALIDATION: Interop v1.0 2.3.14: the transport asserts TXEN,
+  /// VALIDATION: Interop v1.1 2.3.14: the transport asserts TXEN,
   /// writes the frame, flushes until the last byte leaves the shift
   /// register, then drops TXEN at once. The port is only the actuator;
   /// the ordering lives in SerialCMRITransport.
