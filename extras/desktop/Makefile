@@ -17,7 +17,8 @@ LIB_SRCS := ../../src/CMRIFrameCodec.cpp ../../src/CMRIHost.cpp \
 all: $(BUILD)/cmri_tracer
 
 $(BUILD)/cmri_tracer: cmri_tracer.cpp PosixCMRISerialPort.cpp \
-                      PosixCMRISerialPort.h $(LIB_SRCS)
+                      PosixCMRISerialPort.h \
+                      ../../src/testbed/CMRITracerEngine.h $(LIB_SRCS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) cmri_tracer.cpp PosixCMRISerialPort.cpp \
 	    $(LIB_SRCS) -o $@

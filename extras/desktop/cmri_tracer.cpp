@@ -2,15 +2,15 @@
 // SerialCMRITransport over PosixCMRISerialPort, driven from a
 // command-and-control loop on stdin/stdout.
 //
-// Command-and-control shape per docs/testbed-software-notes.md:
-// plain verbs in (quiesce / resume / status / quit), JSON lines out.
-// Stream rules: cumulative counters only, a monotonic sequence
-// number on every line, and an explicit epoch marker at start, so a
-// runner detects process restarts.
+// The C&C engine (verbs, JSON-lines telemetry, listener wiring) is
+// the shared testbed engine in src/testbed/CMRITracerEngine.h — the
+// same engine the Xiao Host R&D image wraps (map issue #21). This
+// file is only the desktop main(): option parsing, termios port,
+// POSIX clocks, and stdin/stdout plumbing.
 //
 // The scenario this binary runs is the stage-1/stage-2 testbed
 // invariant: a scenario that passes here must pass unchanged against
-// the Xiao Host R&D image (map issue #7).
+// the Xiao Host R&D image.
 
 #include <fcntl.h>
 #include <signal.h>
@@ -23,11 +23,14 @@
 #include "CMRIHost.h"
 #include "PosixCMRISerialPort.h"
 #include "SerialCMRITransport.h"
+#include "testbed/CMRITracerEngine.h"
 
 namespace {
 
 constexpr const char* kImage = "cmri_tracer";
-constexpr const char* kVersion = "0.1.0";
+// 0.2.0: ts is now integer ms since the epoch line (uniform across
+// images, map issue #21); the epoch line carries the wall clock.
+constexpr const char* kVersion = "0.2.0";
 
 // ------------------------------------------------------------ CLI options
 
@@ -123,84 +126,11 @@ void isoTimestamp(char* out, size_t len) {
 
 // ------------------------------------------------------------ telemetry
 
-const char* stateName(CMRInet::RemoteNodeState state) {
-  switch (state) {
-    case CMRInet::RemoteNodeState::kUninitialized: return "UNINITIALIZED";
-    case CMRInet::RemoteNodeState::kOnline: return "ONLINE";
-    case CMRInet::RemoteNodeState::kStale: return "STALE";
-    case CMRInet::RemoteNodeState::kOffline: return "OFFLINE";
-  }
-  return "UNKNOWN";
-}
-
-const char* eventName(CMRInet::CMRIHostEventType type) {
-  switch (type) {
-    case CMRInet::CMRIHostEventType::kReplyAccepted: return "reply";
-    case CMRInet::CMRIHostEventType::kReplyRejected: return "reject";
-    case CMRInet::CMRIHostEventType::kReplyTimeout: return "miss";
-    case CMRInet::CMRIHostEventType::kNodeStateChanged: return "state";
-  }
-  return "unknown";
-}
-
-/// Everything one telemetry line needs, bundled as the listener
-/// context cookie.
-struct Tracer {
-  CMRInet::CMRIHost* host = nullptr;
-  CMRInet::SerialCMRITransport* transport = nullptr;
-  const CMRInet::RemoteNodeHandle* node = nullptr;
-  uint32_t seq = 0;       // monotonic line sequence number
-  bool quiesced = false;  // bus handed off; polling suspended
-
-  /// Emit one JSON telemetry line. `event` names why the line exists;
-  /// extraKey/extraValue append one event-specific string field.
-  void emitLine(const char* event, const char* extraKey = nullptr,
-                const char* extraValue = nullptr) {
-    char ts[40];
-    isoTimestamp(ts, sizeof(ts));
-
-    char inputsHex[2 * CMRINET_HOST_MAX_INPUT_BYTES + 1] = "";
-    const size_t inputLength = node->inputLength();
-    for (size_t i = 0; i < inputLength; ++i) {
-      snprintf(&inputsHex[2 * i], 3, "%02X", node->inputByte(i));
-    }
-
-    const CMRInet::CMRIHostStatistics& host_ = host->statistics();
-    const CMRInet::RemoteNodeStatistics& node_ = node->statistics();
-    const CMRInet::LinkStatistics& link = transport->stats();
-
-    printf("{\"seq\":%u,\"ts\":\"%s\",\"event\":\"%s\","
-           "\"role\":\"host\",\"image\":\"%s\",\"version\":\"%s\","
-           "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
-           "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
-           "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
-           "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
-           "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
-           "\"decodeErrors\":%u,\"inputs\":\"%s\"",
-           ++seq, ts, event, kImage, kVersion, node->address(), node->ua(),
-           stateName(node->state()), quiesced ? "true" : "false",
-           host_.pollsSent, host_.pollSendRetries, host_.repliesAccepted,
-           node_.noReplies, host_.repliesRejected, host_.unsolicitedPackets,
-           node_.exchanges, node_.errors, node_.recoveries,
-           node_.consecutiveMisses, node_.lastTurnaroundMs, link.decodeErrors,
-           inputsHex);
-    if (extraKey != nullptr && extraValue != nullptr) {
-      printf(",\"%s\":\"%s\"", extraKey, extraValue);
-    }
-    printf("}\n");
-    fflush(stdout);
-  }
-};
-
-/// CMRIHost event listener: one telemetry line per engine event.
-void onHostEvent(void* context, const CMRInet::CMRIHostEvent& event) {
-  Tracer& tracer = *static_cast<Tracer*>(context);
-  if (event.type == CMRInet::CMRIHostEventType::kNodeStateChanged) {
-    tracer.emitLine(eventName(event.type), "previousState",
-                    stateName(event.previousState));
-    return;
-  }
-  tracer.emitLine(eventName(event.type));
+/// LineWriter for the shared engine: one line to stdout, flushed so a
+/// piped runner sees it immediately.
+void writeStdoutLine(void* /*context*/, const char* line) {
+  puts(line);
+  fflush(stdout);
 }
 
 // ------------------------------------------------------------ verbs
@@ -262,11 +192,9 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  Tracer tracer;
-  tracer.host = &host;
-  tracer.transport = &transport;
-  tracer.node = node;
-  host.onEvent(onHostEvent, &tracer);
+  CMRInet::testbed::CMRITracerEngine engine;
+  engine.bind(host, transport, *node, kImage, kVersion, writeStdoutLine,
+              nullptr);
 
   host.begin();
   if (!port.isOpen()) {
@@ -274,30 +202,25 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // The epoch marker: seq restarts here, so a runner seeing this line
-  // knows every cumulative counter restarted with it.
-  tracer.emitLine("epoch");
+  // The epoch marker: seq and ts restart here, so a runner seeing
+  // this line knows every cumulative counter restarted with it. The
+  // desktop's absolute anchor is the wall clock.
+  engine.setNow(monotonicMs());
+  char wallClock[40];
+  isoTimestamp(wallClock, sizeof(wallClock));
+  engine.emitEpoch("wallClock", wallClock);
 
   const uint32_t startMs = monotonicMs();
   char verb[128];
   while (!gStop) {
-    host.tick(monotonicMs());
+    const uint32_t nowMs = monotonicMs();
+    engine.setNow(nowMs);
+    host.tick(nowMs);
 
     if (readVerb(verb, sizeof(verb))) {
-      if (strcmp(verb, "quit") == 0) {
+      using VerbResult = CMRInet::testbed::CMRITracerEngine::VerbResult;
+      if (engine.handleVerb(verb) == VerbResult::kQuit) {
         break;
-      } else if (strcmp(verb, "status") == 0) {
-        tracer.emitLine("status");
-      } else if (strcmp(verb, "quiesce") == 0) {
-        node->setEnabled(false);
-        tracer.quiesced = true;
-        tracer.emitLine("quiesce");
-      } else if (strcmp(verb, "resume") == 0) {
-        node->setEnabled(true);
-        tracer.quiesced = false;
-        tracer.emitLine("resume");
-      } else if (verb[0] != '\0') {
-        tracer.emitLine("error", "unknownVerb", verb);
       }
     }
 
@@ -314,7 +237,8 @@ int main(int argc, char** argv) {
     usleep(500);  // 0.5 ms: fine-grained against the 5 ms pacing gate
   }
 
-  tracer.emitLine("final");
+  engine.setNow(monotonicMs());
+  engine.emitLine("final");
   port.close();
   return 0;
 }

@@ -5,6 +5,30 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Stage-2 bench validation (issue #21): the stage-1 scenario passed
+  unchanged against the Xiao ESP32-C6 Host on the two-board crossover
+  bench — smoke (UNINITIALIZED→ONLINE first reply), sustained
+  2459/2459 exchanges with all counters zero (turnaround p50 7 /
+  max 36 ms on the real UART), wrong-UA, unplug (OFFLINE at 6
+  consecutive misses, polling continues), automatic recovery, and the
+  quiesce/resume/status/quit verbs. Passive wire tap witnessed
+  8124/8124 clean polls and 1499/1499 clean node replies. JSONL
+  telemetry and tap captures in `docs/bench/`.
+- `src/testbed/CMRITracerEngine.h` — the shared testbed C&C engine
+  (verbs in, JSON-lines telemetry out, D7 listeners), wrapped by both
+  the desktop `cmri_tracer` and the Xiao Host sketch: "same engine,
+  same listeners, different main()" is now enforced by construction.
+  `ts` is integer ms since the stream's epoch line in every image;
+  the epoch line carries the absolute anchor (`wallClock` on the
+  desktop, `bootMs` on the Xiao) (issue #21).
+- `examples/XiaoHostTracer/` — the stage-2 Xiao Host R&D image:
+  CMRIHost on the cpNode-Xiao RS-485 block (28800 8N2, RX=D7, TX=D6,
+  TXEN=D3), C&C over USB CDC, no OLED/OTA/WiFi. Build knobs
+  `TRACER_ADDRESS` / `TRACER_INPUT_BYTES` / `TRACER_BAUD` /
+  `TRACER_INTER_BYTE_TIMEOUT_MS` via `build.defines` (issue #21).
+- `Esp32UartCMRISerialPort` (sketch-local): transmitDrained() from
+  `uart_wait_tx_done(port, 0)` — hardware TX-complete truth instead
+  of the buffer-level answer plus wire-time estimate (issue #21).
 - Stage-1 bench validation (issue #7): the P/R tracer bullet ran on a
   real wire — Mac desktop Host through a USB-RS485 adapter to the
   flashed cpNode-Xiao (UA 95, 28800 8N2). Sustained run 1000/1000
@@ -97,3 +121,26 @@ High-level changes, newest first.
 - Desktop test harness: vendored Unity v2.6.1 (no Ceedling) with a plain
   Makefile (`make -C tests`); 29 byte-vector tests seeded from the
   `docs/research/comparison.md` §3 anti-checklist.
+
+### Fixed
+- `CMRIHost.h` now includes `Arduino.h` for the ARDUINO-only
+  `tick()` convenience overload — the library's first real Arduino
+  compile could not see `millis()` (issue #21).
+- TXEN clipped the poll's ETX mid-air every ~2 s on the Xiao Host
+  (wire-tap verified `… 5f 50 ff` tails): the ESP32-C6 Arduino
+  runtime stalls ~25–35 ms about every 2 s, the drain estimate
+  expired during the stall, and TXEN dropped while the UART was
+  still shifting. Fixed by hardware drain truth
+  (`Esp32UartCMRISerialPort`); receiver-dependent symptom — the
+  FTDI tap decoded some clipped tails clean while the node's
+  MAX3491 saw garbage (issue #21).
+
+### Changed
+- Inter-byte timeout doctrine, generalizing the stage-1 USB-chunking
+  finding: the decoder measures byte gaps at tick granularity, so
+  ANY host whose tick can stall (USB latency timers, runtime
+  housekeeping) measures arrival gaps, not wire gaps. The rate-derived
+  default is a conformance instrument; deployed Hosts should run a
+  tolerant limit (Xiao image: 50 ms) and rely on the 250 ms reply
+  gate as the truncation guard. Be strict in what you send,
+  forgiving in what you accept (issue #21).
