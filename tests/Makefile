@@ -16,7 +16,8 @@ LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/CMRIHost.cpp \
             ../src/MockCMRITransport.cpp ../src/SerialCMRITransport.cpp
 LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRIPacket.h \
             ../src/CMRInet.h ../src/CMRISerialPort.h ../src/CMRITime.h \
-            ../src/CMRITransport.h ../src/MockCMRITransport.h \
+            ../src/CMRITransport.h ../src/Esp32UartCMRISerialPort.h \
+            ../src/MockCMRITransport.h \
             ../src/RemoteNodeHandle.h ../src/SerialCMRITransport.h \
             ../src/StreamCMRISerialPort.h
 

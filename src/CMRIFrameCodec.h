@@ -4,7 +4,7 @@
 // codec has no Arduino dependencies: time is injected as `nowMs` and
 // bytes are plain uint8_t, so desktop tests compile the exact sources.
 //
-// VALIDATION: Design v1.0 D4: framing belongs to the serial transport
+// VALIDATION: Design v1.1 D4: framing belongs to the serial transport
 // layer. The engine above deals in packets, never bytes.
 // VALIDATION: Interop v1.1 Part 2: wire behavior implements the
 // profile's TX (2.1.x) and RX (2.2.x) rules. Bare rule ids in this file
@@ -68,7 +68,7 @@ size_t encodeFrame(const CMRIPacket& packet, uint8_t* out, size_t capacity);
 ///   (rule 2.2.9).
 ///
 /// UA filtering and MT validation are deliberately NOT here.
-/// VALIDATION: Design v1.0 "Transport contract (packet seam)": address
+/// VALIDATION: Design v1.1 "Transport contract (packet seam)": address
 /// filtering is not the transport's job.
 class CMRIFrameDecoder {
  public:

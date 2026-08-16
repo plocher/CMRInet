@@ -1,9 +1,14 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.0 (bump when any decision or contract in this document
+Version: 1.1 (bump when any decision or contract in this document
 changes; `// VALIDATION:` tags in code cite this version — see
 `docs/agents/validation-comments.md`).
+Change log:
+- v1.1 (2026-08-16): D7 platform-guard clarification, transport-
+  contract estimated-drain footnote, and D13 inter-byte abort doctrine
+  (issue #27). Existing `Design v1.0` tags re-stamped to v1.1.
+- v1.0 (2026-08-12): initial baseline from design review.
 This document supersedes the architecture portions of `PLAN.md`
 ("Why a separate library", "Protocol notes", "Core state machine").
 The bench-instrument goal, display semantics, and phasing in `PLAN.md`
@@ -221,7 +226,12 @@ codes, not exceptions. No RTTI, no `String`, no growable containers
 after `begin()`. Received bytes normalize to `uint8_t` at the read.
 Observability is listener registration (JMRI pattern): metrics,
 monitor, and trace hooks are optional listeners the linker drops when
-unused. No feature `#ifdef`s inside the library.
+unused. No feature `#ifdef`s inside the library. Platform guards on
+platform-specific ports (e.g. `#if defined(ARDUINO_ARCH_ESP32)` on
+`Esp32UartCMRISerialPort`) are not feature toggles — they are the only
+mechanism the Arduino build model offers for a port that calls into a
+core-specific driver, and a non-matching build sees an empty file
+(the shipped guard is `#if defined(ARDUINO) && defined(ARDUINO_ARCH_ESP32)`).
 
 ### D8. Floor: ESP32-class drives the design; AVR gets a mini profile
 The full bench instrument targets ESP32-class parts. Geometry
@@ -286,6 +296,42 @@ sensors/turnouts with no CMRI connection. JMRI then doubles as a
 third-party integration test for the image schema, the same role the
 MQTT transport plays for the packet seam.
 
+### D13. Inter-byte abort doctrine
+The receive inter-byte abort limit (interop 2.2.6) has two distinct
+roles, kept apart:
+- **Shipped/deployment default: tolerant.** `SerialCMRITransport`
+  ships `kShippedInterByteTimeoutMs` (order 100 ms). The reference
+  Host lineage transmitted with interpreter-scale gaps (interop 2.2.6),
+  and fielded Nodes pace with dH/dL (erratum E4), so a strict shipped
+  default would fail conforming history. The 250 ms reply gate (D2,
+  D9) is the truncation backstop; the abort is a framing defense, not
+  the truncation guard.
+- **Rate-derived value: a conformance instrument, never a default.**
+  `rateDerivedInterByteTimeoutMs()` returns three character times
+  (interop 2.2.6). A tracer or conformance scenario opts in by passing
+  it to `setInterByteTimeoutMs()`. It is never a compile-time or
+  shipped default.
+
+Concrete rule: the abort limit must exceed the worst node's configured
+dH/dL per-character delay plus margin (E4) — otherwise a legally-paced
+classic node trips the Host's own abort. That couples the abort to
+per-node config in principle; the natural home for a per-node abort
+override is `CMRIHost::RemoteNodePolicy`, which already exists today
+with a `replyTimeoutMs` field. No per-node abort-timeout field exists
+yet, and none is needed today: the transport decodes a frame before its
+UA is known, so the abort is transport-wide, and the tolerant shipped
+default (100 ms) exceeds the fielded dH/dL ceiling by construction —
+AVR Nodes cap the honored delay near 16.4 ms (E4), so 100 ms covers
+any legally-paced node a Host has configured under the JMRI-tuned
+defaults (D9) with roughly 6x margin. Add a per-node field only when a
+consumer whose nodes exceed that ceiling appears.
+
+Companion: the `transmitDrained()` seam contract (CMRISerialPort.h)
+and the TXEN two-gate drain detector (SerialCMRITransport) are the
+transmit-side doctrine this receive-side doctrine pairs with. The
+conjunction (estimate AND port drain) is kept even for hardware-truth
+ports: the estimate never outlives a real drain, so it costs nothing.
+
 ## Transport contract (packet seam)
 
 Scope: transports for the CMRInet polled strategy. Not a product-wide
@@ -311,8 +357,12 @@ Clause semantics (normative for implementers):
 - `sendPacket()` must not block. It returns false only for
   backpressure or link-down. The caller retries on a later tick.
 - `sendComplete()` gates the strategy's reply timer. Serial: the last
-  byte left the shift register and TXEN dropped. Message transports:
-  the client accepted the message for delivery.
+  byte left the shift register and TXEN dropped — detected
+  non-blocking as the wire-time estimate for the accepted bytes having
+  elapsed AND the port reporting its transmit path empty (interop
+  2.3.14), never a blocking flush (D6). A hardware-truth port tightens
+  this; a buffer-only port is covered by the estimate. Message
+  transports: the client accepted the message for delivery.
 - `receivePacket()` returns packets in arrival order, at most one per
   call, and only packets that passed the transport's integrity checks
   (framing, escaping). Address filtering is NOT the transport's job.

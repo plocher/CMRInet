@@ -299,8 +299,10 @@ static void test_rx_truncated_frame_never_delivers(void) {
   TEST_ASSERT_FALSE(t.receivePacket(got));
 
   // Line silence past the inter-byte timeout abandons the partial
-  // frame, and the abort surfaces through transport stats.
-  t.tick(100);
+  // frame, and the abort surfaces through transport stats. The shipped
+  // default abort is 100 ms (D13); the decoder abandons on a gap
+  // strictly greater than the limit, so tick just past 100.
+  t.tick(101);
   TEST_ASSERT_FALSE(t.receivePacket(got));
   TEST_ASSERT_EQUAL_UINT32(1, t.decoderStatistics().timeoutAborts);
   TEST_ASSERT_EQUAL_UINT32(1, t.stats().decodeErrors);
@@ -310,7 +312,7 @@ static void test_rx_truncated_frame_never_delivers(void) {
   uint8_t wire[16];
   const size_t n = encodeInto(ok, wire, sizeof(wire));
   port.queueRx(wire, n);
-  t.tick(101);
+  t.tick(102);
   TEST_ASSERT_TRUE(t.receivePacket(got));
   TEST_ASSERT_EQUAL_HEX8(ok.ua, got.ua);
 }
@@ -357,12 +359,41 @@ static void test_rx_queue_overflow_keeps_oldest_drops_newest(void) {
 
 // ------------------------------------------------- timeouts and statistics
 
-static void test_default_interbyte_timeout_derives_from_char_time(void) {
+static void test_default_interbyte_timeout_is_tolerant_shipped_value(void) {
   FakeCMRISerialPort port;  // 500 us per character
   SerialCMRITransport t(port);
   t.begin();
-  // Three character times = 1500 us, rounded up to 2 ms.
-  TEST_ASSERT_EQUAL_UINT32(2, t.interByteTimeoutMs());
+  // Design v1.1 D13: the shipped/deployment abort default is a tolerant
+  // limit (order 100 ms), not the rate-derived conformance value. A
+  // legally paced classic node (dH/dL per-character delay, erratum E4)
+  // must never trip the Host's own abort; the 250 ms reply gate is the
+  // truncation backstop.
+  TEST_ASSERT_EQUAL_UINT32(SerialCMRITransport::kShippedInterByteTimeoutMs,
+                           t.interByteTimeoutMs());
+}
+
+static void test_rate_derived_interbyte_timeout_derives_from_char_time(void) {
+  FakeCMRISerialPort port;  // 500 us per character
+  SerialCMRITransport t(port);
+  // The rate-derived value is the conformance-strict instrument (three
+  // character times, interop 2.2.6). It is an explicit opt-in via
+  // rateDerivedInterByteTimeoutMs(), never the shipped default (D13).
+  // The accessor reads the port's character time, so it works before
+  // begin() as well as after.
+  TEST_ASSERT_EQUAL_UINT32(2, t.rateDerivedInterByteTimeoutMs());
+  t.begin();
+  TEST_ASSERT_EQUAL_UINT32(2, t.rateDerivedInterByteTimeoutMs());
+}
+
+static void test_shipped_abort_exceeds_rate_derived(void) {
+  FakeCMRISerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();
+  // D13 invariant: the shipped deployment limit is strictly more
+  // tolerant than the rate-derived conformance value, so a paced node
+  // never trips the Host's own abort.
+  TEST_ASSERT_GREATER_THAN_UINT32(t.rateDerivedInterByteTimeoutMs(),
+                                  t.interByteTimeoutMs());
 }
 
 static void test_timeout_override_and_disable(void) {
@@ -479,7 +510,9 @@ int main(void) {
   RUN_TEST(test_rx_truncated_frame_never_delivers);
   RUN_TEST(test_rx_works_while_transmit_drains);
   RUN_TEST(test_rx_queue_overflow_keeps_oldest_drops_newest);
-  RUN_TEST(test_default_interbyte_timeout_derives_from_char_time);
+  RUN_TEST(test_default_interbyte_timeout_is_tolerant_shipped_value);
+  RUN_TEST(test_rate_derived_interbyte_timeout_derives_from_char_time);
+  RUN_TEST(test_shipped_abort_exceeds_rate_derived);
   RUN_TEST(test_timeout_override_and_disable);
   RUN_TEST(test_hardware_errors_surface_through_stats);
   RUN_TEST(test_begin_resets_state);

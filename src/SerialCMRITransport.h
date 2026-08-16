@@ -7,7 +7,7 @@
 // (CMRISerialPort) is a dumb byte actuator, so desktop tests drive the
 // exact discipline that runs on hardware.
 //
-// VALIDATION: Design v1.0 D4: framing belongs to the serial transport.
+// VALIDATION: Design v1.1 D4: framing belongs to the serial transport.
 // Byte-level concerns (TXEN discipline, inter-byte timeout,
 // dangling-DLE handling, gapless single-write emission, stop-bit
 // config, UART error counters, two-SYN emission) live here or in the
@@ -16,12 +16,16 @@
 // TXEN discipline (assert, write, flush to full drain, deassert):
 // VALIDATION: Interop v1.1 2.3.14: assert TXEN, write the frame, flush
 // until the last byte leaves the shift register, then drop TXEN at
-// once. Nothing here blocks (Design v1.0 D6), so "flush" is a
+// once. Nothing here blocks (Design v1.1 D6), so "flush" is a
 // non-blocking drain detector polled from tick(): TXEN drops when the
 // wire-time estimate for the accepted bytes has elapsed AND the port
 // reports its transmit path empty. A port with hardware drain
 // knowledge tightens the timing; a buffer-only port is covered by the
-// estimate, which includes the shift register.
+// estimate, which includes the shift register. The conjunction is
+// kept even for hardware-truth ports: the estimate never outlives a
+// real drain, so it costs nothing and covers ports whose drain answer
+// is optimistic by ignorance (Design v1.1 D13; see the seam contract
+// on CMRISerialPort::transmitDrained()).
 //
 // Receive never waits for transmit:
 // VALIDATION: Interop v1.1 2.3.15: a fast Node begins its reply while
@@ -42,7 +46,7 @@
 #include "CMRITransport.h"
 
 // ---- Geometry knob: shrink for small targets. ----
-// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time knobs.
+// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
 
 // Received packets waiting for receivePacket(). The polled strategy
 // consumes replies one exchange at a time, so a small queue suffices.
@@ -56,17 +60,27 @@ class SerialCMRITransport : public CMRITransport {
  public:
   static constexpr size_t kRxQueueCapacity = CMRINET_SERIAL_RX_QUEUE;
 
+  /// The shipped/deployment inter-byte abort default: a tolerant limit
+  /// (order 100 ms), not the rate-derived conformance value. The
+  /// reference Host lineage transmitted with interpreter-scale gaps
+  /// (interop 2.2.6) and fielded Nodes pace with dH/dL, so a strict
+  /// shipped default would fail conforming history. The 250 ms reply
+  /// gate is the truncation backstop.
+  /// VALIDATION: Design v1.1 D13: the shipped abort is tolerant; the
+  /// rate-derived value is a conformance instrument, not a default.
+  static constexpr uint32_t kShippedInterByteTimeoutMs = 100;
+
   /// The transport drives, and never destroys, the given port. The
-  /// port must outlive the transport (Design v1.0 D5: nothing is
+  /// port must outlive the transport (Design v1.1 D5: nothing is
   /// deallocated after begin()).
   explicit SerialCMRITransport(CMRISerialPort& port) : port_(port) {}
 
   // ------------------------------------------------ CMRITransport seam
 
   /// Initializes the port, releases the TXEN driver, and resets all
-  /// runtime state and statistics. Applies the rate-derived default
-  /// inter-byte timeout unless setInterByteTimeoutMs() overrode it.
-  /// Allocates nothing.
+  /// runtime state and statistics. Applies the tolerant shipped
+  /// inter-byte abort default (kShippedInterByteTimeoutMs, Design D13)
+  /// unless setInterByteTimeoutMs() overrode it. Allocates nothing.
   void begin() override;
 
   /// Pumps transmit (remaining frame bytes, TXEN drop on full drain)
@@ -103,11 +117,15 @@ class SerialCMRITransport : public CMRITransport {
   /// Override the receive inter-byte timeout (0 disables it — a
   /// conformance-grade receiver tolerates arbitrary gaps, interop
   /// 2.2.6 exception). May be called before or after begin(); the
-  /// override survives begin(). Without an override, begin() derives
-  /// the default from the port's character time.
+  /// override survives begin(). Without an override, begin() applies
+  /// the tolerant shipped default (kShippedInterByteTimeoutMs); call
+  /// rateDerivedInterByteTimeoutMs() and pass it here for a
+  /// conformance-strict receiver.
   /// VALIDATION: Interop v1.1 2.2.6: abandon a partial frame when the
   /// inter-byte gap exceeds a limit; two to three character times is a
-  /// reasonable default.
+  /// reasonable conformance default.
+  /// VALIDATION: Design v1.1 D13: the shipped default is the tolerant
+  /// deployment limit; the rate-derived value is a scenario/tracer verb.
   void setInterByteTimeoutMs(uint32_t ms) {
     interByteTimeoutMs_ = ms;
     timeoutOverridden_ = true;
@@ -116,6 +134,16 @@ class SerialCMRITransport : public CMRITransport {
 
   /// The active receive inter-byte timeout (0 = disabled).
   uint32_t interByteTimeoutMs() const { return interByteTimeoutMs_; }
+
+  /// The conformance-strict inter-byte timeout derived from the port's
+  /// character time (three character times, rounded up to ms, min 1 —
+  /// interop 2.2.6). This is the rate-derived instrument, not the
+  /// shipped default: pass it to setInterByteTimeoutMs() to opt into a
+  /// conformance-strict receiver. Reads the port's character time
+  /// directly, so it is valid before begin() as well as after.
+  /// VALIDATION: Design v1.1 D13: rate-derived abort is a conformance
+  /// verb, never a compile-time or shipped default.
+  uint32_t rateDerivedInterByteTimeoutMs() const;
 
   /// Override the receive gap-observability thresholds (see
   /// CMRIFrameDecoder::setSlowGapThresholdsMs). May be called before or
@@ -155,7 +183,10 @@ class SerialCMRITransport : public CMRITransport {
   void drainDecoder_();
   void syncErrors_();
   uint32_t wireTimeMs_(size_t bytes) const;
-  uint32_t defaultInterByteTimeoutMs_() const;
+  // Three character times (interop 2.2.6) from a given per-character
+  // micros, rounded up to ms, min 1. Shared by the rate-derived abort
+  // accessor and the slow-gap suspicion floor so the two cannot drift.
+  uint32_t threeCharTimesMs_(uint32_t byteMicros) const;
   uint32_t defaultSlowGapLoMs_() const;
   uint32_t defaultSlowGapHiMs_() const;
 
@@ -187,7 +218,7 @@ class SerialCMRITransport : public CMRITransport {
   // The port's cumulative hardware error count at begin(), so stats()
   // reports errors since begin(), not since power-up.
   uint32_t hardwareErrorBaseline_ = 0;
-  uint32_t interByteTimeoutMs_ = CMRIFrameDecoder::kDefaultInterByteTimeoutMs;
+  uint32_t interByteTimeoutMs_ = kShippedInterByteTimeoutMs;
   bool timeoutOverridden_ = false;
   uint32_t slowGapLoMs_ = 0;   ///< observation floor; 0 = off (derived in begin)
   uint32_t slowGapHiMs_ = 0;   ///< slowGaps trigger; <= lo = watermark-only

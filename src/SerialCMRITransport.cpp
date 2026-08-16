@@ -30,7 +30,7 @@ void SerialCMRITransport::begin() {
   }
   hardwareErrorBaseline_ = port_.hardwareErrorCount();
   if (!timeoutOverridden_) {
-    interByteTimeoutMs_ = defaultInterByteTimeoutMs_();
+    interByteTimeoutMs_ = kShippedInterByteTimeoutMs;
   }
   decoder_.setInterByteTimeoutMs(interByteTimeoutMs_);
   if (!slowGapOverridden_) {
@@ -168,11 +168,18 @@ uint32_t SerialCMRITransport::wireTimeMs_(size_t bytes) const {
   return (micros + 999u) / 1000u;
 }
 
-uint32_t SerialCMRITransport::defaultInterByteTimeoutMs_() const {
+uint32_t SerialCMRITransport::threeCharTimesMs_(uint32_t byteMicros) const {
   // Three character times (interop 2.2.6), rounded up to the injected
   // clock's millisecond granularity, never below 1 ms.
-  const uint32_t ms = (3u * byteMicros_ + 999u) / 1000u;
+  const uint32_t ms = (3u * byteMicros + 999u) / 1000u;
   return (ms == 0) ? 1u : ms;
+}
+
+uint32_t SerialCMRITransport::rateDerivedInterByteTimeoutMs() const {
+  // Reads the port's character time directly so the value is valid
+  // before begin() as well as after (Design v1.1 D13: this is the
+  // conformance instrument, not the shipped default).
+  return threeCharTimesMs_(port_.byteDurationMicros());
 }
 
 uint32_t SerialCMRITransport::defaultSlowGapLoMs_() const {
@@ -184,13 +191,11 @@ uint32_t SerialCMRITransport::defaultSlowGapLoMs_() const {
 
 uint32_t SerialCMRITransport::defaultSlowGapHiMs_() const {
   // Three character times: the suspicion floor. Gaps at/above this and
-  // below the abort limit increment slowGaps. Rounded up to ms, min 1.
-  // At ms granularity this often coincides with the rate-derived abort
-  // default, so the slow band is widest when the abort limit is raised
-  // (USB chunking, deployed tolerance); lower hi to open the band on a
-  // clean UART.
-  const uint32_t ms = (3u * byteMicros_ + 999u) / 1000u;
-  return (ms == 0) ? 1u : ms;
+  // below the abort limit increment slowGaps. At ms granularity this
+  // often coincides with the rate-derived abort value, so the slow band
+  // is widest when the abort limit is raised (USB chunking, deployed
+  // tolerance); lower hi to open the band on a clean UART.
+  return threeCharTimesMs_(byteMicros_);
 }
 
 }  // namespace CMRInet

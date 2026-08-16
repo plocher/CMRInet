@@ -9,7 +9,7 @@
 // caller's tick(nowMs) clock is passed to every query, so the same types
 // run on hardware and under a deterministic mock clock in desktop tests.
 //
-// VALIDATION: Design v1.0 D6: the library advances only from injected
+// VALIDATION: Design v1.1 D6: the library advances only from injected
 // tick(nowMs) time. Injected time keeps desktop tests deterministic.
 //
 // Explicit state instead of zero sentinels: 0 is a legitimate uint32_t

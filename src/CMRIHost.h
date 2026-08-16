@@ -5,7 +5,7 @@
 // input image, freshness, and health that the RemoteNodeHandle
 // exposes. I and T sending belong to a later slice.
 //
-// VALIDATION: Design v1.0 D4: protocol-level concerns live in the
+// VALIDATION: Design v1.1 D4: protocol-level concerns live in the
 // strategy: poll schedule, reply-gate timeout, UA/MT reply
 // verification, health. Byte-level concerns live in the transport.
 
@@ -26,7 +26,7 @@
 // Geometry knob: the maximum number of remote nodes one Host manages.
 // Each node costs a RemoteNodeHandle (image buffer included). Shrink
 // the knob, or CMRINET_HOST_MAX_INPUT_BYTES, for small targets.
-// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time
+// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time
 // knobs.
 #ifndef CMRINET_HOST_MAX_NODES
 #define CMRINET_HOST_MAX_NODES 16
@@ -36,13 +36,13 @@ namespace CMRInet {
 
 /// Host-wide polled-strategy defaults. Every value has a per-node
 /// override path through CMRIHost::RemoteNodePolicy where one exists.
-// VALIDATION: Design v1.0 D9: policy defaults match what JMRI-tuned
+// VALIDATION: Design v1.1 D9: policy defaults match what JMRI-tuned
 // Nodes expect: 250 ms reply-gate timeout, ~5 ms poll pacing, and a
 // re-init trigger after more than 5 consecutive misses.
 struct CMRIHostConfig {
   /// Reply-gate timeout: how long the Host waits for R after a poll
   /// finishes sending.
-  // VALIDATION: Design v1.0 D2: the reply-gate timeout is strategy
+  // VALIDATION: Design v1.1 D2: the reply-gate timeout is strategy
   // policy, kept apart from the staleness threshold in the handle
   // contract.
   uint32_t replyTimeoutMs = 250;
@@ -58,7 +58,7 @@ struct CMRIHostConfig {
 };
 
 /// What the Host engine is reporting through its event listener.
-// VALIDATION: Design v1.0 D7: observability is listener registration
+// VALIDATION: Design v1.1 D7: observability is listener registration
 // (JMRI pattern): metrics, monitor, and trace hooks are optional
 // listeners the linker drops when unused.
 enum class CMRIHostEventType : uint8_t {
@@ -81,7 +81,7 @@ struct CMRIHostEvent {
 };
 
 /// Event listener. Plain function pointer with a context cookie
-/// (Design v1.0 D7: no std::function). Called from inside tick();
+/// (Design v1.1 D7: no std::function). Called from inside tick();
 /// listeners must not block and must not call back into the engine.
 using CMRIHostEventListener = void (*)(void* context,
                                        const CMRIHostEvent& event);
@@ -108,12 +108,12 @@ struct CMRIHostStatistics {
 /// Lifecycle: construct with a transport, add nodes, then begin().
 /// begin() locks the configuration. After begin(), the engine
 /// allocates nothing and nodes cannot be removed.
-// VALIDATION: Design v1.0 D5: two-phase lifecycle. Allocation is
+// VALIDATION: Design v1.1 D5: two-phase lifecycle. Allocation is
 // legal only before begin() locks the configuration.
 ///
 /// Runtime: call tick(nowMs) from loop(). The engine advances only
 /// inside tick() and never blocks, sleeps, or busy-waits.
-// VALIDATION: Design v1.0 D6: non-blocking tick with injected time.
+// VALIDATION: Design v1.1 D6: non-blocking tick with injected time.
 // The engine runs against a mock clock and mock transport in desktop
 // tests.
 class CMRIHost {
@@ -161,7 +161,7 @@ class CMRIHost {
 
   /// Register the optional event listener (nullptr to clear). Part of
   /// the configuration phase: calls after begin() are ignored.
-  // VALIDATION: Design v1.0 D5: begin() locks the configuration.
+  // VALIDATION: Design v1.1 D5: begin() locks the configuration.
   void onEvent(CMRIHostEventListener listener, void* context = nullptr) {
     if (began_) {
       return;

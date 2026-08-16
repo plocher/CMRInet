@@ -4,11 +4,11 @@
 // (Remote), never a protocol qualifier. A Host sketch reads other
 // nodes through this family, whatever engine runs the exchange.
 //
-// VALIDATION: Design v1.0 D2: handle, image, freshness, and health
+// VALIDATION: Design v1.1 D2: handle, image, freshness, and health
 // types live in a strategy-neutral header owned by no engine. The
 // handle exposes input reads, input age, link state, and statistics,
 // and contains no poll vocabulary.
-// VALIDATION: Design v1.0 D1: no RemoteNode type exists. Its absence
+// VALIDATION: Design v1.1 D1: no RemoteNode type exists. Its absence
 // gives every RemoteNode* name exactly one parse.
 
 #pragma once
@@ -34,7 +34,7 @@
 //   conformance testing.
 // Shrink it for memory-limited targets: a CPNODE with all 8x IO16
 // cards as inputs plus 16 onboard bits needs 18 bytes.
-// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time
+// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time
 // knobs.
 // VALIDATION: Interop v1.1 2.3.6: default to the JMRI-compatible
 // ceiling; larger capacities are bench/conformance options.
@@ -47,7 +47,7 @@ namespace CMRInet {
 class CMRIHost;
 
 /// Node health as the Host currently believes it.
-// VALIDATION: Design v1.0 D2: RemoteNodeState is strategy-neutral.
+// VALIDATION: Design v1.1 D2: RemoteNodeState is strategy-neutral.
 enum class RemoteNodeState : uint8_t {
   kUninitialized,  ///< no input image has been received yet
   kOnline,         ///< the node answers and its inputs are fresh
@@ -64,7 +64,7 @@ struct RemoteNodeConfig {
 
   /// Staleness threshold. Input data older than this makes the node
   /// report kStale. 0 disables the check.
-  // VALIDATION: Design v1.0 D2: the staleness threshold is universal
+  // VALIDATION: Design v1.1 D2: the staleness threshold is universal
   // and lives in the handle contract. The reply-gate timeout is
   // strategy policy and lives elsewhere.
   uint32_t stalenessMs = 0;
@@ -138,7 +138,7 @@ class RemoteNodeHandle {
 
   /// Disable or re-enable this node. The exchange schedule skips a
   /// disabled node.
-  // VALIDATION: Design v1.0 D5: after begin(), nodes cannot be
+  // VALIDATION: Design v1.1 D5: after begin(), nodes cannot be
   // removed, only disabled.
   void setEnabled(bool enabled) { config_.enabled = enabled; }
 

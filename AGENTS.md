@@ -20,7 +20,7 @@ Code links to design and spec clauses with greppable `// VALIDATION:` comments, 
 
 ## Project orientation
 
-- Architecture and decisions: `docs/DESIGN.md` (D1-D12; read before any implementation work).
+- Architecture and decisions: `docs/DESIGN.md` (D1-D13; read before any implementation work).
 - Wire behavior: `docs/cmrinet-interop-profile-and-errata.md` (normative for this library).
 - Evidence base: `docs/research/` (eight adversarial reviews + `comparison.md` synthesis).
 - Terminology: Host and Node per LCS-9.10.1 (DESIGN.md D1). "CMRInet" is one word, `net` lowercase.

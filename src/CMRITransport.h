@@ -6,7 +6,7 @@
 // carriers. Implementations end with the interface name:
 // SerialCMRITransport, MockCMRITransport, TcpCMRITransport, ...
 //
-// VALIDATION: Design v1.0 "Transport contract (packet seam)": the
+// VALIDATION: Design v1.1 "Transport contract (packet seam)": the
 // clause documentation on CMRITransport mirrors the contract text.
 
 #pragma once

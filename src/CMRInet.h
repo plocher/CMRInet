@@ -1,6 +1,6 @@
 // CMRInet.h — umbrella header for the CMRInet library.
 //
-// VALIDATION: Design v1.0 D1: all public types live in namespace
+// VALIDATION: Design v1.1 D1: all public types live in namespace
 // CMRInet and are spelled by the naming grammar (e.g.
 // CMRInet::CMRIPacket).
 

@@ -15,11 +15,26 @@
 // stop-bit hook is the sketch's Serial.begin() config plus this
 // adapter's bitsPerChar, which keeps the wire-time math honest.
 //
-// Drain fidelity: the Stream API exposes only the software buffer
-// (availableForWrite), not the shift register, so transmitDrained()
-// answers for the buffer and SerialCMRITransport's wire-time estimate
-// covers the rest. On a core that exposes true TX-complete status,
-// subclass CMRISerialPort directly for tighter TXEN turnaround.
+// Drain fidelity — the portable floor: the Stream API exposes only
+// the software buffer (availableForWrite), not the shift register, so
+// transmitDrained() answers for the buffer and SerialCMRITransport's
+// wire-time estimate covers the rest. This is correct under nominal
+// timing (the estimate gates TXEN) and is the permitted
+// optimistic-by-ignorance floor of the transmitDrained() seam
+// contract. It is vulnerable only in the window between estimate
+// expiry and actual drain when the runtime stalls (the #21 ESP32-C6
+// ~2 s stall, wire-tap verified; #25 root cause stays open): TXEN can
+// drop while the last byte is still shifting. Prefer a hardware-truth
+// port where the core exposes one.
+//
+// Contribution pattern for a core with true TX-complete status:
+// subclass StreamCMRISerialPort and override transmitDrained() to
+// answer from the hardware. Esp32UartCMRISerialPort in this directory
+// is the worked example (uart_wait_tx_done(port, 0) on ESP32). On AVR,
+// the TXCn bit of UCSRnA (set when the shift register empties, cleared
+// by writing a one) is the equivalent truth source. Do not build a
+// core port without a bench — the wire tap is the only proof the
+// timing is right.
 
 #pragma once
 
