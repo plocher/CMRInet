@@ -446,10 +446,10 @@ Open items to settle during tracer-bullet implementation:
 
 ## Scope for the tracer bullet (Phase 1, revised)
 
-In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost (P/R
-only), minimal `RemoteNodeHandle` (inputs, freshness, state),
-scripted-replay tests, OLED hit/miss display per PLAN.md.
-Out (sequenced, not abandoned): T and I sending (Phase 2), CMRINode
-emulator (Phase 2, as the loopback counterparty), MQTT carrier proof
-(after Phase 2), semantic gateway app (after the emulator), push
-strategy (no consumer), SUSIC/SMINI node types (bench roadmap).
+In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost
+(I/T/P), `RemoteNodeHandle` (inputs, outputs, freshness, state, re-init
+ladder), scripted-replay tests, OLED hit/miss display per PLAN.md.
+Out (sequenced, not abandoned): CMRINode emulator (Phase 2, as the
+loopback counterparty), MQTT carrier proof (after Phase 2), semantic gateway
+app (after the emulator), push strategy (no consumer), SUSIC/SMINI node
+types (bench roadmap).

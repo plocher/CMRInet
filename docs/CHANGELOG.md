@@ -5,6 +5,29 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Phase 2 `CMRIHost` — I/T sending, full-image output, and re-init
+  ladder (issue #8): the engine now speaks all four polled-strategy packet
+  types. Per-node on-the-wire order is I → T → P (interop 2.3.1): a
+  node's first exchange is an I (CPNODE 'C' dialect, 13-byte body
+  `<'C'> <dH> <dL> <opts1> <opts2> <NI> <NO> <0xFF×6>`, interop
+  E3), followed by a full-image T after a 500 ms settle. T is sent on
+  output change (`setOutputBit`/`setOutputs`/`forceTransmit` mark the
+  image dirty) and always carries the full output image (interop 2.3.2).
+  After more than 5 consecutive P misses the re-init ladder arms: the
+  next slot re-sends I + full T and invalidates cached input state by
+  clearing freshness only — the last-good bytes are kept, since 0 is a
+  valid consumer value and zeroing would assert "all clear" (the QBASIC
+  review's F15 hazard); a recovered reply disarms the ladder. dH/dL are
+  per-node knobs in `RemoteNodePolicy`, default 0 (erratum E4). I and T
+  expect no reply (interop E8): a packet arriving during the I settle or T
+  gap is counted in `unsolicitedPackets` and discarded, not rejected or
+  errored. New `CMRIHostConfig` knobs: `postInitSettleMs` (500),
+  `postTxGapMs` (2), `transmitRefreshMs` (0 = off). New
+  `CMRIHostEventType::kReinitScheduled` event. New `RemoteNodeHandle`
+  output API: `outputBit`/`outputByte`/`outputLength`,
+  `setOutputBit`/`setOutputs`/`forceTransmit`. New
+  `CMRINET_HOST_MAX_OUTPUT_BYTES` geometry knob. 17 new Unity tests
+  (`tests/test_host.cpp`); 132 total passing.
 - `Esp32UartCMRISerialPort` promoted from the Xiao tracer sketch
   into `src/` (issue #27): hardware transmit-drain truth
   (`uart_wait_tx_done(port, 0)`) is the correct shipped behavior for

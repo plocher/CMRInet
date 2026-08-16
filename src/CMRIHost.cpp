@@ -1,4 +1,9 @@
-// CMRIHost.cpp — the CMRInet polled-strategy Host engine, P/R slice.
+// CMRIHost.cpp — the CMRInet polled-strategy Host engine.
+//
+// Speaks I (session setup), P (poll), and T (full output image); verifies R.
+// Per-node on-the-wire order is I → T → P (interop 2.3.1). I and T expect no
+// reply (interop E8); the re-init ladder re-sends I + full T after more than
+// missThreshold consecutive P misses and invalidates cached inputs (2.3.10).
 
 #include "CMRIHost.h"
 
@@ -26,6 +31,9 @@ RemoteNodeHandle* CMRIHost::addRemoteNode(uint8_t address,
     return nullptr;
   }
   if (config.inputBytes > RemoteNodeHandle::kMaxInputBytes) {
+    return nullptr;
+  }
+  if (config.outputBytes > RemoteNodeHandle::kMaxOutputBytes) {
     return nullptr;
   }
   for (size_t i = 0; i < nodeCount_; ++i) {
@@ -71,9 +79,13 @@ void CMRIHost::tick(uint32_t nowMs) {
 
 /// Empty the transport's receive queue.
 ///
-/// While a poll is outstanding, the first packet whose UA matches the
-/// poll and whose MT is 'R' completes the exchange. Every other packet
-/// is counted and discarded.
+/// Only an R reply to an outstanding P completes an exchange. A packet that
+/// arrives at any other time — during an I settle, a T gap, or idle — is
+/// unsolicited: I and T expect no reply (interop E8), and fielded nodes MAY
+/// emit an end-of-transmission marker after T, so these are counted and
+/// discarded, not treated as errors. On 2-wire media the Host also sees its
+/// own frames and other Nodes' replies; the UA/MT check below keeps those
+/// from mis-committing (interop 2.3.5).
 // VALIDATION: Interop v1.1 2.3.5: verify that a reply's UA matches
 // the outstanding poll and that its MT is 'R'. Count and discard
 // everything else.
@@ -81,7 +93,8 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
   CMRIPacket rx;
   while (transport_.receivePacket(rx)) {
     emitTrace_(/*transmit=*/false, rx);
-    if (phase_ != Phase::kAwaitReply) {
+    if (phase_ != Phase::kAwaitWait ||
+        outboundKind_ != OutboundKind::kPoll) {
       ++statistics_.unsolicitedPackets;
       continue;
     }
@@ -121,6 +134,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   if (node.statistics_.consecutiveMisses != 0) {
     ++node.statistics_.recoveries;
     node.statistics_.consecutiveMisses = 0;
+    node.reinitArmed_ = false;  // a reply ends the miss-run, disarming the ladder
   }
   node.statistics_.lastTurnaroundMs = nowMs - gateArmedMs_;
   ++statistics_.repliesAccepted;
@@ -130,14 +144,14 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
 
 /// Close the outstanding exchange and arm the pacing gate.
 void CMRIHost::finishExchange_(uint32_t nowMs) {
-  replyGate_.disarm();
+  waitGate_.disarm();
   paceGate_.armIn(nowMs, config_.pollPacingMs);
   phase_ = Phase::kIdle;
 }
 
-/// Advance the poll schedule. Later steps run in the same tick when an
+/// Advance the exchange schedule. Later steps run in the same tick when an
 /// earlier step completes at once, so a zero-latency transport reaches
-/// kAwaitReply in one call.
+/// kAwaitWait in one call.
 void CMRIHost::runSchedule_(uint32_t nowMs) {
   if (phase_ == Phase::kIdle) {
     if (paceGate_.armed() && !paceGate_.due(nowMs)) {
@@ -147,21 +161,41 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     if (!selectNextNode_()) {
       return;
     }
-    poll_.clear();
-    poll_.ua = nodes_[polledIndex_].ua_;
-    poll_.mt = MessageType::kPoll;
-    phase_ = Phase::kSendPoll;
+    // Choose this node's outbound: I before the first P (and after the
+    // re-init ladder arms), a full T when outputs are dirty, else P.
+    // VALIDATION: Interop v1.1 2.3.1: send I before the first P, and a
+    // full T immediately after every I.
+    RemoteNodeHandle& node = nodes_[polledIndex_];
+    // Optional periodic full-T refresh (Design v1.1 D9; off by default).
+    if (config_.transmitRefreshMs != 0 && node.config_.outputBytes != 0 &&
+        !node.needsInit_ && node.lastTxMs_ != 0 &&
+        (nowMs - node.lastTxMs_) >= config_.transmitRefreshMs) {
+      node.outputsDirty_ = true;
+    }
+    if (node.needsInit_) {
+      buildInitPacket_(polledIndex_);
+      outboundKind_ = OutboundKind::kInit;
+    } else if (node.outputsDirty_) {
+      buildTransmitPacket_(polledIndex_);
+      outboundKind_ = OutboundKind::kTransmit;
+    } else {
+      buildPollPacket_(polledIndex_);
+      outboundKind_ = OutboundKind::kPoll;
+    }
+    phase_ = Phase::kSendOutbound;
   }
 
-  if (phase_ == Phase::kSendPoll) {
-    if (!transport_.sendPacket(poll_)) {
+  if (phase_ == Phase::kSendOutbound) {
+    if (!transport_.sendPacket(outbound_)) {
       // Backpressure or link-down. Retry on a later tick. The engine
       // never blocks.
       ++statistics_.pollSendRetries;
       return;
     }
-    ++statistics_.pollsSent;
-    emitTrace_(/*transmit=*/true, poll_);
+    if (outboundKind_ == OutboundKind::kPoll) {
+      ++statistics_.pollsSent;
+    }
+    emitTrace_(/*transmit=*/true, outbound_);
     phase_ = Phase::kAwaitSendComplete;
   }
 
@@ -169,29 +203,66 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     if (!transport_.sendComplete()) {
       return;
     }
-    // The reply gate opens when the poll is fully delivered, not when
-    // it is accepted.
+    // Arm the post-send wait by kind. The wait opens when the packet is
+    // fully delivered, not when it is accepted.
     // VALIDATION: Design v1.1 "Transport contract (packet seam)":
     // sendComplete() gates the strategy's reply timer.
     gateArmedMs_ = nowMs;
-    replyGate_.armIn(nowMs, replyTimeoutFor_(polledIndex_));
-    phase_ = Phase::kAwaitReply;
+    if (outboundKind_ == OutboundKind::kPoll) {
+      waitGate_.armIn(nowMs, replyTimeoutFor_(polledIndex_));
+    } else if (outboundKind_ == OutboundKind::kInit) {
+      // I receives no reply (E8); the settle paces the immediate full T.
+      // VALIDATION: Interop v1.1 2.3.7: ~500 ms settle after I.
+      waitGate_.armIn(nowMs, config_.postInitSettleMs);
+      nodes_[polledIndex_].needsInit_ = false;
+    } else {  // kTransmit
+      // T receives no reply (E8); the gap paces the next outbound.
+      // VALIDATION: Interop v1.1 2.3.7: ~2 ms after T.
+      waitGate_.armIn(nowMs, config_.postTxGapMs);
+      nodes_[polledIndex_].lastTxMs_ = nowMs;
+    }
+    phase_ = Phase::kAwaitWait;
     return;
   }
 
-  if (phase_ == Phase::kAwaitReply) {
-    if (!replyGate_.due(nowMs)) {
+  if (phase_ == Phase::kAwaitWait) {
+    if (!waitGate_.due(nowMs)) {
       return;
     }
-    // No reply inside the gate. Count the miss and move to the next
-    // node. The timed-out poll is never retransmitted.
-    // VALIDATION: Interop v1.1 2.3.9: do not retransmit a timed-out
-    // message. Count the miss and poll the next Node.
-    RemoteNodeHandle& node = nodes_[polledIndex_];
-    ++node.statistics_.noReplies;
-    ++node.statistics_.consecutiveMisses;
-    emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
-    finishExchange_(nowMs);
+    if (outboundKind_ == OutboundKind::kPoll) {
+      // No reply inside the gate. Count the miss; the timed-out poll is
+      // never retransmitted.
+      // VALIDATION: Interop v1.1 2.3.9: do not retransmit a timed-out
+      // message. Count the miss and poll the next Node.
+      RemoteNodeHandle& node = nodes_[polledIndex_];
+      ++node.statistics_.noReplies;
+      ++node.statistics_.consecutiveMisses;
+      emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
+      // More than missThreshold consecutive misses arms the re-init
+      // ladder once per miss-run: the next slot re-sends I + full T and
+      // has already invalidated cached inputs.
+      // VALIDATION: Interop v1.1 2.3.10: after more than 5 consecutive
+      // poll misses, re-send I, then a full T, and invalidate cached
+      // input state. Keep polling the silent Node forever.
+      if (node.statistics_.consecutiveMisses > config_.missThreshold &&
+          !node.reinitArmed_) {
+        node.reinitArmed_ = true;
+        node.needsInit_ = true;
+        node.outputsDirty_ = true;
+        invalidateNodeInputs_(node);
+        emitEvent_(CMRIHostEventType::kReinitScheduled, node, nowMs);
+      }
+      finishExchange_(nowMs);
+    } else if (outboundKind_ == OutboundKind::kInit) {
+      // Settle elapsed: send the immediate full T (interop 2.3.1).
+      buildTransmitPacket_(polledIndex_);
+      outboundKind_ = OutboundKind::kTransmit;
+      phase_ = Phase::kSendOutbound;
+    } else {  // kTransmit
+      // Post-T gap elapsed: the T is delivered.
+      nodes_[polledIndex_].outputsDirty_ = false;
+      finishExchange_(nowMs);
+    }
   }
 }
 
@@ -207,6 +278,63 @@ bool CMRIHost::selectNextNode_() {
     }
   }
   return false;
+}
+
+/// Build the CPNODE 'C' initialization packet for a node.
+/// VALIDATION: Interop v1.1 E3: the CPNODE I-body dialect is
+/// <'C'> <dH> <dL> <opts1> <opts2> <NI> <NO> <0xFF x6>, a 13-byte body.
+/// NI/NO are the wire byte budgets (inputBytes/outputBytes). The six
+/// 0xFF pad bytes are raw (the codec never escapes 0xFF, rule 2.1.3);
+/// every other body byte equal to 2/3/16 is DLE-escaped by encodeFrame
+/// (erratum E1). dH/dL come from the per-node policy (erratum E4).
+void CMRIHost::buildInitPacket_(size_t nodeIndex) {
+  RemoteNodeHandle& node = nodes_[nodeIndex];
+  const RemoteNodePolicy& policy = policies_[nodeIndex];
+  outbound_.clear();
+  outbound_.ua = node.ua_;
+  outbound_.mt = MessageType::kInit;
+  uint8_t body[13];
+  body[0] = 'C';
+  body[1] = policy.transmissionDelayDh;
+  body[2] = policy.transmissionDelayDl;
+  body[3] = 0;  // opts1: USECMRIX | SENDEOT | USEBCC, all default 0
+  body[4] = 0;  // opts2: reserved
+  body[5] = static_cast<uint8_t>(node.config_.inputBytes);   // NI
+  body[6] = static_cast<uint8_t>(node.config_.outputBytes);  // NO
+  body[7] = kSyn;  // six raw 0xFF pad bytes
+  body[8] = kSyn;
+  body[9] = kSyn;
+  body[10] = kSyn;
+  body[11] = kSyn;
+  body[12] = kSyn;
+  outbound_.setBody(body, sizeof(body));
+}
+
+/// Build a full-output-image T packet. Never partial: fielded Nodes fill
+/// missing bytes from stale memory (interop 2.3.2).
+void CMRIHost::buildTransmitPacket_(size_t nodeIndex) {
+  RemoteNodeHandle& node = nodes_[nodeIndex];
+  outbound_.clear();
+  outbound_.ua = node.ua_;
+  outbound_.mt = MessageType::kTransmitData;
+  outbound_.setBody(node.outputs_, node.config_.outputBytes);
+}
+
+/// Build a P (poll) packet: UA + MT, empty body.
+void CMRIHost::buildPollPacket_(size_t nodeIndex) {
+  outbound_.clear();
+  outbound_.ua = nodes_[nodeIndex].ua_;
+  outbound_.mt = MessageType::kPoll;
+}
+
+/// Invalidate cached input state for a node (re-init ladder). Clears
+/// freshness only and keeps the last-good bytes: 0 is a valid consumer
+/// value, so zeroing the buffer would assert "all clear" (the QBASIC
+/// review's F15 hazard). The next state recomputation reports
+/// kUninitialized and inputAgeMs() reports kNeverMarked.
+/// VALIDATION: Interop v1.1 2.3.10: invalidate cached input state.
+void CMRIHost::invalidateNodeInputs_(RemoteNodeHandle& node) {
+  node.freshness_.clear();
 }
 
 /// Recompute every node's health from its counters and freshness.

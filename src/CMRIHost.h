@@ -1,9 +1,15 @@
 // CMRIHost.h — the CMRInet polled-strategy Host engine.
 //
-// The engine initiates every exchange. This slice speaks P/R only: it
-// polls each enabled node in turn, verifies the reply, and commits the
-// input image, freshness, and health that the RemoteNodeHandle
-// exposes. I and T sending belong to a later slice.
+// The engine initiates every exchange. It speaks all four polled-strategy
+// packet types: I (Initialize Session), P (Poll), T (Transmit Output Image),
+// and R (Response from Node to a Poll). Per-node, the on-the-wire order is 
+// I → T → P (interop 2.3.1: I precedes the first P, and a full T immediately 
+// follows every I). I and T expect no reply (interop E8); P expects R.
+//
+// Default timing values track JMRI — the dominant fielded Host.
+// JMRI is an evidence source behind this profile, but not the
+// reference specification for this engine; the profile and
+// Design are authoritative, and JMRI's behavior may change.
 //
 // VALIDATION: Design v1.1 D4: protocol-level concerns live in the
 // strategy: poll schedule, reply-gate timeout, UA/MT reply
@@ -55,6 +61,25 @@ struct CMRIHostConfig {
   // VALIDATION: Interop v1.1 2.3.10: a silent Node is polled forever
   // and its health state is exposed to the application.
   uint32_t missThreshold = 5;
+
+  /// Settle time after an I: how long the engine waits before sending the
+  /// immediate full T. I receives no reply (interop E8); this value paces
+  /// the full T that follows every I (interop 2.3.1).
+  // VALIDATION: Interop v1.1 2.3.7: ~500 ms settle after I.
+  uint32_t postInitSettleMs = 500;
+
+  /// Gap after a T before the next exchange. T receives no reply (interop
+  /// E8); this gap paces the next outbound.
+  // VALIDATION: Interop v1.1 2.3.7: ~2 ms after T.
+  uint32_t postTxGapMs = 2;
+
+  /// Optional periodic full-T refresh interval. 0 (default) disables it:
+  //  T is sent only on change (Design v1.1 D9). A nonzero value re-sends a
+  //  full T when now - lastTxMs_ >= transmitRefreshMs, covering node
+  //  brownouts between output changes.
+  // VALIDATION: Design v1.1 D9: T on change plus optional periodic
+  //  refresh, off by default.
+  uint32_t transmitRefreshMs = 0;
 };
 
 /// What the Host engine is reporting through its event listener.
@@ -65,6 +90,7 @@ enum class CMRIHostEventType : uint8_t {
   kReplyAccepted,     ///< verified reply committed to the node image
   kReplyRejected,     ///< reply discarded: UA/MT mismatch or bad geometry
   kReplyTimeout,      ///< reply gate expired with no reply (a miss)
+  kReinitScheduled,   ///< re-init ladder armed: I + full T + invalidation owed
   kNodeStateChanged,  ///< node health moved between states
 };
 
@@ -133,6 +159,17 @@ class CMRIHost {
     // configurable per Node, because reply latency is Node-version
     // dependent (2.3.8).
     uint32_t replyTimeoutMs = kInheritHost;
+
+    /// Transmission delay dH (high byte) and dL (low byte), in 10 µs units
+    /// per the spec. 0/0 (default) means no inter-character pacing. Exposed
+    /// per node for slow-receiver compatibility (erratum E4); modern Hosts
+    /// send zero. Carried in the CPNODE I body (interop E3).
+    // VALIDATION: Interop v1.1 E4: the delay is the minimum idle time the
+    // Node inserts after each transmitted character; one unit = 10 µs.
+    // VALIDATION: Design v1.1 D2: a polled-strategy knob, kept in policy,
+    // not the strategy-neutral handle config.
+    uint8_t transmissionDelayDh = 0;
+    uint8_t transmissionDelayDl = 0;
   };
 
   /// The engine holds the transport reference for its whole life.
@@ -146,9 +183,7 @@ class CMRIHost {
   /// call is invalid: after begin(), when the node table is full,
   /// when the address is out of range or already added, or when
   /// config.inputBytes exceeds RemoteNodeHandle::kMaxInputBytes.
-  ///
-  /// Addresses above 64 are legal here. The cpNode family cannot use
-  /// them, so check the fleet before assigning one.
+
   // VALIDATION: Interop v1.1 2.3.4: a Host supports UA 0-127 and
   // flags addresses above 64, which the cpNode family cannot use.
   RemoteNodeHandle* addRemoteNode(uint8_t address,
@@ -202,14 +237,27 @@ class CMRIHost {
  private:
   enum class Phase : uint8_t {
     kIdle,              ///< between exchanges; pacing gate runs here
-    kSendPoll,          ///< P built; transport has not accepted it yet
-    kAwaitSendComplete, ///< P accepted; waiting for full delivery
-    kAwaitReply,        ///< reply gate armed; waiting for R
+    kSendOutbound,      ///< packet built; transport has not accepted it yet
+    kAwaitSendComplete, ///< packet accepted; waiting for full delivery
+    kAwaitWait,         ///< post-send wait armed (reply gate, settle, or gap)
+  };
+
+  /// Which kind of packet the outstanding exchange carries. Drives the
+  /// post-send wait: kPoll arms the reply gate; kInit arms the post-I
+  /// settle; kTransmit arms the post-T gap.
+  enum class OutboundKind : uint8_t {
+    kInit,     ///< I — session setup, no reply expected (interop E8)
+    kPoll,     ///< P — media access, R reply expected
+    kTransmit, ///< T — full output image, no reply expected (interop E8)
   };
 
   void drainReceive_(uint32_t nowMs);
   void runSchedule_(uint32_t nowMs);
   bool selectNextNode_();
+  void buildInitPacket_(size_t nodeIndex);
+  void buildTransmitPacket_(size_t nodeIndex);
+  void buildPollPacket_(size_t nodeIndex);
+  void invalidateNodeInputs_(RemoteNodeHandle& node);
   void acceptReply_(const CMRIPacket& reply, uint32_t nowMs);
   void finishExchange_(uint32_t nowMs);
   void updateNodeStates_(uint32_t nowMs);
@@ -235,12 +283,13 @@ class CMRIHost {
 
   bool began_ = false;
   Phase phase_ = Phase::kIdle;
+  OutboundKind outboundKind_ = OutboundKind::kPoll;
   size_t cursor_ = 0;       ///< round-robin position: next node to consider
   size_t polledIndex_ = 0;  ///< node of the outstanding exchange
-  CMRIPacket poll_;         ///< the P packet in flight
+  CMRIPacket outbound_;     ///< the packet in flight (I, P, or T)
   Deadline paceGate_;       ///< time gate between exchanges
-  Deadline replyGate_;      ///< reply-gate timeout for the outstanding poll
-  uint32_t gateArmedMs_ = 0;  ///< when the reply gate was armed (turnaround base)
+  Deadline waitGate_;       ///< post-send wait: reply gate / settle / gap
+  uint32_t gateArmedMs_ = 0;  ///< when the wait was armed (turnaround base)
 };
 
 }  // namespace CMRInet
