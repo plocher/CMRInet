@@ -24,7 +24,8 @@
 // gate remains the genuine truncation guard. Be strict in what you
 // send, forgiving in what you accept.
 //
-// C&C: verbs on the CDC stream (quiesce | resume | status | quit),
+// C&C: verbs on the CDC stream (quiesce | resume | status |
+// setbit <n> <0|1> | writeoutputs <hex> | forcetx | quit),
 // JSON lines back. After quit the image emits "final" and parks;
 // reset the board to run again.
 
@@ -49,6 +50,9 @@
 #ifndef TRACER_INPUT_BYTES
 #define TRACER_INPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX IN
 #endif
+#ifndef TRACER_OUTPUT_BYTES
+#define TRACER_OUTPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX OUT
+#endif
 #ifndef TRACER_BAUD
 #define TRACER_BAUD 28800
 #endif
@@ -67,7 +71,10 @@ constexpr const char* kImage = "xiao_host_tracer";
 // the library (src/); the library's inter-byte abort doctrine now
 // ships a tolerant default (Design D13). This image keeps its explicit
 // 50 ms override, so runtime behavior is unchanged from 0.1.2.
-constexpr const char* kVersion = "0.1.3";
+// 0.2.0: I/T bench slice (map issue #30) — output image via
+// TRACER_OUTPUT_BYTES, onTrace packet telemetry, and output verbs
+// (setbit/writeoutputs/forcetx) so T is exercisable from the bench.
+constexpr const char* kVersion = "0.2.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -126,6 +133,7 @@ void setup() {
 
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
+  nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
   node = host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
   if (node == nullptr) {
     // Configuration rejected: report forever rather than run silent.

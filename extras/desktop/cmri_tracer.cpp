@@ -28,9 +28,12 @@
 namespace {
 
 constexpr const char* kImage = "cmri_tracer";
+// 0.3.0: I/T bench slice (map issue #30) — onTrace packet telemetry,
+// output verbs (setbit/writeoutputs/forcetx), --output-bytes so T is
+// exercisable, and the outputs hex field in every telemetry line.
 // 0.2.0: ts is now integer ms since the epoch line (uniform across
 // images, map issue #21); the epoch line carries the wall clock.
-constexpr const char* kVersion = "0.2.0";
+constexpr const char* kVersion = "0.3.0";
 
 // ------------------------------------------------------------ CLI options
 
@@ -39,6 +42,7 @@ struct Options {
   uint32_t baud = 28800;
   uint8_t address = 30;        // wire UA = address + 65
   uint16_t inputBytes = 7;     // bench node: 2 phantom + 5 IOX IN bytes
+  uint16_t outputBytes = 7;    // bench node: 2 phantom + 5 IOX OUT bytes
   uint32_t replyTimeoutMs = 0; // 0 = engine default (250 ms)
   uint32_t exchanges = 0;      // stop after N completed exchanges (0 = run on)
   uint32_t durationS = 0;      // stop after N seconds (0 = run on)
@@ -79,12 +83,14 @@ struct Options {
 void usage(const char* argv0) {
   fprintf(stderr,
           "usage: %s --device <path> [--baud N] [--address N]\n"
-          "          [--input-bytes N] [--reply-timeout-ms N]\n"
+          "          [--input-bytes N] [--output-bytes N] [--reply-timeout-ms N]\n"
           "          [--inter-byte-timeout-ms N]\n"
           "          [--slow-gap-lo-ms N] [--slow-gap-hi-ms N]\n"
           "          [--conformance-strict]\n"
           "          [--exchanges N] [--duration-s N]\n"
-          "verbs on stdin: quiesce | resume | status | quit\n",
+          "verbs on stdin: quiesce | resume | status |\n"
+          "                 setbit <n> <0|1> | writeoutputs <hex> |\n"
+          "                 forcetx | quit\n",
           argv0);
 }
 
@@ -105,6 +111,8 @@ bool parseOptions(int argc, char** argv, Options& opt) {
       opt.address = static_cast<uint8_t>(v);
     } else if (strcmp(arg, "--input-bytes") == 0 && hasValue) {
       opt.inputBytes = static_cast<uint16_t>(strtoul(argv[++i], nullptr, 10));
+    } else if (strcmp(arg, "--output-bytes") == 0 && hasValue) {
+      opt.outputBytes = static_cast<uint16_t>(strtoul(argv[++i], nullptr, 10));
     } else if (strcmp(arg, "--reply-timeout-ms") == 0 && hasValue) {
       opt.replyTimeoutMs =
           static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
@@ -229,6 +237,7 @@ int main(int argc, char** argv) {
 
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = opt.inputBytes;
+  nodeConfig.outputBytes = opt.outputBytes;
   CMRInet::RemoteNodeHandle* node = host.addRemoteNode(opt.address, nodeConfig);
   if (node == nullptr) {
     fprintf(stderr, "error: addRemoteNode rejected the configuration\n");

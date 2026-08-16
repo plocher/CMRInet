@@ -5,6 +5,26 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- I/T bench slice (issue #30): the shared `CMRITracerEngine` now
+  registers both D7 listeners — `onEvent` (exchange/health) and
+  `onTrace` (per-packet TX/RX) — and emits a `trace` JSON line per
+  packet `{dir:"tx"|"rx",mt,ua,body}`, so I and T appear in telemetry
+  with their MT and body alongside the counters. New output verbs make
+  T bench-exercisable: `setbit <n> <0|1>`, `writeoutputs <hex>`,
+  `forcetx` (bad args emit an `error` line, not a crash). Every
+  telemetry line now carries the output image as `outputs` hex
+  alongside `inputs`. Desktop `cmri_tracer` gains `--output-bytes`
+  (default 7); the Xiao Host sketch gains `TRACER_OUTPUT_BYTES`
+  (default 7). Versions bumped: cmri_tracer 0.3.0, XiaoHostTracer 0.2.0.
+  13 new Unity tests (`tests/test_tracer.cpp`); 145 total passing.
+- `examples/XiaoSniffer/` — passive RS-485 bus sniffer for the testbed
+  (issue #30): a spare cpNode-Xiao wires R± to one bus pair, holds TXEN
+  low (listen-only), and feeds the standalone `CMRIFrameDecoder` from
+  `Serial1`, emitting each decoded frame as a JSON line over USB CDC.
+  No Host/transport/TX — the minimal independent witness for I/T/P
+  tap acceptance, and a reusable testbed asset the software notes point
+  at for the adversarial and host-conformance use cases. Direction-blind
+  (reports `"observed"`); one board = one pair.
 - Phase 2 `CMRIHost` — I/T sending, full-image output, and re-init
   ladder (issue #8): the engine now speaks all four polled-strategy packet
   types. Per-node on-the-wire order is I → T → P (interop 2.3.1): a
