@@ -171,7 +171,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     }
     // The reply gate opens when the poll is fully delivered, not when
     // it is accepted.
-    // VALIDATION: Design v1.0 "Transport contract (packet seam)":
+    // VALIDATION: Design v1.1 "Transport contract (packet seam)":
     // sendComplete() gates the strategy's reply timer.
     gateArmedMs_ = nowMs;
     replyGate_.armIn(nowMs, replyTimeoutFor_(polledIndex_));
@@ -238,7 +238,7 @@ uint32_t CMRIHost::replyTimeoutFor_(size_t nodeIndex) const {
 }
 
 /// Fire the event listener, if one is registered.
-// VALIDATION: Design v1.0 D7: observability is optional listener
+// VALIDATION: Design v1.1 D7: observability is optional listener
 // registration; a null listener costs one branch.
 void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                           uint32_t nowMs, RemoteNodeState previousState,

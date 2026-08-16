@@ -22,7 +22,7 @@ namespace CMRInet {
 
 /// CMRISerialPort over a POSIX serial device. Non-blocking throughout:
 /// the descriptor is opened O_NONBLOCK and every method returns at
-/// once (Design v1.0 D6).
+/// once (Design v1.1 D6).
 class PosixCMRISerialPort : public CMRISerialPort {
  public:
   /// `device` must outlive the port (it is not copied). `stopBits2`

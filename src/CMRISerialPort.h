@@ -8,11 +8,11 @@
 // so desktop tests exercise the exact discipline that runs on hardware,
 // with only this dumb seam faked.
 //
-// VALIDATION: Design v1.0 D4: byte-level concerns live in the serial
+// VALIDATION: Design v1.1 D4: byte-level concerns live in the serial
 // adapter. The port carries bytes; the transport above it carries the
 // discipline.
 //
-// Implementations end with the interface name (Design v1.0 D1):
+// Implementations end with the interface name (Design v1.1 D1):
 // StreamCMRISerialPort, FakeCMRISerialPort, ...
 
 #pragma once
@@ -23,7 +23,7 @@
 namespace CMRInet {
 
 /// Abstract byte port for SerialCMRITransport. Every method must be
-/// non-blocking (Design v1.0 D6: nothing in the library blocks).
+/// non-blocking (Design v1.1 D6: nothing in the library blocks).
 class CMRISerialPort {
  public:
   /// Prepare the port. The UART itself (baud, character framing) is
@@ -42,11 +42,23 @@ class CMRISerialPort {
   /// full). The transport retries the remainder on a later tick.
   virtual size_t writeBytes(const uint8_t* bytes, size_t length) = 0;
 
-  /// True when the port believes its transmit path is empty. A port
-  /// with real hardware knowledge (TXC flag, uart_wait_tx_done poll)
-  /// answers for the shift register too; a buffer-only adapter answers
-  /// for its software/FIFO buffer and the transport's wire-time
-  /// estimate covers the shift register.
+  /// True when the port believes its transmit path is empty.
+  ///
+  /// Seam contract: the answer may be optimistic by ignorance — a
+  /// buffer-only port that cannot see the shift register answers for
+  /// its software/FIFO buffer alone, and the transport's wire-time
+  /// estimate covers the rest (the permitted floor) — but it must
+  /// never be optimistic by design: never return true while the port's
+  /// hardware still holds untransmitted bits the port can see. A port
+  /// with real TX-complete knowledge (TXC flag, uart_wait_tx_done poll)
+  /// answers for the shift register too. The transport ANDs this with
+  /// its wire-time estimate, so a hardware-truth port tightens TXEN
+  /// turnaround and survives runtime stalls that defeat the estimate
+  /// (Design v1.1 D13; the estimate never outlives a real drain, so the
+  /// conjunction costs nothing).
+  /// VALIDATION: Interop v1.1 2.3.14: flush until the last byte leaves
+  /// the shift register, then drop TXEN at once. This query is the
+  /// non-blocking drain detector behind that flush (Design v1.1 D6).
   virtual bool transmitDrained() const = 0;
 
   /// Drive the RS-485 driver-enable line. A port on a converter that
@@ -60,8 +72,10 @@ class CMRISerialPort {
 
   /// Duration of one character on the wire, in microseconds, for the
   /// configured baud rate and framing (11 bit times for 8N2, 10 for
-  /// 8N1). The transport derives its drain estimate and its default
-  /// inter-byte timeout from this. Must be nonzero.
+  /// 8N1). The transport derives its drain estimate and its
+  /// conformance-strict inter-byte timeout (rateDerivedInterByteTimeoutMs)
+  /// from this; the shipped abort default is a fixed tolerant constant
+  /// (Design v1.1 D13). Must be nonzero.
   virtual uint32_t byteDurationMicros() const = 0;
 
   /// Cumulative count of UART-level receive errors (framing, parity,
@@ -71,7 +85,7 @@ class CMRISerialPort {
 
  protected:
   // The transport never destroys a port through the seam: nothing is
-  // deallocated after begin() (Design v1.0 D5). Protected non-virtual
+  // deallocated after begin() (Design v1.1 D5). Protected non-virtual
   // destructor, matching CMRITransport.
   ~CMRISerialPort() = default;
 };

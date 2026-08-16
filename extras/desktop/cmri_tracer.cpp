@@ -43,6 +43,14 @@ struct Options {
   uint32_t exchanges = 0;      // stop after N completed exchanges (0 = run on)
   uint32_t durationS = 0;      // stop after N seconds (0 = run on)
 
+  // Conformance-strict mode: opt into the rate-derived inter-byte
+  // abort (transport.rateDerivedInterByteTimeoutMs()) and the
+  // rate-derived slow-gap thresholds, instead of the USB-deployment
+  // defaults below. A scenario/tracer verb, not a deployment default
+  // (Design v1.1 D13). When set, --inter-byte-timeout-ms and
+  // --slow-gap-* are ignored.
+  bool conformanceStrict = false;
+
   // Receive inter-byte timeout. The transport's rate-derived default
   // (3 char times, ~2 ms at 28800) measures WIRE gaps, but a USB
   // serial adapter delivers RX bytes in latency-timer chunks (FTDI
@@ -74,6 +82,7 @@ void usage(const char* argv0) {
           "          [--input-bytes N] [--reply-timeout-ms N]\n"
           "          [--inter-byte-timeout-ms N]\n"
           "          [--slow-gap-lo-ms N] [--slow-gap-hi-ms N]\n"
+          "          [--conformance-strict]\n"
           "          [--exchanges N] [--duration-s N]\n"
           "verbs on stdin: quiesce | resume | status | quit\n",
           argv0);
@@ -108,6 +117,8 @@ bool parseOptions(int argc, char** argv, Options& opt) {
     } else if (strcmp(arg, "--slow-gap-hi-ms") == 0 && hasValue) {
       opt.slowGapHiMs =
           static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
+    } else if (strcmp(arg, "--conformance-strict") == 0) {
+      opt.conformanceStrict = true;
     } else if (strcmp(arg, "--exchanges") == 0 && hasValue) {
       opt.exchanges = static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
     } else if (strcmp(arg, "--duration-s") == 0 && hasValue) {
@@ -195,10 +206,20 @@ int main(int argc, char** argv) {
 
   CMRInet::PosixCMRISerialPort port(opt.device, opt.baud, /*stopBits2=*/true);
   CMRInet::SerialCMRITransport transport(port);
-  // Override survives begin() (see Options: USB chunking is not wire
-  // silence).
-  transport.setInterByteTimeoutMs(opt.interByteTimeoutMs);
-  transport.setSlowGapThresholdsMs(opt.slowGapLoMs, opt.slowGapHiMs);
+  if (opt.conformanceStrict) {
+    // Conformance-strict: the rate-derived inter-byte abort (three
+    // character times, interop 2.2.6) and rate-derived slow-gap
+    // thresholds. This is the conformance instrument, not the
+    // deployment mode (Design v1.1 D13); the USB-appropriate defaults
+    // below do not apply. Skip setSlowGapThresholdsMs so begin()
+    // derives lo (1 char time) and hi (3 char times) from the port.
+    transport.setInterByteTimeoutMs(transport.rateDerivedInterByteTimeoutMs());
+  } else {
+    // Deployment mode: overrides survive begin() (see Options — USB
+    // chunking is not wire silence).
+    transport.setInterByteTimeoutMs(opt.interByteTimeoutMs);
+    transport.setSlowGapThresholdsMs(opt.slowGapLoMs, opt.slowGapHiMs);
+  }
 
   CMRInet::CMRIHostConfig config;
   if (opt.replyTimeoutMs != 0) {

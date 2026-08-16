@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time knobs,
+// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs,
 // so a '328-class build can shrink packet buffers.
 // VALIDATION: Interop v1.1 E7: the default is 256 logical body bytes,
 // counted after DLE removal.

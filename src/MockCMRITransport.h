@@ -7,7 +7,7 @@
 // Time advances only through tick(nowMs). Tests run without a wall
 // clock: deterministic, and faster than real time.
 //
-// VALIDATION: Design v1.0 D3: scripted byte/packet replay is
+// VALIDATION: Design v1.1 D3: scripted byte/packet replay is
 // counterparty fidelity 1, below the correct and warty CMRINode
 // emulators.
 //
@@ -41,7 +41,7 @@
 #include "CMRITransport.h"
 
 // ---- Geometry knobs: shrink for small targets. ----
-// VALIDATION: Design v1.0 D8: geometry ceilings are compile-time knobs.
+// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
 
 // Received packets waiting for receivePacket().
 #ifndef CMRINET_MOCK_RX_QUEUE

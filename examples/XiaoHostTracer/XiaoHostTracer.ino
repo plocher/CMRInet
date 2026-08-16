@@ -63,10 +63,15 @@ constexpr const char* kImage = "xiao_host_tracer";
 // ~2 s C6 runtime stall made the estimate-based drain drop TXEN mid-ETX.
 // 0.1.2: 50 ms inter-byte tolerance — the same stall splits intact
 // replies at the tick level; the rate-derived timeout misread the gap.
-constexpr const char* kVersion = "0.1.2";
+// 0.1.3 (#27): Esp32UartCMRISerialPort promoted from this sketch into
+// the library (src/); the library's inter-byte abort doctrine now
+// ships a tolerant default (Design D13). This image keeps its explicit
+// 50 ms override, so runtime behavior is unchanged from 0.1.2.
+constexpr const char* kVersion = "0.1.3";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin, TRACER_BAUD);
+CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+                                     TRACER_BAUD);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
 CMRInet::RemoteNodeHandle* node = nullptr;
