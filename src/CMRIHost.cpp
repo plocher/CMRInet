@@ -14,31 +14,45 @@ namespace CMRInet {
 CMRIHost::CMRIHost(CMRITransport& transport, const CMRIHostConfig& config)
     : transport_(transport), config_(config) {}
 
-RemoteNodeHandle* CMRIHost::addRemoteNode(uint8_t address,
-                                          const RemoteNodeConfig& config,
-                                          const RemoteNodePolicy& policy) {
-  // Validation at intake: reject, never remap.
+CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
+                                  const RemoteNodeConfig& config,
+                                  const RemoteNodePolicy& policy) {
+
+  // Configuration is locked after begin() (Design D5). Silently reject;
+  // the config phase is over, so the status stays as it was.
+  if (began_) {
+    configStatus_ = ConfigStatus::kAlreadyBegun;
+    return *this;
+  }
+          // Short-circuit: a prior config-phase rejection poisoned the chain.
+  if (configStatus_ != ConfigStatus::kOk) {
+    return *this;
+  }
+  // Validation at intake: reject, never remap. Each check records its
+  // reason so begin() can report why the configuration failed.
   // VALIDATION: Interop v1.1 E9: Nodes must reject, not remap,
   // out-of-range addresses. The same rule applies to the Host's own
   // configuration.
-  if (began_) {
-    return nullptr;
-  }
   if (nodeCount_ >= kMaxNodes) {
-    return nullptr;
+    configStatus_ = ConfigStatus::kTooManyNodes;
+    return *this;
   }
   if (address > 127u) {
-    return nullptr;
+    configStatus_ = ConfigStatus::kAddressOutOfRange;
+    return *this;
   }
   if (config.inputBytes > RemoteNodeHandle::kMaxInputBytes) {
-    return nullptr;
+    configStatus_ = ConfigStatus::kInputBytesTooLarge;
+    return *this;
   }
   if (config.outputBytes > RemoteNodeHandle::kMaxOutputBytes) {
-    return nullptr;
+    configStatus_ = ConfigStatus::kOutputBytesTooLarge;
+    return *this;
   }
   for (size_t i = 0; i < nodeCount_; ++i) {
     if (nodes_[i].address_ == address) {
-      return nullptr;
+      configStatus_ = ConfigStatus::kAddressInUse;
+      return *this;
     }
   }
 
@@ -48,20 +62,38 @@ RemoteNodeHandle* CMRIHost::addRemoteNode(uint8_t address,
   node.config_ = config;
   policies_[nodeCount_] = policy;
   ++nodeCount_;
-  return &node;
+  return *this;
 }
 
-RemoteNodeHandle* CMRIHost::addRemoteNode(uint8_t address,
-                                          const RemoteNodeConfig& config) {
+CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
+                                  const RemoteNodeConfig& config) {
   return addRemoteNode(address, config, RemoteNodePolicy());
 }
 
-void CMRIHost::begin() {
-  if (began_) {
-    return;
+CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
+                                  uint16_t inputBytes,
+                                  uint16_t outputBytes) {
+  RemoteNodeConfig config;
+  config.inputBytes = inputBytes;
+  config.outputBytes = outputBytes;
+  return addRemoteNode(address, config);
+}
+
+RemoteNodeHandle* CMRIHost::node(uint8_t address) {
+  for (size_t i = 0; i < nodeCount_; ++i) {
+    if (nodes_[i].address_ == address) {
+      return &nodes_[i];
+    }
   }
-  transport_.begin();
-  began_ = true;
+  return nullptr;
+}
+
+CMRIHost::ConfigStatus CMRIHost::begin() {
+  if (!began_) {
+    transport_.begin();
+    began_ = true;
+  }
+  return configStatus_;
 }
 
 void CMRIHost::tick(uint32_t nowMs) {
@@ -99,9 +131,23 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
       continue;
     }
     RemoteNodeHandle& node = nodes_[polledIndex_];
-    if (rx.ua != node.ua_ || rx.mt != MessageType::kReceiveData) {
+    // Verify the reply is from the node we polled and that it is an R.
+    // Each failure records its reason and the reply's actual bytes so a
+    // conformance-checking listener can report what the remote node sent.
+    if (rx.ua != node.ua_) {
       ++statistics_.repliesRejected;
-      emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs);
+      emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
+                 RemoteNodeState::kUninitialized,
+                 RemoteNodeState::kUninitialized,
+                 ReplyRejectReason::kUaMismatch, rx.length, rx.ua, rx.mt);
+      continue;
+    }
+    if (rx.mt != MessageType::kReceiveData) {
+      ++statistics_.repliesRejected;
+      emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
+                 RemoteNodeState::kUninitialized,
+                 RemoteNodeState::kUninitialized,
+                 ReplyRejectReason::kMtMismatch, rx.length, rx.ua, rx.mt);
       continue;
     }
     acceptReply_(rx, nowMs);
@@ -121,7 +167,11 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
     node.statistics_.consecutiveMisses = 0;
-    emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs);
+    emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
+               RemoteNodeState::kUninitialized,
+               RemoteNodeState::kUninitialized,
+               ReplyRejectReason::kGeometryMismatch, reply.length, reply.ua,
+               reply.mt);
     finishExchange_(nowMs);
     return;
   }
@@ -370,7 +420,10 @@ uint32_t CMRIHost::replyTimeoutFor_(size_t nodeIndex) const {
 // registration; a null listener costs one branch.
 void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                           uint32_t nowMs, RemoteNodeState previousState,
-                          RemoteNodeState newState) {
+                          RemoteNodeState newState,
+                          ReplyRejectReason rejectReason,
+                          uint16_t replyLength, uint8_t replyUa,
+                          uint8_t replyMt) {
   if (eventListener_ == nullptr) {
     return;
   }
@@ -380,6 +433,10 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.nowMs = nowMs;
   event.previousState = previousState;
   event.newState = newState;
+  event.rejectReason = rejectReason;
+  event.replyLength = replyLength;
+  event.replyUa = replyUa;
+  event.replyMt = replyMt;
   eventListener_(eventContext_, event);
 }
 
@@ -389,6 +446,29 @@ void CMRIHost::emitTrace_(bool transmit, const CMRIPacket& packet) {
     return;
   }
   traceListener_(traceContext_, transmit, packet);
+}
+
+const char* configStatusString(CMRIHost::ConfigStatus status) {
+  switch (status) {
+    case CMRIHost::ConfigStatus::kOk:                 return "ok";
+    case CMRIHost::ConfigStatus::kAlreadyBegun:        return "configuration already begun";
+    case CMRIHost::ConfigStatus::kTooManyNodes:       return "too many nodes";
+    case CMRIHost::ConfigStatus::kAddressOutOfRange:  return "address out of range";
+    case CMRIHost::ConfigStatus::kAddressInUse:       return "address in use";
+    case CMRIHost::ConfigStatus::kInputBytesTooLarge: return "input bytes too large";
+    case CMRIHost::ConfigStatus::kOutputBytesTooLarge:return "output bytes too large";
+  }
+  return "unknown";
+}
+
+const char* replyRejectReasonString(ReplyRejectReason reason) {
+  switch (reason) {
+    case ReplyRejectReason::kNone:              return "none";
+    case ReplyRejectReason::kUaMismatch:        return "ua mismatch";
+    case ReplyRejectReason::kMtMismatch:        return "mt mismatch";
+    case ReplyRejectReason::kGeometryMismatch:  return "geometry mismatch";
+  }
+  return "unknown";
 }
 
 }  // namespace CMRInet

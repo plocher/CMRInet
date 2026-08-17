@@ -90,10 +90,8 @@ struct TracerRig {
 
   explicit TracerRig(uint16_t inBytes = 2, uint16_t outBytes = 3)
       : transport(port), host(transport, fastConfig()) {
-    RemoteNodeConfig nc;
-    nc.inputBytes = inBytes;
-    nc.outputBytes = outBytes;
-    node = host.addRemoteNode(5, nc);
+    host.addRemoteNode(5, inBytes, outBytes);
+    node = host.node(5);
     TEST_ASSERT_NOT_NULL_MESSAGE(node, "addRemoteNode failed in rig");
     engine.bind(host, transport, *node, "test", "0.0", &TracerRig::writeLine_,
                 this);

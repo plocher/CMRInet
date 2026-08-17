@@ -5,6 +5,62 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- `examples/SimpleHost/` — the front-door Host tutorial (issue #31):
+  a behavior-only sketch a human copying this library starts from, not
+  a bench instrument. Polls two nodes (UA 30 live + UA 31 phantom),
+  shows per-node health on the SSD1306 OLED, and runs two behaviors: a
+  1 Hz walking-one bitwalk through one output byte (visual proof the
+  full T path works) and an output that toggles on each rising edge of
+  a real input (the input side of the API). Table-driven node config
+  (`NodeInfo` struct array), `host.node(addr)` handle lookup, and an
+  `onEvent` listener that prints a rejection diagnostic over USB CDC
+  ("expected N input bytes, got M") so a misconfigured geometry is
+  diagnosable from the Host side without reflashing the node.
+  Bench-validated on the cpNode-Xiao two-board crossover: node 30
+  ONLINE, bitwalk walking, input toggle driving an output. Closes #31.
+- Host public API ergonomics, surfaced and resolved by #31 (breaking):
+  `addRemoteNode(...)` now returns `CMRIHost&` so calls chain
+  (`host.addRemoteNode(30, 12, 12).addRemoteNode(31, 4, 4).begin()`);
+  a rejected add records its reason in `ConfigStatus` and
+  short-circuits later adds. `begin()` returns `ConfigStatus` (was
+  `void`) — `kOk` or the reason the first add failed (`kTooManyNodes`,
+  `kAddressOutOfRange`, `kAddressInUse`, `kInputBytesTooLarge`,
+  `kOutputBytesTooLarge`, `kAlreadyBegun`). New flat
+  `addRemoteNode(address, inputBytes, outputBytes)` overload for
+  readable simple sketches. New `node(address)` accessor returns a
+  registered `RemoteNodeHandle*` by address (the sketch no longer
+  holds a parallel handle array). New `configStatus()` reads the
+  config-phase status before or after `begin()`. All callers migrated:
+  `XiaoHostTracer`, `cmri_tracer`, `test_host`, `test_tracer`.
+  145 tests still pass.
+- Reply-rejection diagnostics on `CMRIHostEvent` (issue #31): the
+  `kReplyRejected` event now carries a `ReplyRejectReason`
+  (`kUaMismatch`/`kMtMismatch`/`kGeometryMismatch`), the rejected
+  reply's body `length`, `ua`, and `mt`. A conformance-checking
+  sketch can now print what the remote node actually sent ("expected 7
+  input bytes, got 4") without reflashing the node. The drain path
+  splits UA and MT mismatch into separate reject sites so each reason
+  is reported. `replyRejectReasonString()` stringifier (in-namespace,
+  placeholder for a future class member).
+- `configStatusString()` / `replyRejectReasonString()` —
+  human-readable names for `ConfigStatus` and `ReplyRejectReason`
+  (in-namespace, placeholders for future class members).
+- README refreshed: new "Architecture at a glance" TL;DR condensing
+  DESIGN's one-product/two-seams model, units ladder, and naming
+  grammar (pointer-style to D1-D13); new "Getting started" keyed off
+  `examples/SimpleHost`; stale "Planned layout" replaced with the
+  real repository layout. Host-focused now; extends to both roles when
+  #9 lands.
+- Interop profile open questions 7 and 8 (issue #31): OQ7 — define an
+  I/T acknowledgment carrying the Node's self-description so a Host
+  can validate configured geometry at init time (extends the E8
+  revision thread; motivated by #31's geometry-mismatch finding);
+  OQ8 — bus discovery via a self-identify MT so a Host can
+  auto-configure its node table. Filed as #34 and #35.
+- Follow-up tickets filed from the #31 ergonomics probe: #33 (second
+  physical bench node), #36 (RemoteNodeHandle card-type / IOX-offset
+  awareness — the phantom-byte trap), #37 (input edge detection /
+  change event), #38 (per-node listener registration or node tag).
 - I/T bench slice (issue #30): the shared `CMRITracerEngine` now
   registers both D7 listeners — `onEvent` (exchange/health) and
   `onTrace` (per-packet TX/RX) — and emits a `trace` JSON line per

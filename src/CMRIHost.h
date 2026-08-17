@@ -94,6 +94,17 @@ enum class CMRIHostEventType : uint8_t {
   kNodeStateChanged,  ///< node health moved between states
 };
 
+/// Why a reply was rejected. Meaningful only when a CMRIHostEvent
+/// carries kReplyRejected; kNone otherwise. Lets a conformance-checking
+/// sketch print "expected N in, got M" or "polled UA x, got UA y"
+/// without reflashing the remote node.
+enum class ReplyRejectReason : uint8_t {
+  kNone,              ///< not a rejection event
+  kUaMismatch,        ///< reply UA != the polled node's UA
+  kMtMismatch,        ///< reply MT != 'R' (kReceiveData)
+  kGeometryMismatch,  ///< reply length != configured inputBytes
+};
+
 /// One engine event. `node` is the node of the exchange or state
 /// change; it outlives the callback (nodes are never deallocated).
 /// `previousState`/`newState` are meaningful only for
@@ -104,6 +115,11 @@ struct CMRIHostEvent {
   uint32_t nowMs = 0;
   RemoteNodeState previousState = RemoteNodeState::kUninitialized;
   RemoteNodeState newState = RemoteNodeState::kUninitialized;
+  /// Reject details. Meaningful only when type == kReplyRejected.
+  ReplyRejectReason rejectReason = ReplyRejectReason::kNone;
+  uint16_t replyLength = 0;  ///< body byte count of the rejected reply
+  uint8_t  replyUa = 0;      ///< UA byte of the rejected reply
+  uint8_t  replyMt = 0;      ///< MT byte of the rejected reply
 };
 
 /// Event listener. Plain function pointer with a context cookie
@@ -172,27 +188,52 @@ class CMRIHost {
     uint8_t transmissionDelayDl = 0;
   };
 
+  /// Result of the configuration phase, reported by begin(). kOk means
+  /// every addRemoteNode() call was accepted. Any other value is the
+  /// reason the first rejected call failed; later calls in the chain
+  /// are short-circuited, so only the first reason is reported.
+  enum class ConfigStatus : uint8_t {
+    kOk,
+    kAlreadyBegun,        ///< the time for config changes has ended
+    kTooManyNodes,        ///< the node table is full (CMRINET_HOST_MAX_NODES)
+    kAddressOutOfRange,   ///< address > 127
+    kAddressInUse,        ///< address already added by an earlier call
+    kInputBytesTooLarge,  ///< inputBytes > RemoteNodeHandle::kMaxInputBytes
+    kOutputBytesTooLarge, ///< outputBytes > RemoteNodeHandle::kMaxOutputBytes
+  };
+
   /// The engine holds the transport reference for its whole life.
   explicit CMRIHost(CMRITransport& transport,
                     const CMRIHostConfig& config = CMRIHostConfig());
 
-  /// Add one remote node during the configuration phase.
+  /// Add one remote node during the configuration phase. Returns
+  /// *this so calls chain: host.addRemoteNode(30, cfg).addRemoteNode(31,
+  /// cfg).begin(). A rejected add records the reason in the host's
+  /// config status and short-circuits later adds; begin() reports it.
   ///
   /// `address` is the node address (0..127). The wire UA is
-  /// address + 65. Returns the node's handle, or nullptr when the
-  /// call is invalid: after begin(), when the node table is full,
-  /// when the address is out of range or already added, or when
-  /// config.inputBytes exceeds RemoteNodeHandle::kMaxInputBytes.
+  /// address + 65. A call is rejected when it comes after begin(),
+  /// when the node table is full, when the address is out of range
+  /// or already added, or when config.inputBytes exceeds
+  /// RemoteNodeHandle::kMaxInputBytes.
 
   // VALIDATION: Interop v1.1 2.3.4: a Host supports UA 0-127 and
   // flags addresses above 64, which the cpNode family cannot use.
-  RemoteNodeHandle* addRemoteNode(uint8_t address,
-                                  const RemoteNodeConfig& config,
-                                  const RemoteNodePolicy& policy);
+  CMRIHost& addRemoteNode(uint8_t address,
+                          const RemoteNodeConfig& config,
+                          const RemoteNodePolicy& policy);
 
   /// As above, with the host-wide policy defaults.
-  RemoteNodeHandle* addRemoteNode(uint8_t address,
-                                  const RemoteNodeConfig& config);
+  CMRIHost& addRemoteNode(uint8_t address,
+                          const RemoteNodeConfig& config);
+
+  /// Convenience: register a node from its address and input/output byte
+  /// counts, with host-wide policy defaults and default staleness/enabled.
+  /// Equivalent to building a RemoteNodeConfig and calling the overload
+  /// above. The flat form keeps simple sketches readable (issue #31).
+  CMRIHost& addRemoteNode(uint8_t address,
+                          uint16_t inputBytes,
+                          uint16_t outputBytes);
 
   /// Register the optional event listener (nullptr to clear). Part of
   /// the configuration phase: calls after begin() are ignored.
@@ -217,7 +258,10 @@ class CMRIHost {
   }
 
   /// Lock the configuration and begin() the transport. Idempotent.
-  void begin();
+  /// Returns the configuration status: ConfigStatus::kOk when every
+  /// addRemoteNode() call was accepted, or the reason the first call
+  /// failed. The configuration is locked either way (Design D5).
+  ConfigStatus begin();
 
   /// Advance the engine to `nowMs`. Ticks the transport first, then
   /// runs the poll schedule. `nowMs` must be monotonic.
@@ -233,6 +277,15 @@ class CMRIHost {
 
   /// Nodes added so far.
   size_t nodeCount() const { return nodeCount_; }
+
+  /// Look up a registered node by address. Returns nullptr when no
+  /// node was registered at that address. Valid before and after
+  /// begin(); the handle stays valid for the life of the program.
+  RemoteNodeHandle* node(uint8_t address);
+
+  /// The configuration-phase status so far. ConfigStatus::kOk until an
+  /// addRemoteNode() call is rejected. Unchanged after begin() locks.
+  ConfigStatus configStatus() const { return configStatus_; }
 
  private:
   enum class Phase : uint8_t {
@@ -265,7 +318,11 @@ class CMRIHost {
   void emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                   uint32_t nowMs,
                   RemoteNodeState previousState = RemoteNodeState::kUninitialized,
-                  RemoteNodeState newState = RemoteNodeState::kUninitialized);
+                  RemoteNodeState newState = RemoteNodeState::kUninitialized,
+                  ReplyRejectReason rejectReason = ReplyRejectReason::kNone,
+                  uint16_t replyLength = 0,
+                  uint8_t replyUa = 0,
+                  uint8_t replyMt = 0);
   void emitTrace_(bool transmit, const CMRIPacket& packet);
 
   CMRITransport& transport_;
@@ -282,6 +339,7 @@ class CMRIHost {
   void* traceContext_ = nullptr;
 
   bool began_ = false;
+  ConfigStatus configStatus_ = ConfigStatus::kOk;
   Phase phase_ = Phase::kIdle;
   OutboundKind outboundKind_ = OutboundKind::kPoll;
   size_t cursor_ = 0;       ///< round-robin position: next node to consider
@@ -291,5 +349,11 @@ class CMRIHost {
   Deadline waitGate_;       ///< post-send wait: reply gate / settle / gap
   uint32_t gateArmedMs_ = 0;  ///< when the wait was armed (turnaround base)
 };
+
+/// Human-readable name for a CMRIHost::ConfigStatus value.
+const char* configStatusString(CMRIHost::ConfigStatus status);
+
+/// Human-readable name for a ReplyRejectReason value.
+const char* replyRejectReasonString(ReplyRejectReason reason);
 
 }  // namespace CMRInet
