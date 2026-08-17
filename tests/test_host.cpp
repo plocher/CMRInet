@@ -59,10 +59,13 @@ struct Rig {
                uint16_t inputBytes = 2,
                uint16_t outputBytes = 0)
       : host(transport, config) {
+    // Register the node, then look up its handle. addRemoteNode returns
+    // the host (chaining), not the handle; node(address) does.
     RemoteNodeConfig nodeConfig;
     nodeConfig.inputBytes = inputBytes;
     nodeConfig.outputBytes = outputBytes;
-    node = host.addRemoteNode(5, nodeConfig, policy);
+    host.addRemoteNode(5, nodeConfig, policy);
+    node = host.node(5);
     TEST_ASSERT_NOT_NULL_MESSAGE(node, "addRemoteNode failed in rig");
   }
 };
@@ -459,7 +462,8 @@ static void test_stale_when_inputs_outlive_threshold(void) {
   RemoteNodeConfig staleConfig;
   staleConfig.inputBytes = 2;
   staleConfig.stalenessMs = 100;
-  RemoteNodeHandle* node = rig.host.addRemoteNode(6, staleConfig);
+  rig.host.addRemoteNode(6, staleConfig);
+  RemoteNodeHandle* node = rig.host.node(6);
   TEST_ASSERT_NOT_NULL(node);
   rig.node->setEnabled(false);  // only the staleness node is polled
   rig.host.begin();
@@ -525,9 +529,9 @@ static void test_round_robin_over_enabled_nodes(void) {
   MockCMRITransport transport;
   CMRIHost host(transport);
   RemoteNodeConfig config;  // inputBytes=0, outputBytes=0
-  TEST_ASSERT_NOT_NULL(host.addRemoteNode(1, config));
-  TEST_ASSERT_NOT_NULL(host.addRemoteNode(2, config));
-  host.begin();
+  host.addRemoteNode(1, config);
+  host.addRemoteNode(2, config);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.begin());
   // Prime both nodes through I -> T so the next outbounds are P.
   runUntil(host, 0, 1015);
   transport.onSendReplyPacket(MockCMRITransport::kMatchAny, 'P',
@@ -682,27 +686,66 @@ static void test_null_listeners_are_harmless(void) {
 // ------------------------------------------------------ configuration phase
 
 static void test_add_remote_node_validation(void) {
-  MockCMRITransport transport;
-  CMRIHost host(transport);
-  RemoteNodeConfig config;
-  config.inputBytes = 2;
+  // addRemoteNode returns the host (for chaining), not the handle. A
+  // rejected add records its reason in ConfigStatus and short-circuits
+  // later adds; begin() reports it. Each rejection case gets its own
+  // host so the first failure is the one under test.
+  using CS = CMRIHost::ConfigStatus;
 
-  TEST_ASSERT_NULL(host.addRemoteNode(128, config));  // address out of range
-
-  RemoteNodeConfig oversized;
-  oversized.inputBytes = RemoteNodeHandle::kMaxInputBytes + 1;
-  TEST_ASSERT_NULL(host.addRemoteNode(5, oversized));
-
-  RemoteNodeConfig overOut;
-  overOut.outputBytes = RemoteNodeHandle::kMaxOutputBytes + 1;
-  TEST_ASSERT_NULL(host.addRemoteNode(5, overOut));
-
-  TEST_ASSERT_NOT_NULL(host.addRemoteNode(5, config));
-  TEST_ASSERT_NULL(host.addRemoteNode(5, config));  // duplicate address
-
-  host.begin();
-  TEST_ASSERT_NULL(host.addRemoteNode(6, config));  // locked after begin()
-  TEST_ASSERT_EQUAL_size_t(1, host.nodeCount());
+  {
+    MockCMRITransport t;
+    CMRIHost h(t);
+    RemoteNodeConfig cfg;
+    cfg.inputBytes = 2;
+    h.addRemoteNode(128, cfg);  // address out of range
+    TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.begin());
+  }
+  {
+    MockCMRITransport t;
+    CMRIHost h(t);
+    RemoteNodeConfig cfg;
+    cfg.inputBytes = RemoteNodeHandle::kMaxInputBytes + 1;
+    h.addRemoteNode(5, cfg);
+    TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge, h.begin());
+  }
+  {
+    MockCMRITransport t;
+    CMRIHost h(t);
+    RemoteNodeConfig cfg;
+    cfg.outputBytes = RemoteNodeHandle::kMaxOutputBytes + 1;
+    h.addRemoteNode(5, cfg);
+    TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge, h.begin());
+  }
+  {
+    MockCMRITransport t;
+    CMRIHost h(t);
+    RemoteNodeConfig cfg;
+    cfg.inputBytes = 2;
+    TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(5, cfg).begin());
+    TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+    // Both contracts: the config phase succeeded AND the address maps to
+    // a registered handle.
+    TEST_ASSERT_NOT_NULL(h.node(5));
+    // A second node at the same address is a duplicate.
+    MockCMRITransport t2;
+    CMRIHost h2(t2);
+    h2.addRemoteNode(5, cfg);
+    h2.addRemoteNode(5, cfg);  // duplicate address
+    TEST_ASSERT_EQUAL(CS::kAddressInUse, h2.begin());
+    TEST_ASSERT_EQUAL_size_t(1, h2.nodeCount());
+  }
+  {
+    // A valid config that adds a node after begin() is rejected with
+    // kAlreadyBegun: the config phase is over.
+    MockCMRITransport t;
+    CMRIHost h(t);
+    RemoteNodeConfig cfg;
+    cfg.inputBytes = 2;
+    TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(5, cfg).begin());
+    h.addRemoteNode(6, cfg);  // too late
+    TEST_ASSERT_EQUAL(CS::kAlreadyBegun, h.configStatus());
+    TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+  }
 }
 
 static void test_node_table_capacity_is_enforced(void) {
@@ -711,10 +754,12 @@ static void test_node_table_capacity_is_enforced(void) {
   RemoteNodeConfig config;
   config.inputBytes = 0;
   for (size_t i = 0; i < CMRIHost::kMaxNodes; ++i) {
-    TEST_ASSERT_NOT_NULL(host.addRemoteNode(static_cast<uint8_t>(i), config));
+    host.addRemoteNode(static_cast<uint8_t>(i), config);
   }
-  TEST_ASSERT_NULL(host.addRemoteNode(
-      static_cast<uint8_t>(CMRIHost::kMaxNodes), config));
+  // The next add overflows the table.
+  host.addRemoteNode(static_cast<uint8_t>(CMRIHost::kMaxNodes), config);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kTooManyNodes, host.begin());
+  TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
 }
 
 // ----------------------------------------------------------------- runner

@@ -452,3 +452,25 @@ RS-485 line discipline, where the converter does not manage direction:
    data bytes (E7): a revision could reserve longer bodies for a
    typed-payload extension — enums or bounded fixed-point values
    rather than more bits, conceptually like CAN bus signal packing.
+7. Define an acknowledgment to I (or T) that carries the Node's
+   self-description, so a Host can validate configured geometry against
+   the Node's actual hardware at init time. Today I and T expect no
+   reply (E8); a geometry mismatch between the Host's configured NI/NO
+   and the Node's actual I/O is detectable only at the first P/R
+   exchange, and only by the Host (rule 2.4.8: no fielded C-type Node
+   validates its own NI/NO). The SimpleHost ergonomics probe (issue #31)
+   surfaced this: a misconfigured inputBytes leaves the Node answering
+   but the Host rejecting every R, with no diagnostic until the
+   rejection reason is inspected on the Host side. An Init ack carrying
+   NDP, NI, NO, and card type would let the Host reject or warn at I
+   time. This extends the E8 revision thread ("define the EOT
+   acknowledgment or deprecate it").
+8. Bus discovery via a self-identify message type. A new MT (e.g. 'G')
+   the Host sends to a UA, replied to with the Node's self-description
+   (NDP, NI, NO, card type, firmware). Enables Host auto-configuration:
+   poke UA 0..127, collect self-IDs, and populate the node table without
+   manual entry. No fielded Host or Node does this today. Presupposes
+   open question 7 (the Node must be able to describe itself) or an
+   equivalent self-description reply. Larger lift: a new packet type in
+   both directions plus a discovery sequence, and a Node-side
+   counterpart no fielded Node has.

@@ -134,20 +134,22 @@ void setup() {
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
   nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
-  node = host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
-  if (node == nullptr) {
+  host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
+
+  if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
+    engine.bind(host, transport, *host.node(TRACER_ADDRESS), kImage, kVersion,
+                writeCdcLine, nullptr);
+  }
+  if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
     // Configuration rejected: report forever rather than run silent.
     for (;;) {
-      Serial.println(
-          "{\"event\":\"fatal\",\"error\":\"addRemoteNode rejected the "
-          "configuration\"}");
+      Serial.print(F("{\"event\":\"fatal\",\"error\":\"addRemoteNode "
+                     "rejected the configuration: "));
+      Serial.print(CMRInet::configStatusString(host.configStatus()));
+      Serial.println(F("\"}"));
       delay(1000);
     }
   }
-
-  engine.bind(host, transport, *node, kImage, kVersion, writeCdcLine,
-              nullptr);
-  host.begin();
 
   engine.setNow(millis());
   char bootMs[16];

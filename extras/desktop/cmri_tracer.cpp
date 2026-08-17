@@ -238,17 +238,19 @@ int main(int argc, char** argv) {
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = opt.inputBytes;
   nodeConfig.outputBytes = opt.outputBytes;
-  CMRInet::RemoteNodeHandle* node = host.addRemoteNode(opt.address, nodeConfig);
-  if (node == nullptr) {
-    fprintf(stderr, "error: addRemoteNode rejected the configuration\n");
-    return 2;
-  }
+  host.addRemoteNode(opt.address, nodeConfig);
 
   CMRInet::testbed::CMRITracerEngine engine;
-  engine.bind(host, transport, *node, kImage, kVersion, writeStdoutLine,
-              nullptr);
+  if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
+    engine.bind(host, transport, *host.node(opt.address), kImage, kVersion,
+                writeStdoutLine, nullptr);
+  }
 
-  host.begin();
+  if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
+    fprintf(stderr, "error: addRemoteNode rejected the configuration: %s\n",
+            CMRInet::configStatusString(host.configStatus()));
+    return 2;
+  }
   if (!port.isOpen()) {
     fprintf(stderr, "error: %s: %s\n", opt.device, port.lastError());
     return 1;
