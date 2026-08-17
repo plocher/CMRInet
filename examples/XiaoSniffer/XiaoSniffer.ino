@@ -12,6 +12,8 @@
 //   D7 - RX   CMRI RS485 receive (the pair under observation)
 //   D6 - TX   UART TX, but the driver is off (TXEN low) so it goes nowhere
 //   D3 - TXEN held LOW — driver output high-Z, listen-only
+//   D4 - SDA  I2C for the OLED status panel (optional)
+//   D5 - SCL  I2C for the OLED status panel (optional)
 //
 // One board = one pair. The MAX3491 receiver hears only the pair wired
 // to R±, so a complete poll+reply conversation needs two sniffers (one
@@ -19,11 +21,14 @@
 // on; it is direction-blind and reports "observed" — the MT still
 // identifies the frame (I/T/P are Host->Node, R is Node->Host).
 //
-// Output (one JSON line each):
-//   epoch  {"seq":N,"ts":0,"event":"epoch","image":"xiao_sniffer",
-//          "version":"...","anchor":"bootMs","value":N}
-//   frame  {"seq":N,"ts":N,"event":"frame","image":"xiao_sniffer",
-//          "version":"...","ua":N,"mt":"C","body":"HEX"}
+// OLED (SSD1306 128x64 @ 0x3C): a big "SNIFFER" header confirms at a
+// glance the new firmware is actually running (not a stale node image),
+// with a live packet count and per-MT tally. Degrades gracefully: if
+// the display is absent, the JSON CDC stream still works.
+//
+// Output (one JSON line each over USB CDC):
+//   epoch  {"seq":N,"ts":0,"event":"epoch","image":"xiao_sniffer",...}
+//   frame  {"seq":N,"ts":N,"event":"frame",...,"ua":N,"mt":"C","body":"HEX"}
 //   stats  {"seq":N,"ts":N,"event":"stats",...decoder counters...}
 // ts is integer ms since boot (the epoch anchor), matching the tracer
 // engine's relative-clock convention so a runner can diff the two
@@ -37,6 +42,10 @@
 // host-conformance use cases too.
 
 #include <Arduino.h>
+#include <Wire.h>
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
@@ -53,11 +62,17 @@
 #ifndef SNIFFER_STATS_INTERVAL_MS
 #define SNIFFER_STATS_INTERVAL_MS 5000
 #endif
+#ifndef SNIFFER_DISPLAY_INTERVAL_MS
+#define SNIFFER_DISPLAY_INTERVAL_MS 150
+#endif
+#ifndef SNIFFER_USE_OLED
+#define SNIFFER_USE_OLED 1  // set to 0 to compile out the display
+#endif
 
 namespace {
 
 constexpr const char* kImage = "xiao_sniffer";
-constexpr const char* kVersion = "0.1.0";
+constexpr const char* kVersion = "0.2.0";
 constexpr int kTxenPin = D3;  // held LOW: driver off, listen-only
 
 CMRInet::CMRIFrameDecoder decoder;
@@ -65,6 +80,24 @@ CMRInet::CMRIFrameDecoder decoder;
 uint32_t seq = 0;
 uint32_t epochMs = 0;
 uint32_t lastStatsMs = 0;
+uint32_t lastDisplayMs = 0;
+
+// Per-MT tally for the OLED live view (I/T/P/R + other).
+struct Tally {
+  uint32_t total = 0;
+  uint32_t i = 0, t = 0, p = 0, r = 0, other = 0;
+  uint8_t lastUa = 0;
+  char lastMt = '-';
+};
+Tally tally;
+
+#if SNIFFER_USE_OLED
+constexpr int kScreenW = 128;
+constexpr int kScreenH = 64;
+constexpr int kScreenAddr = 0x3C;
+Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+bool oledOk = false;
+#endif
 
 // body hex (2 * kMaxBody) + ~120 chars of fixed fields. Guarded, not
 // expected to truncate for bench geometries.
@@ -87,7 +120,22 @@ void emitEpoch() {
   emitLine();
 }
 
+void countFrame(const CMRInet::CMRIPacket& p) {
+  ++tally.total;
+  tally.lastUa = p.ua;
+  tally.lastMt = (p.mt >= 0x20 && p.mt <= 0x7E) ? static_cast<char>(p.mt)
+                                                 : '?';
+  switch (p.mt) {
+    case 'I': ++tally.i; break;
+    case 'T': ++tally.t; break;
+    case 'P': ++tally.p; break;
+    case 'R': ++tally.r; break;
+    default: ++tally.other; break;
+  }
+}
+
 void emitFrame(const CMRInet::CMRIPacket& p) {
+  countFrame(p);
   char bodyHex[2 * CMRInet::kMaxBody + 1] = "";
   for (size_t i = 0; i < p.length; ++i) {
     snprintf(&bodyHex[2 * i], 3, "%02X", p.body[i]);
@@ -121,6 +169,53 @@ void emitStats() {
   emitLine();
 }
 
+#if SNIFFER_USE_OLED
+void drawSplash() {
+  if (!oledOk) return;
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.print(F("SNIFFER"));
+  display.setTextSize(1);
+  display.setCursor(0, 24);
+  display.print(kVersion);
+  display.setCursor(0, 40);
+  display.print(F("listening..."));
+  display.display();
+}
+
+void drawStatus() {
+  if (!oledOk) return;
+  const CMRInet::CMRIFrameDecoder::Statistics& s = decoder.statistics();
+  display.clearDisplay();
+  // Header — big so it's obvious this is the sniffer, not a node.
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.print(F("SNIFFER"));
+  // Counts.
+  display.setTextSize(1);
+  display.setCursor(0, 20);
+  display.printf(F("frames: %u"), tally.total);
+  display.setCursor(0, 30);
+  display.printf(F("I:%u T:%u P:%u R:%u"), tally.i, tally.t, tally.p,
+                 tally.r);
+  display.setCursor(0, 40);
+  if (tally.total != 0) {
+    display.printf(F("last: %c ua=%u"), tally.lastMt,
+                   static_cast<unsigned>(tally.lastUa));
+  } else {
+    display.print(F("last: -"));
+  }
+  display.setCursor(0, 54);
+  display.printf(F("abort:%u rst:%u"),
+                 static_cast<unsigned>(s.timeoutAborts),
+                 static_cast<unsigned>(s.framesRestarted));
+  display.display();
+}
+#endif
+
 }  // namespace
 
 void setup() {
@@ -129,6 +224,18 @@ void setup() {
   while (!Serial) {
     delay(10);
   }
+
+#if SNIFFER_USE_OLED
+  // SSD1306 at 0x3C on the board I2C (D4/D5). Degrade gracefully: a
+  // missing display does not stop the JSON stream.
+  if (display.begin(SSD1306_SWITCHCAPVCC, kScreenAddr)) {
+    oledOk = true;
+    display.dim(true);
+    drawSplash();
+  } else {
+    oledOk = false;
+  }
+#endif
 
   // Observe the CMRI wire: 28800 8N2 on the MAX3491 UART RX pin. The TX
   // pin is configured only because Serial1.begin wants one; with TXEN
@@ -146,6 +253,7 @@ void setup() {
 
   emitEpoch();
   lastStatsMs = millis();
+  lastDisplayMs = millis();
 }
 
 void loop() {
@@ -167,4 +275,11 @@ void loop() {
     emitStats();
     lastStatsMs = now;
   }
+
+#if SNIFFER_USE_OLED
+  if (now - lastDisplayMs >= SNIFFER_DISPLAY_INTERVAL_MS) {
+    drawStatus();
+    lastDisplayMs = now;
+  }
+#endif
 }
