@@ -104,11 +104,13 @@ bool oledOk = false;
 char line[2 * CMRInet::kMaxBody + 160];
 
 void emitLine() {
-  // Skip the blocking CDC write when no host has the port open. After
-  // the bounded 3 s wait in setup(), `Serial` stays false on a headless
-  // board, so without this gate the first write blocks forever (the TX
-  // buffer fills and nobody drains it) and loop()/drawStatus() never
-  // run. Live check: if a terminal attaches later, writes resume.
+  // Skip the CDC write when no host has the port open — nobody to read
+  // it. setTxTimeoutMs(0) in setup() is the real block-proof: even when
+  // a cable is plugged in but no terminal is draining it (DTR not
+  // asserted), writes discard-and-return instead of stalling ~100 ms
+  // each. This gate just avoids filling the ring buffer with data that
+  // would be dropped anyway, and resumes automatically when a terminal
+  // attaches.
   if (!Serial) return;
   Serial.write(reinterpret_cast<const uint8_t*>(line), strlen(line));
   Serial.write('\n');
@@ -206,11 +208,13 @@ void drawStatus() {
   // overflow clip instead of clobber. Each counter is printed in a
   // fixed-width, right-aligned field (%Nu) so the labels and the second
   // counter on each line stay pinned as digit counts change — no layout
-  // shift when a value grows by a digit.
+  // shift when a value grows by a digit. The right-column fields (R, I,
+  // rst) all end at column 21 so their digits line up vertically; the
+  // left-column fields (P, T, abort) all end at column 10.
   //   frames: %10u      total, up to 10-digit uint32   (= 18 chars)
   //   P:%8u R:%8u       fastest MTs, 8 digits each     (= 21 chars)
-  //   T:%8u I:%4u       common T (8) + rare I (4)      (= 17 chars)
-  //   abort:%4u rst:%4u rare errors, 4 digits each     (= 19 chars)
+  //   T:%8u I:%8u       T (8) + I (8), I aligned to R  (= 21 chars)
+  //   abort:%4u rst:%6u abort (4) + rst (6), rst to R  (= 21 chars)
   //   last: %c ua=%3u   glance line — ua is uint8      (<=14 chars)
   display.setTextSize(1);
   display.setCursor(0, 18);
@@ -218,9 +222,9 @@ void drawStatus() {
   display.setCursor(0, 27);
   display.printf(F("P:%8u R:%8u"), tally.p, tally.r);
   display.setCursor(0, 36);
-  display.printf(F("T:%8u I:%4u"), tally.t, tally.i);
+  display.printf(F("T:%8u I:%8u"), tally.t, tally.i);
   display.setCursor(0, 45);
-  display.printf(F("abort:%4u rst:%4u"),
+  display.printf(F("abort:%4u rst:%6u"),
                  static_cast<unsigned>(s.timeoutAborts),
                  static_cast<unsigned>(s.framesRestarted));
   display.setCursor(0, 54);
@@ -249,6 +253,14 @@ void setup() {
   while (!Serial && (millis() - serialWaitStart) < kSerialWaitMs) {
     delay(10);
   }
+  // Non-blocking CDC writes: with the default 100 ms TX timeout, each
+  // Serial.write() stalls that long when a cable is plugged in but no
+  // host has the port open (DTR not asserted) — the ring buffer fills
+  // and nobody drains it. At many frames/s that starves loop() and the
+  // OLED freezes. setTxTimeoutMs(0) makes writes discard-and-return
+  // when no host is reading instead of blocking (Espressif's documented
+  // HWCDC workaround, arduino-esp32 #9043; safe on the C6's HWCDC path).
+  Serial.setTxTimeoutMs(0);
 
 #if SNIFFER_USE_OLED
   // SSD1306 at 0x3C on the board I2C (D4/D5). Degrade gracefully: a

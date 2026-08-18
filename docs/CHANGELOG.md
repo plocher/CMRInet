@@ -292,6 +292,13 @@ High-level changes, newest first.
   `docs/research/comparison.md` §3 anti-checklist.
 
 ### Fixed
+- `examples/XiaoSniffer/` no longer stalls when a USB cable is plugged
+  in but no terminal is open (DTR not asserted): `Serial.setTxTimeoutMs(0)`
+  in `setup()` makes CDC writes discard-and-return when no host is
+  draining the ring buffer, instead of blocking ~100 ms per write
+  (Espressif's documented HWCDC workaround, arduino-esp32 #9043; safe on
+  the C6's HWCDC path). At many frames/s that per-write stall was
+  starving `loop()` and freezing the OLED.
 - `examples/XiaoSniffer/` no longer hangs on a headless board: the
   USB CDC host wait in `setup()` is bounded at 3 s, and `emitLine()`
   skips the blocking `Serial.write` when no terminal is attached
@@ -320,6 +327,10 @@ High-level changes, newest first.
   the second counter on each line stay pinned as digit counts change —
   no layout shift when a value grows by a digit. Pure UX polish on the
   0.2.1 fixed 5-line dashboard; no version bump.
+- `examples/XiaoSniffer/` OLED right-column counters (R, I, rst) now
+  share the same right margin so their digits line up vertically: I
+  widened to `%8u` and rst to `%6u`, both ending at column 21 like R.
+  Left-column counters (P, T, abort) keep column 10.
 - Xiao Host R&D image version bumped to 0.1.3 (issue #27): the
   `Esp32UartCMRISerialPort` include now resolves to the library header
   and the port usage is namespace-qualified (`CMRInet::`). The image
