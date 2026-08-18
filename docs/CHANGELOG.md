@@ -292,6 +292,16 @@ High-level changes, newest first.
   `docs/research/comparison.md` §3 anti-checklist.
 
 ### Fixed
+- `examples/XiaoSniffer/` no longer hangs on a headless board: the
+  USB CDC host wait in `setup()` is bounded at 3 s, and `emitLine()`
+  skips the blocking `Serial.write` when no terminal is attached
+  (live check; a later-attaching terminal resumes output). The OLED
+  dashboard also no longer garbles once per-MT counters grow: the
+  single `I:%u T:%u P:%u R:%u` line exceeded the 21-char width and
+  wrapped onto the row below, so `drawStatus()` is reflowed to a fixed
+  5-line layout (frames / P+R / T+I / abort+rst / last ua), every line
+  <= 21 chars, with `setTextWrap(false)` as a belt-and-suspenders clip
+  guard. Version bumped 0.2.0 -> 0.2.1.
 - `CMRIHost.h` now includes `Arduino.h` for the ARDUINO-only
   `tick()` convenience overload — the library's first real Arduino
   compile could not see `millis()` (issue #21).
