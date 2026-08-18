@@ -72,7 +72,7 @@
 namespace {
 
 constexpr const char* kImage = "xiao_sniffer";
-constexpr const char* kVersion = "0.2.0";
+constexpr const char* kVersion = "0.2.1";
 constexpr int kTxenPin = D3;  // held LOW: driver off, listen-only
 
 CMRInet::CMRIFrameDecoder decoder;
@@ -104,6 +104,12 @@ bool oledOk = false;
 char line[2 * CMRInet::kMaxBody + 160];
 
 void emitLine() {
+  // Skip the blocking CDC write when no host has the port open. After
+  // the bounded 3 s wait in setup(), `Serial` stays false on a headless
+  // board, so without this gate the first write blocks forever (the TX
+  // buffer fills and nobody drains it) and loop()/drawStatus() never
+  // run. Live check: if a terminal attaches later, writes resume.
+  if (!Serial) return;
   Serial.write(reinterpret_cast<const uint8_t*>(line), strlen(line));
   Serial.write('\n');
 }
@@ -194,24 +200,33 @@ void drawStatus() {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.print(F("SNIFFER"));
-  // Counts.
+  // Counts — fixed layout: every line stays within the 21-char (128px)
+  // width at size 1, so a growing counter can never wrap and garble the
+  // row below. setTextWrap(false) (set in setup) makes any future
+  // overflow clip instead of clobber.
+  //   frames: total       own line, up to 10-digit uint32
+  //   P:n R:n             fastest MTs, 8 digits each (= 21 chars)
+  //   T:n I:n             common T (8) + rare I (4)
+  //   abort:n rst:n       rare errors, 4 digits each
+  //   last: MT ua=N       glance line — ua is uint8, always fits
   display.setTextSize(1);
-  display.setCursor(0, 20);
+  display.setCursor(0, 18);
   display.printf(F("frames: %u"), tally.total);
-  display.setCursor(0, 30);
-  display.printf(F("I:%u T:%u P:%u R:%u"), tally.i, tally.t, tally.p,
-                 tally.r);
-  display.setCursor(0, 40);
+  display.setCursor(0, 27);
+  display.printf(F("P:%u R:%u"), tally.p, tally.r);
+  display.setCursor(0, 36);
+  display.printf(F("T:%u I:%u"), tally.t, tally.i);
+  display.setCursor(0, 45);
+  display.printf(F("abort:%u rst:%u"),
+                 static_cast<unsigned>(s.timeoutAborts),
+                 static_cast<unsigned>(s.framesRestarted));
+  display.setCursor(0, 54);
   if (tally.total != 0) {
     display.printf(F("last: %c ua=%u"), tally.lastMt,
                    static_cast<unsigned>(tally.lastUa));
   } else {
     display.print(F("last: -"));
   }
-  display.setCursor(0, 54);
-  display.printf(F("abort:%u rst:%u"),
-                 static_cast<unsigned>(s.timeoutAborts),
-                 static_cast<unsigned>(s.framesRestarted));
   display.display();
 }
 #endif
@@ -220,8 +235,15 @@ void drawStatus() {
 
 void setup() {
   Serial.begin(115200);  // USB CDC: the frame log stream
-  // R&D image: wait for the C&C stream so the epoch line is captured.
-  while (!Serial) {
+  // R&D image: wait for the CDC host to open the port so the epoch
+  // line is captured — but bound the wait at 3 s so a headless board
+  // (no terminal attached) still boots and drives the OLED without
+  // hanging setup(). On the Xiao ESP32-C6, `Serial` is native USB CDC
+  // and only reads true once a host asserts DTR/RTS; without a bound
+  // the wait parks here forever and loop()/drawStatus() never run.
+  const uint32_t kSerialWaitMs = 3000;
+  const uint32_t serialWaitStart = millis();
+  while (!Serial && (millis() - serialWaitStart) < kSerialWaitMs) {
     delay(10);
   }
 
@@ -231,6 +253,7 @@ void setup() {
   if (display.begin(SSD1306_SWITCHCAPVCC, kScreenAddr)) {
     oledOk = true;
     display.dim(true);
+    display.setTextWrap(false);  // dashboard: clip, never wrap-clobber a row
     drawSplash();
   } else {
     oledOk = false;
