@@ -203,26 +203,29 @@ void drawStatus() {
   // Counts — fixed layout: every line stays within the 21-char (128px)
   // width at size 1, so a growing counter can never wrap and garble the
   // row below. setTextWrap(false) (set in setup) makes any future
-  // overflow clip instead of clobber.
-  //   frames: total       own line, up to 10-digit uint32
-  //   P:n R:n             fastest MTs, 8 digits each (= 21 chars)
-  //   T:n I:n             common T (8) + rare I (4)
-  //   abort:n rst:n       rare errors, 4 digits each
-  //   last: MT ua=N       glance line — ua is uint8, always fits
+  // overflow clip instead of clobber. Each counter is printed in a
+  // fixed-width, right-aligned field (%Nu) so the labels and the second
+  // counter on each line stay pinned as digit counts change — no layout
+  // shift when a value grows by a digit.
+  //   frames: %10u      total, up to 10-digit uint32   (= 18 chars)
+  //   P:%8u R:%8u       fastest MTs, 8 digits each     (= 21 chars)
+  //   T:%8u I:%4u       common T (8) + rare I (4)      (= 17 chars)
+  //   abort:%4u rst:%4u rare errors, 4 digits each     (= 19 chars)
+  //   last: %c ua=%3u   glance line — ua is uint8      (<=14 chars)
   display.setTextSize(1);
   display.setCursor(0, 18);
-  display.printf(F("frames: %u"), tally.total);
+  display.printf(F("frames: %10u"), tally.total);
   display.setCursor(0, 27);
-  display.printf(F("P:%u R:%u"), tally.p, tally.r);
+  display.printf(F("P:%8u R:%8u"), tally.p, tally.r);
   display.setCursor(0, 36);
-  display.printf(F("T:%u I:%u"), tally.t, tally.i);
+  display.printf(F("T:%8u I:%4u"), tally.t, tally.i);
   display.setCursor(0, 45);
-  display.printf(F("abort:%u rst:%u"),
+  display.printf(F("abort:%4u rst:%4u"),
                  static_cast<unsigned>(s.timeoutAborts),
                  static_cast<unsigned>(s.framesRestarted));
   display.setCursor(0, 54);
   if (tally.total != 0) {
-    display.printf(F("last: %c ua=%u"), tally.lastMt,
+    display.printf(F("last: %c ua=%3u"), tally.lastMt,
                    static_cast<unsigned>(tally.lastUa));
   } else {
     display.print(F("last: -"));

@@ -315,6 +315,11 @@ High-level changes, newest first.
   MAX3491 saw garbage (issue #21).
 
 ### Changed
+- `examples/XiaoSniffer/` OLED counters now print in fixed-width,
+  right-aligned fields (`%10u`/`%8u`/`%4u`/`%3u`) so the labels and
+  the second counter on each line stay pinned as digit counts change —
+  no layout shift when a value grows by a digit. Pure UX polish on the
+  0.2.1 fixed 5-line dashboard; no version bump.
 - Xiao Host R&D image version bumped to 0.1.3 (issue #27): the
   `Esp32UartCMRISerialPort` include now resolves to the library header
   and the port usage is namespace-qualified (`CMRInet::`). The image
