@@ -1,7 +1,7 @@
 // XiaoHostTracer.ino — the stage-2 Xiao Host R&D image (map issue
 // #21): CMRIHost on the cpNode-Xiao RS-485 block, command-and-control
 // over USB CDC. Same engine, same listeners as the desktop tracer
-// (extras/desktop/cmri_tracer.cpp) via testbed/CMRITracerEngine.h;
+// (extras/desktop/cmri_tracer.cpp) via testbed/TracerShell.h;
 // only this main() differs.
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex):
@@ -33,7 +33,7 @@
 
 #include "CMRIHost.h"
 #include "SerialCMRITransport.h"
-#include "testbed/CMRITracerEngine.h"
+#include "testbed/TracerShell.h"
 
 #include "Esp32UartCMRISerialPort.h"
 
@@ -82,7 +82,7 @@ CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
 CMRInet::RemoteNodeHandle* node = nullptr;
-CMRInet::testbed::CMRITracerEngine engine;
+CMRInet::testbed::TracerShell engine;
 
 bool finished = false;  // quit latched: "final" emitted, polling parked
 
@@ -167,7 +167,7 @@ void loop() {
 
   char verb[128];
   if (readVerb(verb, sizeof(verb))) {
-    using VerbResult = CMRInet::testbed::CMRITracerEngine::VerbResult;
+    using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
     if (engine.handleVerb(verb) == VerbResult::kQuit && !finished) {
       engine.emitLine("final");
       finished = true;  // reset the board to run again

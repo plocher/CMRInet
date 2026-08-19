@@ -3,7 +3,7 @@
 // command-and-control loop on stdin/stdout.
 //
 // The C&C engine (verbs, JSON-lines telemetry, listener wiring) is
-// the shared testbed engine in src/testbed/CMRITracerEngine.h — the
+// the shared testbed engine in src/testbed/TracerShell.h — the
 // same engine the Xiao Host R&D image wraps (map issue #21). This
 // file is only the desktop main(): option parsing, termios port,
 // POSIX clocks, and stdin/stdout plumbing.
@@ -23,7 +23,7 @@
 #include "CMRIHost.h"
 #include "PosixCMRISerialPort.h"
 #include "SerialCMRITransport.h"
-#include "testbed/CMRITracerEngine.h"
+#include "testbed/TracerShell.h"
 
 namespace {
 
@@ -239,10 +239,11 @@ int main(int argc, char** argv) {
   nodeConfig.inputBytes = opt.inputBytes;
   nodeConfig.outputBytes = opt.outputBytes;
   host.addRemoteNode(opt.address, nodeConfig);
+  CMRInet::RemoteNodeHandle* node = host.node(opt.address);
 
-  CMRInet::testbed::CMRITracerEngine engine;
+  CMRInet::testbed::TracerShell engine;
   if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
-    engine.bind(host, transport, *host.node(opt.address), kImage, kVersion,
+    engine.bind(host, transport, *node, kImage, kVersion,
                 writeStdoutLine, nullptr);
   }
 
@@ -272,7 +273,7 @@ int main(int argc, char** argv) {
     host.tick(nowMs);
 
     if (readVerb(verb, sizeof(verb))) {
-      using VerbResult = CMRInet::testbed::CMRITracerEngine::VerbResult;
+      using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
       if (engine.handleVerb(verb) == VerbResult::kQuit) {
         break;
       }

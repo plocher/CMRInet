@@ -1,4 +1,4 @@
-// test_tracer.cpp — tests for the shared CMRITracerEngine: the I/T
+// test_tracer.cpp — tests for the shared TracerShell: the I/T
 // packet trace telemetry (D7 onTrace), the output verbs that make T
 // bench-exercisable, the outputs hex field, and error lines.
 //
@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "CMRInet.h"
-#include "testbed/CMRITracerEngine.h"
+#include "testbed/TracerShell.h"
 #include "unity.h"
 
 using CMRInet::CMRIHost;
@@ -30,7 +30,7 @@ using CMRInet::kUaOffset;
 using CMRInet::RemoteNodeConfig;
 using CMRInet::RemoteNodeHandle;
 using CMRInet::SerialCMRITransport;
-using CMRInet::testbed::CMRITracerEngine;
+using CMRInet::testbed::TracerShell;
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -79,13 +79,13 @@ class FakePort : public CMRISerialPort {
 
 // ------------------------------------------------------------------- rig
 
-/// One engine + host + transport + node, capturing every telemetry line.
+/// One shell + host + transport + node, capturing every telemetry line.
 struct TracerRig {
   FakePort port;
   SerialCMRITransport transport;
   CMRIHost host;
   RemoteNodeHandle* node = nullptr;
-  CMRITracerEngine engine;
+  TracerShell shell;
   std::vector<std::string> lines;
 
   explicit TracerRig(uint16_t inBytes = 2, uint16_t outBytes = 3)
@@ -93,14 +93,14 @@ struct TracerRig {
     host.addRemoteNode(5, inBytes, outBytes);
     node = host.node(5);
     TEST_ASSERT_NOT_NULL_MESSAGE(node, "addRemoteNode failed in rig");
-    engine.bind(host, transport, *node, "test", "0.0", &TracerRig::writeLine_,
-                this);
+    shell.bind(host, transport, *node, "test", "0.0", &TracerRig::writeLine_,
+              this);
     host.begin();
   }
 
-  /// Tick one millisecond: refresh the engine clock, then drive the host.
+  /// Tick one millisecond: refresh the shell clock, then drive the host.
   void tick(uint32_t t) {
-    engine.setNow(t);
+    shell.setNow(t);
     host.tick(t);
   }
 
@@ -108,10 +108,10 @@ struct TracerRig {
     for (uint32_t t = fromMs; t <= toMs; ++t) tick(t);
   }
 
-  /// Dispatch a verb. Runs at the engine's current clock (the value
+  /// Dispatch a verb. Runs at the shell's current clock (the value
   /// the last tick handed it); for content assertions ts is irrelevant.
-  CMRITracerEngine::VerbResult verb(const char* v) {
-    return engine.handleVerb(v);
+  TracerShell::VerbResult verb(const char* v) {
+    return shell.handleVerb(v);
   }
 
  private:
@@ -234,7 +234,7 @@ static void test_trace_emits_rx_reply(void) {
 // engine sends a full T on the next slot (acceptance #3 exercisable).
 static void test_verb_setbit_mutates_output_and_marks_dirty(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 0 1"));
   TEST_ASSERT_TRUE(rig.node->outputBit(0));
   rig.run(0, 3);  // I at 0, T (dirty) at 2
@@ -249,7 +249,7 @@ static void test_verb_setbit_mutates_output_and_marks_dirty(void) {
 // is unchanged.
 static void test_verb_setbit_bad_value_emits_error(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 0 2"));
   TEST_ASSERT_FALSE(rig.node->outputBit(0));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
@@ -259,7 +259,7 @@ static void test_verb_setbit_bad_value_emits_error(void) {
 // A bit beyond the output image is rejected with an error line.
 static void test_verb_setbit_out_of_range_emits_error(void) {
   TracerRig rig;  // outputBytes = 3 -> 24 bits
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 100 1"));
   TEST_ASSERT_FALSE(rig.node->outputBit(100));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
@@ -272,7 +272,7 @@ static void test_verb_setbit_out_of_range_emits_error(void) {
 // dirty; the next T carries them.
 static void test_verb_writeoutputs_mutates_image(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("writeoutputs 0102A0"));
   TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->outputByte(0));
   TEST_ASSERT_EQUAL_HEX8(0x02, rig.node->outputByte(1));
@@ -287,7 +287,7 @@ static void test_verb_writeoutputs_mutates_image(void) {
 // unchanged.
 static void test_verb_writeoutputs_bad_hex_emits_error(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("writeoutputs 0G12"));
   TEST_ASSERT_EQUAL_HEX8(0x00, rig.node->outputByte(0));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
@@ -297,7 +297,7 @@ static void test_verb_writeoutputs_bad_hex_emits_error(void) {
 // An odd number of hex digits is rejected with an error line.
 static void test_verb_writeoutputs_odd_length_emits_error(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("writeoutputs 010"));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "odd hex length did not emit an error line");
@@ -311,7 +311,7 @@ static void test_verb_forcetx_remarks_dirty(void) {
   TracerRig rig;
   rig.run(0, 5);  // I, T (empty image), P outstanding; dirty cleared
   TEST_ASSERT_EQUAL_INT(1, countContaining(rig.lines, "\"mt\":\"T\""));
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("forcetx"));
   rig.tick(6);  // P gate expires (miss) -> next slot sends the forced T
   TEST_ASSERT_EQUAL_INT_MESSAGE(
@@ -340,7 +340,7 @@ static void test_telemetry_line_carries_outputs_hex(void) {
 
 static void test_unknown_verb_emits_error(void) {
   TracerRig rig;
-  TEST_ASSERT_EQUAL(CMRITracerEngine::VerbResult::kHandled,
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("frobnicate"));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "unknown verb did not emit an error line");
