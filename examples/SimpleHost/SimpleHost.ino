@@ -56,11 +56,13 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "SimpleHostMetrics.h"          // pure display-metrics helpers
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
 constexpr int      kScreenAddr    = 0x3C;
 constexpr uint32_t kDisplayRefreshMs = 150;   // redraw interval
+constexpr uint32_t kErrorWindowMs     = 5000; // rolling error count window (long enough that a transient burst stays visible)
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
 #endif
@@ -141,6 +143,15 @@ uint32_t lastDisplayMs = 0;
 // drawHostStatus references it here.
 extern CMRInet::CMRIHost host;
 
+// Display-metric state. Each is a small ring buffer of timestamps,
+// sampled from host statistics on every redraw and aged by the helper.
+// Per-node error windows track geometry/UA/MT rejections (the node's
+// own statistics_.errors counter sampled against the window).
+CMRInet::examples::PollRate pollRate;
+CMRInet::examples::ErrorWindow nodeErrorWindows[kNodeCount];
+uint32_t prevPollsSent = 0;
+uint32_t prevNodeErrors[kNodeCount] = {};
+
 /// Two-letter state tag for the OLED line.
 const char* stateTag(CMRInet::RemoteNodeState s) {
   switch (s) {
@@ -152,21 +163,72 @@ const char* stateTag(CMRInet::RemoteNodeState s) {
   return "??";
 }
 
-/// Draw the host status panel: a header and one line per node with its
-/// address and health. Redrawn on a timer; no dirty tracking.
+/// Draw the host status panel. Layout (textSize 1 unless noted):
+///   HOST           <polling rate>c/s
+///   UA 30: ON    <lat>  <e>err
+///   UA 31: OFF   <lat>  <e>err
+/// Numbers are right-justified in fixed-width fields so columns line up
+/// vertically. Redrawn on a timer; no dirty tracking.
 void drawHostStatus() {
   if (!oledOk) return;
+  const uint32_t now = millis();
+
+  // Sample host statistics into the rolling windows. Polling rate is
+  // driven by pollsSent deltas; per-node errors by each node's own
+  // statistics().errors delta, recorded at the moment a new error lands.
+  const uint32_t pollsSent = host.statistics().pollsSent;
+  if (pollsSent != prevPollsSent) {
+    pollRate.onPoll(now);
+    prevPollsSent = pollsSent;
+  }
+  for (size_t i = 0; i < kNodeCount; ++i) {
+    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].address);
+    if (n == nullptr) continue;
+    const uint32_t errs = n->statistics().errors;
+    while (errs != prevNodeErrors[i]) {
+      nodeErrorWindows[i].onEvent(now);
+      ++prevNodeErrors[i];
+    }
+  }
+
   display.clearDisplay();
-  display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
+
+  // Header line: "HOST" at size 2, polling rate right-justified at 1.
+  // The rate is smoothed over a 10 s window so it is stable enough to
+  // read at a glance on a 150 ms redraw cadence; a genuine stall shows up
+  // as a declining number within a few seconds as backoff ramps and fewer
+  // polls/sec go out. (The per-node backoff ladder — 250 ms, 500 ms, 1 s,
+  // ... — is a separate, deferred readout that needs a RemoteNodeHandle
+  // accessor for pollBackoffMs_; the host-wide interval stays fine-grained
+  // whenever any node is healthy, so it is not shown here.)
+  display.setTextSize(2);
   display.setCursor(0, 0);
   display.print(F("HOST"));
   display.setTextSize(1);
+  display.setCursor(60, 4);
+  display.printf(PSTR("%.1fc/s"), pollRate.cyclesPerSecondAt(now));
+
+  // One row per node: UA, state, latency, recent-error count -- all
+  // right-justified so the columns align.
   for (size_t i = 0; i < kNodeCount; ++i) {
     display.setCursor(0, 20 + i * 10);
     CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].address);
     const char* tag = (n != nullptr) ? stateTag(n->state()) : "---";
-    display.printf(PSTR("UA %u: %s"), nodeTable[i].address, tag);
+    display.setTextSize(1);
+    display.printf(PSTR("UA%u:%s"), nodeTable[i].address, tag);
+    // latency: 6-char fixed-width field, starting at x=58
+    char lat[8];
+    const uint32_t latMs = (n != nullptr)
+        ? n->statistics().lastTurnaroundMs : 0;
+    CMRInet::examples::latencyText(lat, sizeof(lat), latMs);
+    display.setCursor(58, 20 + i * 10);
+    display.print(lat);
+    // recent errors: right-justified "<n>err" at x=100
+    const uint32_t recentErrs = (n != nullptr)
+        ? nodeErrorWindows[i].countInLastMs(now, kErrorWindowMs) : 0;
+    display.setCursor(100, 20 + i * 10);
+    display.printf(PSTR("%2uer"), recentErrs);
   }
   display.display();
 }

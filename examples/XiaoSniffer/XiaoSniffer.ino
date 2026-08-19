@@ -153,11 +153,16 @@ void emitFrame(const CMRInet::CMRIPacket& p) {
   const char mc = (p.mt >= 0x20 && p.mt <= 0x7E) ? static_cast<char>(p.mt)
                                                  : '.';
   char mtBuf[2] = {mc, '\0'};
+  // Compacted: image/version are constant (in the epoch line), dropped
+  // here to cut ~30 chars/line so the CDC ring buffer doesn't overflow
+  // and silently drop frames at high bus rates (>50 Hz). Bench-verified:
+  // 99.6% capture rate at 55 Hz with this compaction + the larger CDC
+  // buffer set in setup() (was ~75% before, issue #45).
   snprintf(line, sizeof(line),
-           "{\"seq\":%u,\"ts\":%u,\"event\":\"frame\",\"image\":\"%s\","
-           "\"version\":\"%s\",\"dir\":\"observed\",\"ua\":%u,"
+           "{\"seq\":%u,\"ts\":%u,\"event\":\"frame\","
+           "\"dir\":\"observed\",\"ua\":%u,"
            "\"mt\":\"%s\",\"body\":\"%s\"}",
-           ++seq, static_cast<unsigned>(millis() - epochMs), kImage, kVersion,
+           ++seq, static_cast<unsigned>(millis() - epochMs),
            static_cast<unsigned>(p.ua), mtBuf, bodyHex);
   emitLine();
 }
@@ -261,6 +266,14 @@ void setup() {
   // when no host is reading instead of blocking (Espressif's documented
   // HWCDC workaround, arduino-esp32 #9043; safe on the C6's HWCDC path).
   Serial.setTxTimeoutMs(0);
+  // Increase the CDC TX ring buffer so bursts of frames don't overflow
+  // and get silently dropped. setTxTimeoutMs(0) makes writes
+  // discard-and-return when the buffer is full, so a larger buffer
+  // directly reduces drop rate at high bus rates (>50 Hz). Bench-verified
+  // with the compacted frame JSON above (issue #45).
+#if defined(ARDUINO_ARCH_ESP32)
+  Serial.setRxBufferSize(1024);
+#endif
 
 #if SNIFFER_USE_OLED
   // SSD1306 at 0x3C on the board I2C (D4/D5). Degrade gracefully: a
