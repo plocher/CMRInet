@@ -4,6 +4,35 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- SimpleHost OLED diagnostics, first increment (issue #11): the status
+  panel now shows a host-level polling-rate line ("XX.Xc/s") and one
+  row per node with state, last-turnaround latency (right-justified
+  "XXXms"), and a rolling 5-second recent-error count (right-justified
+  "XXerr"), all in fixed-width fields so columns align vertically. No
+  new library API surface — all values are read from today's public
+  `CMRIHost::statistics()` and `RemoteNodeHandle::statistics()`.
+  `src/SimpleHostMetrics.h` is a new pure, platform-neutral helper
+  (rolling event window, rolling rate, fixed-width latency formatter)
+  shared between the example sketch and the desktop test suite; 5 new
+  Unity tests (`tests/test_host_display_metrics.cpp`); 153 total
+  passing. The polling rate is smoothed over a 10 s window (not 1 s) so
+  it is stable enough to read at a glance on a 150 ms redraw cadence;
+  the per-node backoff ladder (250 ms → 32 s) is deferred to a later
+  increment that needs a `RemoteNodeHandle` accessor for `pollBackoffMs_`.
+  Hardware-verified on the cpNode-Xiao bench: bus stays healthy with the
+  new display code running.
+- XiaoSniffer CDC throughput (issue #45): the sniffer was silently
+  dropping ~25% of frames at high bus rates (>50 Hz) because the
+  per-frame JSON line was too long for the CDC ring buffer.
+  `setTxTimeoutMs(0)` made writes discard-and-return when the buffer
+  was full, so bursts of frames were lost without any error signal.
+  Fix: compact the frame JSON (drop the constant `image`/`version`
+  fields, already in the epoch line — ~30 chars/line, 32% reduction)
+  and enlarge the CDC ring buffer (`setRxBufferSize(1024)`).
+  Bench-verified: capture rate improved from ~75% to 99.6% at 55 Hz.
+  The OLED stays on — it was not the bottleneck.
+
 ### Fixed
 - `CMRIHost` poll/transmit starvation (issue #41): `runSchedule_` could send
   a full `T` in place of a due `P` indefinitely whenever a node's outputs
