@@ -10,24 +10,22 @@
 // for a person controlling a layout.
 //
 // What it does: polls remote nodes, shows each node's health, and runs
-// a simplistic behavior model — an obligatory blinking light and another
-// tied to an input.
+// a simplistic behavior model — obligatory blinking lights and an
+// example sensor input.
 //
 // CMRInet is a layout I/O data service. This Host sketch deals in input
 // and output data, freshness, and node health, while Node sketches on
-// other devices provide the input data and process output.
+// other devices connect to layout hardware and provide the input data
+// and process output.
 //
 // The CMRInet protocol is a polled data transfer implementation that
 // connects a CMRIHost to remote CMRINodes over a transport; you register
 // the remote nodes that this host manages by way of RemoteNodeHandles and
 // you call host.tick() every loop to make the gears turn.
 //
-// When data is available, you read inputs / write outputs through the
-// handle using handle.inputBit(n)
-//
-// Details can be found in docs/DESIGN.md (D1-D13); the README has a
-// one-screen overview. This sketch is the "how to use it" half.
-
+// You read inputs / write outputs through the host's node handle using
+// host.node(address)->inputBit(n) and 
+// host.node(address)->setOutputBit(n, [0,1])
 
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
 //   D7 - RX    CMRI RS485 receive
@@ -36,15 +34,16 @@
 //   D4 - SDA   I2C (optional for the OLED status panel)
 //   D5 - SCL   I2C (optional for the OLED status panel)
 //
-// Wiring: T± on the Host routes to the Node's R± and
+// RS485 bus Wiring: 
+//         T± on the Host routes to the Node's R± and
 //         R± on the Host routes to the Node's T±
 //
-//
-// Two nodes are configured: UA 30 and UA 31.  If you only have one
-// node, things still work - one offline node does not stall another.
+// Two nodes are referenced by this sketch: UA 30 and UA 31, with all the examples
+// using node 30.  If you only have one node, things still work - offline nodes
+// do not stall the host.
 //
 // We use the OLED (SSD1306 128x64 @ 0x3C) to show health and status info
-// This is simply an example, you can use the display for any purpose.
+// as an example, you can use the display for any purpose.
 
 #include <Arduino.h>
 #include "CMRInet.h"                 // CMRIHost, RemoteNodeHandle, SerialCMRITransport
@@ -78,15 +77,16 @@ constexpr int     kCMRI_BAUD = 28800;
 //   1. A walking one steps through all 8 bits of one byte,
 //      one step per second, looping. If the LEDs light up in sequence,
 //      the full poll/T/R path works.
-//   2. An output toggles on each rising edge of an input. This shows
+//   2. A fast bit walker, one step per 100ms
+//   3. An output toggle on each rising edge of an input. This shows
 //      the input side: read a pushbutton or block detector, act on it.
 //
-//   Expand these to control your own layout — drive turnouts, signals,
+//   Expand these to control your own test harness — drive turnouts, signals,
 //   panel lamps from the output bits, and react to input edges from
 //   block detectors, pushbuttons, and turnout feedback.
 //
-// On the cpNode-Xiao, which has no onboard I/O, bytes 0 and 1 are always 0
-// on input and ignored on output. IO expander I/O starts at byte 2.
+// On the cpNode-Xiao, which has no onboard I/O, bytes 0 and 1 are currently
+// 0 on input and ignored on output. IO expander I/O starts at byte 2.
 //
 // Outputs are active-low by default in the cpNode sketch, so a looped
 // output reads back inverted (out 1 => in 0).
@@ -97,7 +97,9 @@ constexpr int     kCMRI_BAUD = 28800;
 // 7 input bytes).
 
 constexpr uint32_t kBitwalkPeriodMs = 1000;  // one step per second
-constexpr size_t   kBitwalkByte     = 5;      // the byte to walk
+constexpr size_t   kBitwalkByte     = 5;      // the byte to slow walk
+constexpr uint32_t kFastBitwalkPeriodMs = 250;  // faster
+constexpr size_t   kFastBitwalkByte = 3;      // the byte to fast walk
 
 // Input toggle demo: toggle this output on each rising edge of the trigger.
 constexpr size_t kTriggerInBit = bitOf(6, 0);  // last IOX port B, 
@@ -121,6 +123,8 @@ constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
 // advanced.
 uint8_t  bitwalkStep  = 0;
 uint32_t lastBitwalkMs = 0;
+uint8_t  fastBitwalkStep  = 0;
+uint32_t lastFastBitwalkMs = 0;
 
 // Input-toggle state. RemoteNodeHandle reports the current input value
 // only; the sketch keeps the previous value to detect a rising edge.
@@ -261,7 +265,7 @@ void loop() {
   if (node != nullptr &&
       node->state() == CMRInet::RemoteNodeState::kOnline) {
     // Bitwalk: every kBitwalkPeriodMs, set one bit of byte kBitwalkByte,
-    // clearing the rest. The lit bit advances through 0..7 and loops.
+    // clearing the rest. The unlit bit advances through 0..7 and loops.
     if (now - lastBitwalkMs >= kBitwalkPeriodMs) {
       node->setOutputBit(bitOf(kBitwalkByte, bitwalkStep), true);
       if (bitwalkStep > 0) {
@@ -272,6 +276,19 @@ void loop() {
       }
       bitwalkStep = (bitwalkStep + 1) % 8;
       lastBitwalkMs = now;
+    }
+    // Fast Bitwalk: every kFastBitwalkPeriodMs, clear one bit of byte kFastBitwalkByte,
+    // setting the rest. The lit bit advances through 0..7 and loops.
+    if (now - lastFastBitwalkMs >= kFastBitwalkPeriodMs) {
+      node->setOutputBit(bitOf(kFastBitwalkByte, fastBitwalkStep), false);
+      if (fastBitwalkStep > 0) {
+        node->setOutputBit(bitOf(kFastBitwalkByte, fastBitwalkStep - 1), true);
+      } else if (lastFastBitwalkMs != 0) {
+        // Wrap from step 0: clear bit 7 from the previous cycle.
+        node->setOutputBit(bitOf(kFastBitwalkByte, 7), true);
+      }
+      fastBitwalkStep = (fastBitwalkStep + 1) % 8;
+      lastFastBitwalkMs = now;
     }
     // Toggle an output on each rising edge of an input.
     const bool in0 = node->inputBit(kTriggerInBit);
