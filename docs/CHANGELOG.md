@@ -5,23 +5,38 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
-- SimpleHost OLED diagnostics, first increment (issue #11): the status
-  panel now shows a host-level polling-rate line ("XX.Xc/s") and one
-  row per node with state, last-turnaround latency (right-justified
-  "XXXms"), and a rolling 5-second recent-error count (right-justified
-  "XXerr"), all in fixed-width fields so columns align vertically. No
-  new library API surface — all values are read from today's public
-  `CMRIHost::statistics()` and `RemoteNodeHandle::statistics()`.
-  `src/SimpleHostMetrics.h` is a new pure, platform-neutral helper
-  (rolling event window, rolling rate, fixed-width latency formatter)
-  shared between the example sketch and the desktop test suite; 5 new
-  Unity tests (`tests/test_host_display_metrics.cpp`); 153 total
-  passing. The polling rate is smoothed over a 10 s window (not 1 s) so
-  it is stable enough to read at a glance on a 150 ms redraw cadence;
-  the per-node backoff ladder (250 ms → 32 s) is deferred to a later
+- Host OLED diagnostics, shared across both host sketches (issue #11):
+  `src/SimpleHostMetrics.h` gains a `HostStatusPanel` class that owns
+  the rolling metric state (polling rate, per-node error windows) and
+  formats the header and per-node row strings. Both `SimpleHost.ino`
+  and `XiaoHostTracer.ino` use it — the display logic cannot drift
+  between the two sketches. The header line alternates between
+  cycles/sec ("XX.Xc/s") and ms/cycle ("XXXms") every 5 s, smoothed
+  over a 10 s window; a stalled engine shows "---ms". Per-node rows
+  show state, right-justified last-turnaround latency ("XXXms"), and a
+  rolling 5-second recent-error count ("XXerr"). No new library API
+  surface — all values are read from today's public `CMRIHost::statistics()`
+  and `RemoteNodeHandle::statistics()`. `XiaoHostTracer` gains the
+  SSD1306 OLED it previously lacked (display was #11). 11 new Unity
+  tests (`tests/test_host_display_metrics.cpp`); 159 total passing.
+  The per-node backoff ladder (250 ms → 32 s) is deferred to a later
   increment that needs a `RemoteNodeHandle` accessor for `pollBackoffMs_`.
-  Hardware-verified on the cpNode-Xiao bench: bus stays healthy with the
-  new display code running.
+- `CONTEXT.md` — project glossary defining Engine, Strategy, Shell, and
+  Vocabulary precisely, so the word "engine" does not drift again. The
+  key sharpening: a component that only observes or drives an engine is
+  not an engine, even when it holds a reference to one.
+
+### Changed
+- `CMRITracerEngine` renamed to `TracerShell` (D1 correctness fix): the
+  class was misnamed — it does not implement the image contract (not an
+  Engine) and it speaks a private C&C vocabulary, not the CMRInet
+  protocol (the CMRI qualifier was wrong). Renamed to `TracerShell` —
+  a command-and-control shell wrapping an engine, not an engine itself.
+  Mechanical rename across all three call sites (`tests/test_tracer.cpp`,
+  `extras/desktop/cmri_tracer.cpp` + `Makefile`,
+  `examples/XiaoHostTracer/XiaoHostTracer.ino`). Also fixes a
+  pre-existing undeclared-identifier bug in `cmri_tracer.cpp` (referenced
+  a `node` that was never declared).
 - XiaoSniffer CDC throughput (issue #45): the sniffer was silently
   dropping ~25% of frames at high bus rates (>50 Hz) because the
   per-frame JSON line was too long for the CDC ring buffer.
