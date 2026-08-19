@@ -179,7 +179,11 @@ class HostStatusPanel {
   /// A stalled engine (no polls in the window) shows "---ms".
   void headerText(char* buf, size_t len, uint32_t nowMs) const {
     if ((nowMs / kAltPeriodMs) % 2 == 0) {
-      snprintf(buf, len, "%.1fc/s", pollRate_.cyclesPerSecondAt(nowMs));
+      // Integer c/s (rounded, not one-decimal) to cut visual jitter: a
+      // smoothed 10 s rate still wobbles in the tenths, and the eye reads
+      // a stable whole number far more easily.
+      const float cps = pollRate_.cyclesPerSecondAt(nowMs);
+      snprintf(buf, len, "%uc/s", static_cast<unsigned>(cps + 0.5f));
     } else {
       const uint32_t interval = pollRate_.intervalMsAt(nowMs);
       if (interval == 0) {
