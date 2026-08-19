@@ -70,6 +70,34 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
 - USB port identity. Multiple Xiaos enumerate as shuffling /dev/cu.usbmodem* names. Deferred with the port registry (software notes); until then, plug in one board at a time or check serial numbers with `arduino-cli board list`.
 - TXEN edge timing proof. The passive tap catches most disputes; a logic analyzer is the deluxe option if turnaround timing itself is ever in question.
 
+## Flashing the cpNode-Xiao from the command line
+The cpNode-Xiao board is a Seeed XIAO ESP32-C6. The arduino-cli FQBN is `esp32:esp32:XIAO_ESP32C6`. The CMRInet library lives outside the default Arduino libraries directory, so compile passes it with `--library`. The Adafruit GFX, SSD1306, and BusIO libraries are required for the sketches that use the OLED (SimpleHost, XiaoSniffer).
+
+The library path on this bench is `/Users/jplocher/Dropbox/Arduino/libraries`. Substitute the local path where the CMRInet and Adafruit libraries live.
+
+Compile a sketch to a known build directory:
+```shell
+arduino-cli compile \
+  --fqbn esp32:esp32:XIAO_ESP32C6 \
+  --library /Users/jplocher/Dropbox/Arduino/libraries/CMRInet \
+  --library /Users/jplocher/Dropbox/Arduino/libraries/Adafruit_GFX_Library \
+  --library /Users/jplocher/Dropbox/Arduino/libraries/Adafruit_SSD1306 \
+  --library /Users/jplocher/Dropbox/Arduino/libraries/Adafruit_BusIO \
+  --build-path /tmp/<sketch>_build \
+  examples/<Sketch>/<Sketch>.ino
+```
+
+`arduino-cli upload` does not take a `--library` flag. Upload the compiled binary from the build directory with `--input-dir`:
+```shell
+arduino-cli upload \
+  -p /dev/cu.usbmodem<NNNN> \
+  --fqbn esp32:esp32:XIAO_ESP32C6 \
+  --input-dir /tmp/<sketch>_build \
+  examples/<Sketch>/<Sketch>.ino
+```
+
+Replace `/dev/cu.usbmodem<NNNN>` with the target board port from `arduino-cli board list`. All three Xiaos enumerate the same FQBN, so identify a board by behavior, not by the port name: the sniffers emit `"image":"xiao_sniffer"` stats every 5 s, the tracer answers the `status` verb, and SimpleHost stays silent except on a reject.
+
 ## Open setup assumptions (to challenge)
 - One bus segment, short pair, bench distances only. Nothing here addresses layout-scale wiring runs.
 - All power over USB from the Mac. No isolated supplies, no ground-loop consideration between adapter and boards.

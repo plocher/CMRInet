@@ -1,0 +1,3 @@
+# bench probe venv — recreated by setup.sh
+.venv/
+__pycache__/
