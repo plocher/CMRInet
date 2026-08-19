@@ -47,14 +47,14 @@ static void test_error_window_returns_zero_when_quiet(void) {
 static void test_poll_rate_computes_cycles_per_second(void) {
   PollRate r;
   r.reset(0);
-  // Spread polls across the rate window at roughly 15/sec. The window is
-  // tens of seconds long (see kWindowMs), so the rate is smooth rather than
-  // flickering on every redraw; assert within a tolerance that absorbs the
-  // window-boundary effect.
-  for (uint32_t t = 10; t < PollRate::kWindowMs; t += 66) {
-    r.onPoll(t);
+  // Sample at 1 s intervals with the cumulative poll count increasing
+  // by 15 each second -> 15.0 c/s. The rate is computed from the delta
+  // of the cumulative count over the delta of time, so it is correct at
+  // any sampling cadence (the sketch samples at 150 ms, not per-poll).
+  for (uint32_t t = 0; t < PollRate::kWindowMs; t += 1000) {
+    r.sample(t, (t / 1000) * 15);
   }
-  const float cps = r.cyclesPerSecondAt(PollRate::kWindowMs + 10);
+  const float cps = r.cyclesPerSecondAt(PollRate::kWindowMs - 1);
   TEST_ASSERT_FLOAT_WITHIN(1.0f, 15.0f, cps);
 }
 
@@ -67,9 +67,10 @@ static void test_poll_rate_zero_when_no_polls(void) {
 static void test_poll_rate_interval_is_inverse_of_rate(void) {
   PollRate r;
   r.reset(0);
-  // 100 polls evenly across the 10 s window -> ~10/sec -> ~100 ms interval.
-  for (uint32_t t = 0; t < PollRate::kWindowMs; t += 100) {
-    r.onPoll(t);
+  // 10 polls/sec -> 100 ms interval. Sample at 1 s intervals with
+  // cumulative count increasing by 10 each second.
+  for (uint32_t t = 0; t < PollRate::kWindowMs; t += 1000) {
+    r.sample(t, (t / 1000) * 10);
   }
   const uint32_t interval = r.intervalMsAt(PollRate::kWindowMs - 1);
   TEST_ASSERT_EQUAL_UINT32(100, interval);
