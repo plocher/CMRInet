@@ -16,6 +16,7 @@ void setUp(void) {}
 void tearDown(void) {}
 
 using CMRInet::examples::ErrorWindow;
+using CMRInet::examples::HostStatusPanel;
 using CMRInet::examples::PollRate;
 using CMRInet::examples::latencyText;
 
@@ -63,6 +64,23 @@ static void test_poll_rate_zero_when_no_polls(void) {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, r.cyclesPerSecondAt(5000));
 }
 
+static void test_poll_rate_interval_is_inverse_of_rate(void) {
+  PollRate r;
+  r.reset(0);
+  // 100 polls evenly across the 10 s window -> ~10/sec -> ~100 ms interval.
+  for (uint32_t t = 0; t < PollRate::kWindowMs; t += 100) {
+    r.onPoll(t);
+  }
+  const uint32_t interval = r.intervalMsAt(PollRate::kWindowMs - 1);
+  TEST_ASSERT_EQUAL_UINT32(100, interval);
+}
+
+static void test_poll_rate_interval_zero_when_stalled(void) {
+  PollRate r;
+  r.reset(0);
+  TEST_ASSERT_EQUAL_UINT32(0, r.intervalMsAt(5000));
+}
+
 // ----------------------------------------------------------- latency text
 
 static void test_latency_text_fixed_width_right_justified(void) {
@@ -75,6 +93,68 @@ static void test_latency_text_fixed_width_right_justified(void) {
   TEST_ASSERT_EQUAL_STRING("1200ms", buf);
 }
 
+// ------------------------------------------------------- HostStatusPanel
+
+// The header alternates between cycles/sec and ms/cycle every 5 s.
+static void test_panel_header_alternates_rate_then_interval(void) {
+  HostStatusPanel p;
+  p.reset();
+  // Feed 100 polls across 10 s so both views have a real value.
+  uint32_t polls = 0;
+  for (uint32_t t = 0; t < 10000; t += 100) {
+    ++polls;
+    p.sample(t, polls, nullptr, 0);
+  }
+  char buf[16];
+  // t=4999 is in the first 5 s window -> rate view (c/s)
+  p.headerText(buf, sizeof(buf), 4999);
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "c/s") != nullptr,
+                           "first 5 s window should show c/s");
+  // t=5000 is in the second 5 s window -> interval view (ms)
+  p.headerText(buf, sizeof(buf), 5000);
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "ms") != nullptr && strstr(buf, "c/s") == nullptr,
+                           "second 5 s window should show ms, not c/s");
+  // t=10000 wraps back to rate view
+  p.headerText(buf, sizeof(buf), 10000);
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "c/s") != nullptr,
+                           "third 5 s window should show c/s again");
+}
+
+static void test_panel_header_shows_stalled_when_no_polls(void) {
+  HostStatusPanel p;
+  p.reset();
+  char buf[16];
+  // No polls sampled; interval view (second 5 s window) should show the
+  // stalled sentinel.
+  p.headerText(buf, sizeof(buf), 5000);
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "---") != nullptr,
+                           "stalled panel should show --- sentinel");
+}
+
+static void test_panel_node_row_formats_state_latency_errors(void) {
+  HostStatusPanel p;
+  p.reset();
+  // One node, no errors yet.
+  uint32_t errs[] = {0};
+  p.sample(0, 0, errs, 1);
+  char buf[24];
+  p.nodeRowText(buf, sizeof(buf), 100, 0, 30, "ON ", 6);
+  // Expected: "UA30:ON     6ms  0err"
+  TEST_ASSERT_EQUAL_STRING("UA30:ON     6ms  0err", buf);
+}
+
+static void test_panel_node_row_right_justifies_columns(void) {
+  HostStatusPanel p;
+  p.reset();
+  uint32_t errs[] = {0};
+  p.sample(0, 0, errs, 1);
+  char buf[24];
+  // Large latency and error count — both should be right-justified.
+  p.nodeRowText(buf, sizeof(buf), 100, 0, 31, "OFF", 273);
+  // Expected: "UA31:OFF  273ms  0err"  (still 0 errors, window just opened)
+  TEST_ASSERT_EQUAL_STRING("UA31:OFF  273ms  0err", buf);
+}
+
 // ------------------------------------------------------------------- runner
 
 int main(void) {
@@ -83,6 +163,12 @@ int main(void) {
   RUN_TEST(test_error_window_returns_zero_when_quiet);
   RUN_TEST(test_poll_rate_computes_cycles_per_second);
   RUN_TEST(test_poll_rate_zero_when_no_polls);
+  RUN_TEST(test_poll_rate_interval_is_inverse_of_rate);
+  RUN_TEST(test_poll_rate_interval_zero_when_stalled);
   RUN_TEST(test_latency_text_fixed_width_right_justified);
+  RUN_TEST(test_panel_header_alternates_rate_then_interval);
+  RUN_TEST(test_panel_header_shows_stalled_when_no_polls);
+  RUN_TEST(test_panel_node_row_formats_state_latency_errors);
+  RUN_TEST(test_panel_node_row_right_justifies_columns);
   return UNITY_END();
 }

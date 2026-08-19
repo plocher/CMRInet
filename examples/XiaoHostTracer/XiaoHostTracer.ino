@@ -12,9 +12,10 @@
 // pair, R± on the reply pair. The Host/Node inversion is entirely in
 // the crossover cable — this pinout is identical to a node's.
 //
-// No OLED, no OTA, no WiFi in this image (display is #11): stage 2
-// validates TXEN and real-wire timing on a chip whose radio shares
-// the die, so anomalies must be attributable to the wire.
+// No OTA, no WiFi in this image. The OLED diagnostic display was
+// added by #11: the same shared HostStatusPanel the SimpleHost example
+// uses, showing polling cadence (alternating c/s ↔ ms/cycle), per-node
+// state, last-turnaround latency, and a rolling recent-error count.
 //
 // Inter-byte timeout: 50 ms tolerant override (stage-2 bench finding,
 // wire-tap verified). The decoder measures gaps at tick granularity,
@@ -36,6 +37,33 @@
 #include "testbed/TracerShell.h"
 
 #include "Esp32UartCMRISerialPort.h"
+
+// ---- OLED diagnostic display (#11)
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "SimpleHostMetrics.h"          // shared HostStatusPanel
+
+constexpr int      kScreenW       = 128;
+constexpr int      kScreenH       = 64;
+constexpr int      kScreenAddr    = 0x3C;
+constexpr uint32_t kDisplayRefreshMs = 150;
+
+Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+bool oledOk = false;
+uint32_t lastDisplayMs = 0;
+CMRInet::examples::HostStatusPanel panel;
+
+/// Two-letter state tag for the OLED line.
+const char* stateTag(CMRInet::RemoteNodeState s) {
+  switch (s) {
+    case CMRInet::RemoteNodeState::kOnline:        return "ON ";
+    case CMRInet::RemoteNodeState::kStale:         return "OLD";
+    case CMRInet::RemoteNodeState::kOffline:       return "OFF";
+    case CMRInet::RemoteNodeState::kUninitialized: return "---";
+  }
+  return "??";
+}
 
 // Build-time knobs, overridable from a CLI build — e.g. the wrong-UA
 // negative test:
@@ -117,6 +145,40 @@ bool readVerb(char* out, size_t len) {
 
 }  // namespace
 
+/// Draw the host status panel (shared HostStatusPanel, same layout as
+/// SimpleHost): header with alternating cadence, one per-node row with
+/// state / latency / recent errors. Defined after the anonymous
+/// namespace so it can see host, node, and TRACER_ADDRESS.
+void drawHostStatus() {
+  if (!oledOk) return;
+  const uint32_t now = millis();
+  const uint32_t pollsSent = host.statistics().pollsSent;
+  uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
+  panel.sample(now, pollsSent, nodeErrs, 1);
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.print(F("TRC"));
+  display.setTextSize(1);
+  char header[16];
+  panel.headerText(header, sizeof(header), now);
+  display.setCursor(60, 4);
+  display.print(header);
+
+  const char* tag = (node != nullptr) ? stateTag(node->state()) : "---";
+  const uint32_t latMs = (node != nullptr)
+      ? node->statistics().lastTurnaroundMs : 0;
+  char row[24];
+  panel.nodeRowText(row, sizeof(row), now, 0,
+                    TRACER_ADDRESS, tag, latMs);
+  display.setTextSize(1);
+  display.setCursor(0, 20);
+  display.print(row);
+  display.display();
+}
+
 void setup() {
   Serial.begin(115200);  // USB CDC: the command-and-control stream
   // R&D image: wait for the C&C stream so the epoch line — and every
@@ -130,6 +192,13 @@ void setup() {
   Serial1.begin(TRACER_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
   // Tick-gap tolerance; see the header comment. Survives begin().
   transport.setInterByteTimeoutMs(TRACER_INTER_BYTE_TIMEOUT_MS);
+
+  // OLED diagnostic display (#11).
+  Wire.begin(D4 /* SDA */, D5 /* SCL */);
+  oledOk = display.begin(SSD1306_SWITCHCAPVCC, kScreenAddr);
+  if (oledOk) {
+    display.dim(true);
+  }
 
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
@@ -172,5 +241,11 @@ void loop() {
       engine.emitLine("final");
       finished = true;  // reset the board to run again
     }
+  }
+
+  // Redraw the OLED on a timer.
+  if (nowMs - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0) {
+    drawHostStatus();
+    lastDisplayMs = nowMs;
   }
 }
