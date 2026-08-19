@@ -183,10 +183,30 @@ void setup() {
   Serial.begin(115200);  // USB CDC: the command-and-control stream
   // R&D image: wait for the C&C stream so the epoch line — and every
   // line after it — is captured. Bench order: open the port first,
-  // then (re)power the board.
-  while (!Serial) {
+  // then (re)power the board. But bound the wait at 3 s so a headless
+  // board (no terminal attached, as during flash_and_probe.sh which
+  // does not open the tracer's CDC port) still boots and drives the
+  // OLED / polls the bus without hanging setup(). On the Xiao ESP32-C6,
+  // `Serial` is native USB CDC and only reads true once a host asserts
+  // DTR/RTS; without a bound the wait parks here forever and loop()
+  // never runs (issue #46).
+  const uint32_t kSerialWaitMs = 3000;
+  const uint32_t serialWaitStart = millis();
+  while (!Serial && (millis() - serialWaitStart) < kSerialWaitMs) {
     delay(10);
   }
+  // Non-blocking CDC writes: with the default TX timeout, each
+  // Serial.write() stalls when a cable is plugged in but no host has
+  // the port open (DTR not asserted) — the ring buffer fills and nobody
+  // drains it. At many packets/s that starves loop() and the OLED
+  // freezes. setTxTimeoutMs(0) makes writes discard-and-return when no
+  // host is reading instead of blocking (Espressif's HWCDC workaround;
+  // same pattern as the sniffer sketch). A larger TX buffer reduces
+  // drop rate when a host IS reading but slowly (issue #46).
+  Serial.setTxTimeoutMs(0);
+#if defined(ARDUINO_ARCH_ESP32)
+  Serial.setRxBufferSize(1024);
+#endif
 
   // The CMRI wire: 28800 8N2 on the MAX3491 UART pins.
   Serial1.begin(TRACER_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
