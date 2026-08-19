@@ -52,21 +52,28 @@ class ErrorWindow {
   size_t count_ = 0;
 };
 
-/// A rolling count-per-second over a fixed window, same ring-buffer shape
-/// as ErrorWindow. The window is tens of seconds long so the displayed
-/// rate is smooth and readable at a glance on a 150 ms redraw cadence --
-/// not flickering with every transient -- while a genuine stall still
-/// shows up as a declining number within a few seconds. Capacity is sized
-/// for the bench's ~55 Hz cadence over the window with comfortable margin.
+/// A rolling count-per-second computed from *cumulative* counter samples,
+/// not per-event timestamps. The panel is sampled at display redraw
+/// cadence (150 ms), not at each poll, so recording one timestamp per
+/// sample would undercount polls by the redraw-to-poll ratio. Instead,
+/// each sample records (nowMs, cumulativePolls); the rate is the delta
+/// of the cumulative count over the delta of time across the window.
+/// Correct at any sampling cadence, and handles bursts (many polls
+/// between samples) without losing them.
 class PollRate {
  public:
-  static constexpr size_t kCapacity = 768;
+  static constexpr size_t kCapacity = 128;  // 128 samples * 150 ms ≈ 19 s
   static constexpr uint32_t kWindowMs = 10000;
 
   void reset(uint32_t /*nowMs*/) { head_ = 0; count_ = 0; }
 
-  void onPoll(uint32_t nowMs) {
-    slots_[(head_ + count_) % kCapacity] = nowMs;
+  /// Record a cumulative-counter sample at `nowMs`. `cumulativePolls` is
+  /// CMRIHost::statistics().pollsSent at this instant. Multiple polls
+  /// that landed between samples are captured by the count delta, not
+  /// lost.
+  void sample(uint32_t nowMs, uint32_t cumulativePolls) {
+    slots_[(head_ + count_) % kCapacity].ms = nowMs;
+    slots_[(head_ + count_) % kCapacity].polls = cumulativePolls;
     if (count_ == kCapacity) {
       head_ = (head_ + 1) % kCapacity;
     } else {
@@ -74,36 +81,42 @@ class PollRate {
     }
   }
 
-  /// Polls per second, evaluated at `nowMs` over the window. The window
-  /// is half-open, `(nowMs - kWindowMs, nowMs]`: an event exactly
-  /// kWindowMs old does not count toward the current window, which keeps
-  /// the rate deterministic for a caller sampling at exact window
-  /// boundaries.
+  /// Polls per second, evaluated at `nowMs` over the window. Finds the
+  /// oldest sample within `(nowMs - kWindowMs, nowMs]` and computes
+  /// (polls_now - polls_then) / ((nowMs - then) / 1000). Returns 0 when
+  /// fewer than two samples exist or the window has no span.
   float cyclesPerSecondAt(uint32_t nowMs) const {
-    return static_cast<float>(countInWindow_(nowMs)) * (1000.0f / kWindowMs);
+    const Sample* oldest = nullptr;
+    const Sample* newest = nullptr;
+    for (size_t i = 0; i < count_; ++i) {
+      const Sample& s = slots_[(head_ + i) % kCapacity];
+      if (nowMs >= s.ms && (nowMs - s.ms) < kWindowMs) {
+        if (oldest == nullptr) oldest = &s;
+        newest = &s;
+      }
+    }
+    if (oldest == nullptr || newest == nullptr) return 0.0f;
+    const uint32_t dtMs = newest->ms - oldest->ms;
+    if (dtMs == 0) return 0.0f;
+    const uint32_t dp = newest->polls - oldest->polls;
+    return static_cast<float>(dp) * 1000.0f / static_cast<float>(dtMs);
   }
 
-  /// Average polling interval in ms over the window: kWindowMs divided by
-  /// the count of polls that landed in it. Returns 0 when no polls landed
-  /// (a stalled engine); the caller renders a sentinel.
+  /// Average polling interval in ms over the window: the inverse of the
+  /// rate, computed from the same sample span. Returns 0 when stalled.
   uint32_t intervalMsAt(uint32_t nowMs) const {
-    const uint32_t n = countInWindow_(nowMs);
-    return (n == 0) ? 0u : kWindowMs / n;
+    const float cps = cyclesPerSecondAt(nowMs);
+    if (cps <= 0.0f) return 0u;
+    return static_cast<uint32_t>(1000.0f / cps + 0.5f);
   }
 
  private:
-  uint32_t countInWindow_(uint32_t nowMs) const {
-    uint32_t n = 0;
-    for (size_t i = 0; i < count_; ++i) {
-      const uint32_t t = slots_[(head_ + i) % kCapacity];
-      if (nowMs >= t && (nowMs - t) < kWindowMs) {
-        ++n;
-      }
-    }
-    return n;
-  }
+  struct Sample {
+    uint32_t ms = 0;
+    uint32_t polls = 0;
+  };
 
-  uint32_t slots_[kCapacity] = {};
+  Sample slots_[kCapacity] = {};
   size_t head_ = 0;
   size_t count_ = 0;
 };
@@ -141,7 +154,6 @@ class HostStatusPanel {
   void reset() {
     pollRate_.reset(0);
     for (size_t i = 0; i < kMaxNodes; ++i) nodeErrors_[i].reset();
-    prevPolls_ = 0;
     for (size_t i = 0; i < kMaxNodes; ++i) prevNodeErrors_[i] = 0;
   }
 
@@ -151,10 +163,7 @@ class HostStatusPanel {
   /// up to `nodeCount`. The panel detects deltas and records timestamps.
   void sample(uint32_t nowMs, uint32_t pollsSent,
               const uint32_t* nodeErrorCounts, size_t nodeCount) {
-    if (pollsSent != prevPolls_) {
-      pollRate_.onPoll(nowMs);
-      prevPolls_ = pollsSent;
-    }
+    pollRate_.sample(nowMs, pollsSent);
     for (size_t i = 0; i < nodeCount && i < kMaxNodes; ++i) {
       if (nodeErrorCounts == nullptr) continue;
       while (nodeErrorCounts[i] != prevNodeErrors_[i]) {
@@ -202,7 +211,6 @@ class HostStatusPanel {
  private:
   PollRate pollRate_;
   ErrorWindow nodeErrors_[kMaxNodes] = {};
-  uint32_t prevPolls_ = 0;
   uint32_t prevNodeErrors_[kMaxNodes] = {};
 };
 
