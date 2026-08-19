@@ -220,7 +220,7 @@ void drawStatus() {
   //   P:%8u R:%8u       fastest MTs, 8 digits each     (= 21 chars)
   //   T:%8u I:%8u       T (8) + I (8), I aligned to R  (= 21 chars)
   //   abort:%4u rst:%6u abort (4) + rst (6), rst to R  (= 21 chars)
-  //   last: %c ua=%3u   glance line — ua is uint8      (<=14 chars)
+  //   last: %c id=%3u    glance line — node id (wire UA - 'A')
   display.setTextSize(1);
   display.setCursor(0, 18);
   display.printf(F("frames: %10u"), tally.total);
@@ -234,8 +234,13 @@ void drawStatus() {
                  static_cast<unsigned>(s.framesRestarted));
   display.setCursor(0, 54);
   if (tally.total != 0) {
-    display.printf(F("last: %c ua=%3u"), tally.lastMt,
-                   static_cast<unsigned>(tally.lastUa));
+    // Show the node address (wire UA minus the 'A' offset = 65), not the
+    // raw wire byte — matches the convention every other display uses (the
+    // Host's event/trace listeners, the issue reports, the findings doc).
+    // The JSON trace stream still carries the raw wire UA for tooling.
+    const unsigned nodeId =
+        (tally.lastUa >= 'A') ? (tally.lastUa - 'A') : tally.lastUa;
+    display.printf(F("last: %c id=%3u"), tally.lastMt, nodeId);
   } else {
     display.print(F("last: -"));
   }
