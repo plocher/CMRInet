@@ -167,6 +167,10 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
     node.statistics_.consecutiveMisses = 0;
+    // The node answered at all, so it is not chronically offline; clear
+    // any poll backoff the same as a clean accept (map issue #41).
+    node.pollBackoffMs_ = 0;
+    node.pollBackoff_.disarm();
     emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
                RemoteNodeState::kUninitialized,
                RemoteNodeState::kUninitialized,
@@ -186,6 +190,10 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     node.statistics_.consecutiveMisses = 0;
     node.reinitArmed_ = false;  // a reply ends the miss-run, disarming the ladder
   }
+  // A reply proves the node is present and responsive: clear any poll
+  // backoff immediately rather than ramping it down (map issue #41).
+  node.pollBackoffMs_ = 0;
+  node.pollBackoff_.disarm();
   node.statistics_.lastTurnaroundMs = nowMs - gateArmedMs_;
   ++statistics_.repliesAccepted;
   emitEvent_(CMRIHostEventType::kReplyAccepted, node, nowMs);
@@ -208,7 +216,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       return;
     }
     paceGate_.disarm();
-    if (!selectNextNode_()) {
+    if (!selectNextNode_(nowMs)) {
       return;
     }
     // Choose this node's outbound: I before the first P (and after the
@@ -222,15 +230,22 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
         (nowMs - node.lastTxMs_) >= config_.transmitRefreshMs) {
       node.outputsDirty_ = true;
     }
+    // Anti-starvation (map issue #41): outputsDirty_ may preempt a poll
+    // with a transmit, but not indefinitely. pollDueBy_ is unarmed until
+    // the first real poll (so the mandatory I->T bootstrap, interop
+    // 2.3.1, is unaffected); once armed and due, force the poll through
+    // regardless of outputsDirty_.
+    const bool pollOverdue = node.pollDueBy_.due(nowMs);
     if (node.needsInit_) {
       buildInitPacket_(polledIndex_);
       outboundKind_ = OutboundKind::kInit;
-    } else if (node.outputsDirty_) {
+    } else if (node.outputsDirty_ && !pollOverdue) {
       buildTransmitPacket_(polledIndex_);
       outboundKind_ = OutboundKind::kTransmit;
     } else {
       buildPollPacket_(polledIndex_);
       outboundKind_ = OutboundKind::kPoll;
+      node.pollDueBy_.armIn(nowMs, config_.maxOutputPreemptMs);
     }
     phase_ = Phase::kSendOutbound;
   }
@@ -288,6 +303,20 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       ++node.statistics_.noReplies;
       ++node.statistics_.consecutiveMisses;
       emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
+      // Poll-retry backoff (map issue #41): back off this node's next
+      // poll attempt so a chronically offline node cannot tax the
+      // round-robin's baseline cycle time -- pollDueBy_ depends on that
+      // cycle time staying well under maxOutputPreemptMs. Doubles per
+      // consecutive miss, capped at maxPollBackoffMs; independent of
+      // missThreshold (that governs reported health / the reinit ladder,
+      // not scheduling).
+      node.pollBackoffMs_ = (node.pollBackoffMs_ == 0)
+                                ? config_.initialPollBackoffMs
+                                : node.pollBackoffMs_ * 2;
+      if (node.pollBackoffMs_ > config_.maxPollBackoffMs) {
+        node.pollBackoffMs_ = config_.maxPollBackoffMs;
+      }
+      node.pollBackoff_.armIn(nowMs, node.pollBackoffMs_);
       // More than missThreshold consecutive misses arms the re-init
       // ladder once per miss-run: the next slot re-sends I + full T and
       // has already invalidated cached inputs.
@@ -318,7 +347,27 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
 
 /// Pick the next enabled node in round-robin order. Returns false when
 /// no node is enabled.
-bool CMRIHost::selectNextNode_() {
+///
+/// Skips a node still serving its poll-retry backoff (map issue #41)
+/// unless every enabled node is currently backed off, in which case the
+/// backoff is bypassed so the engine never stalls (Design v1.1 D6:
+/// nothing here blocks or gives up on a silent Node).
+bool CMRIHost::selectNextNode_(uint32_t nowMs) {
+  for (size_t step = 0; step < nodeCount_; ++step) {
+    const size_t candidate = (cursor_ + step) % nodeCount_;
+    RemoteNodeHandle& node = nodes_[candidate];
+    if (!node.config_.enabled) {
+      continue;
+    }
+    if (node.pollBackoff_.armed() && !node.pollBackoff_.due(nowMs)) {
+      continue;  // still backed off; try the next enabled node first
+    }
+    polledIndex_ = candidate;
+    cursor_ = (candidate + 1) % nodeCount_;
+    return true;
+  }
+  // Every enabled node is currently backed off (or none is enabled).
+  // Fall back to plain round robin rather than stall.
   for (size_t step = 0; step < nodeCount_; ++step) {
     const size_t candidate = (cursor_ + step) % nodeCount_;
     if (nodes_[candidate].config_.enabled) {

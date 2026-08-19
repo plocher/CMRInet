@@ -4,6 +4,34 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Fixed
+- `CMRIHost` poll/transmit starvation (issue #41): `runSchedule_` could send
+  a full `T` in place of a due `P` indefinitely whenever a node's outputs
+  stayed dirty, so a node's own output-update cadence — or a resonance
+  with another node's reply-gate timeout sharing the round-robin — could
+  starve its poll/reply cycle completely (reply pair goes silent even
+  though the poll pair looks healthy). Reproduced and bisected on the
+  cpNode-Xiao two-board bench: confirmed independently by an RS-485
+  dongle, a second passive sniffer, the Node's own TXEN LED, and an
+  `onTrace` packet capture (zero `P` to the live node across the whole
+  window). New `CMRIHostConfig::maxOutputPreemptMs` (default 250 ms)
+  bounds how long a due poll may be deferred by a pending transmit before
+  the scheduler forces it through regardless of `outputsDirty_`. That
+  bound depends on the round-robin's healthy-node cycle time staying well
+  under the threshold, so a companion poll-retry backoff
+  (`initialPollBackoffMs`/`maxPollBackoffMs`, doubling per consecutive
+  miss up to a 32 s cap, cleared immediately on any accepted reply) keeps
+  a chronically offline node from taxing every pass at full priority —
+  without it, the anti-starvation bound alone inverts into the
+  mirror-image defect (transmit starvation). Both ship together. 3 new
+  Unity tests (`test_dirty_output_cannot_starve_poll_forever`,
+  `test_anti_starvation_does_not_starve_transmit`,
+  `test_poll_backoff_doubles_and_clears_on_reply`); 151 total passing.
+  Hardware re-verified on the same bench: `SimpleHost` (unmodified,
+  previously the reliable repro) now shows `HEALTHY` with hundreds of `R`
+  frames per 15 s window, confirmed A/B/A across three separate flashes.
+  See `docs/sniffer-reply-pair-findings.md` for the full diagnosis record.
+
 ### Added
 - `examples/SimpleHost/` — the front-door Host tutorial (issue #31):
   a behavior-only sketch a human copying this library starts from, not

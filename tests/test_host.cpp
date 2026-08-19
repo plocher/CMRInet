@@ -762,6 +762,196 @@ static void test_node_table_capacity_is_enforced(void) {
   TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
 }
 
+// --------------------------------------------------- anti-starvation (#41)
+
+// Reproduces the map issue #41 defect: a node whose outputs are marked
+// dirty on essentially every scheduling turn must still get a real P
+// within maxOutputPreemptMs, even sharing the rotation with a second,
+// permanently silent node whose 250 ms reply-gate timeout would otherwise
+// stretch the round-robin cycle into lockstep with the dirty cadence.
+static void test_dirty_output_cannot_starve_poll_forever(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  RemoteNodeConfig liveConfig;
+  liveConfig.inputBytes = 2;
+  liveConfig.outputBytes = 1;
+  RemoteNodeConfig deadConfig;
+  deadConfig.inputBytes = 0;
+  deadConfig.outputBytes = 0;
+  host.addRemoteNode(5, liveConfig);   // the live, output-heavy node
+  host.addRemoteNode(6, deadConfig);   // permanently silent, no script
+  RemoteNodeHandle* live = host.node(5);
+  TEST_ASSERT_NOT_NULL(live);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.begin());
+
+  // Prime both nodes past their I -> T preambles.
+  runUntil(host, 0, 1020);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }  // drain the preamble
+
+  // Node 5 always replies to a poll; node 6 never does (no script
+  // entry -> silent, exactly like an unconfigured phantom node).
+  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+                              makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+                              0, MockCMRITransport::kRepeatForever);
+
+  // Dirty node 5's output on (almost) every millisecond -- far faster
+  // than any real round-trip could keep up with, modeling the resonance
+  // between an example sketch's output-update timer and a stretched
+  // round-robin cycle.
+  uint32_t lastExchanges = live->statistics().exchanges;
+  uint32_t sinceLastExchangeMs = 0;
+  bool everExchanged = false;
+  for (uint32_t t = 1021; t <= 5000; ++t) {
+    live->setOutputBit(0, (t % 2) == 0);  // keep outputsDirty_ true forever
+    host.tick(t);
+    if (live->statistics().exchanges != lastExchanges) {
+      lastExchanges = live->statistics().exchanges;
+      sinceLastExchangeMs = 0;
+      everExchanged = true;
+    } else {
+      ++sinceLastExchangeMs;
+    }
+    // The anti-starvation bound guarantees a poll is forced within
+    // maxOutputPreemptMs of the last one; allow generous slack for the
+    // dead node's timeout/backoff and pacing overhead sharing the cycle.
+    TEST_ASSERT_TRUE_MESSAGE(sinceLastExchangeMs <= 1000,
+                             "node 5 went starved of real exchanges");
+  }
+  TEST_ASSERT_TRUE_MESSAGE(everExchanged,
+                           "node 5 never completed a single P/R exchange");
+  TEST_ASSERT_TRUE(live->statistics().exchanges > 1);
+}
+
+// The mirror-image failure: forcing a poll whenever it is "overdue" must
+// not itself starve legitimate output transmits once the round-robin's
+// baseline cycle time is kept short by backoff on the dead node.
+static void test_anti_starvation_does_not_starve_transmit(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  RemoteNodeConfig liveConfig;
+  liveConfig.inputBytes = 2;
+  liveConfig.outputBytes = 1;
+  RemoteNodeConfig deadConfig;
+  deadConfig.outputBytes = 0;
+  host.addRemoteNode(5, liveConfig);
+  host.addRemoteNode(6, deadConfig);  // permanently silent
+  RemoteNodeHandle* live = host.node(5);
+  TEST_ASSERT_NOT_NULL(live);
+  host.begin();
+  runUntil(host, 0, 1020);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }
+
+  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+                              makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+                              0, MockCMRITransport::kRepeatForever);
+
+  // Set one real output change and confirm it is delivered promptly
+  // (well inside the anti-starvation bound), even though node 6 keeps
+  // timing out and backing off in the same rotation.
+  live->setOutputBit(0, true);
+  bool sawTransmit = false;
+  for (uint32_t t = 1021; t <= 2000 && !sawTransmit; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt == 'T') {
+        sawTransmit = true;
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(sawTransmit,
+                           "a real output change never made it onto the wire");
+}
+
+// Poll backoff: a chronically missing node's poll attempts must thin
+// out over time (doubling backoff), and recovery must be prompt once it
+// starts answering. A lone-node rig can't observe this: with nothing
+// else to poll, selectNextNode_'s never-stall fallback always bypasses
+// backoff immediately (by design -- see its header comment), so a
+// second, genuinely-live node has to be in the rotation to make the
+// skip actually bite. That live node's replies are delivered by direct
+// injection (bypassing MockCMRITransport's single-head script queue,
+// see matchScript_), leaving the one script slot free for node 6's
+// silence-then-recover sequence.
+static void test_poll_backoff_doubles_and_clears_on_reply(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  RemoteNodeConfig liveConfig;   // node 5: always answered, below
+  RemoteNodeConfig deadConfig;   // node 6: scripted silence then reply
+  host.addRemoteNode(5, liveConfig);
+  host.addRemoteNode(6, deadConfig);
+  RemoteNodeHandle* dead = host.node(6);
+  TEST_ASSERT_NOT_NULL(dead);
+  host.begin();
+  runUntil(host, 0, 1020);  // both nodes past their I -> T preamble
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }
+
+  // Node 6 stays silent for a long run (self-answers never scripted
+  // here); node 5 is kept alive by injecting its reply the instant it
+  // is polled, every time, so it is always available as the
+  // non-backed-off alternative selectNextNode_ needs to actually skip
+  // node 6 rather than fall back to bypassing backoff.
+  uint32_t node6PollsEarly = 0, node6PollsLate = 0;
+  for (uint32_t t = 1021; t <= 4020; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+        transport.injectPacketAt(makePacket(5, 'R'), t);
+      } else if (sent.mt == 'P' && sent.ua == 6 + kUaOffset) {
+        // Equal-length windows (1000 ms each) with a gap between them,
+        // so a genuinely thinning rate shows up even though backoff
+        // needs time to ramp up -- comparing raw counts over unequal
+        // windows would not isolate the rate change.
+        if (t >= 1021 && t < 2021) {
+          ++node6PollsEarly;
+        } else if (t >= 3020 && t < 4020) {
+          ++node6PollsLate;
+        }
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(dead->statistics().noReplies >= 3);
+  // The doubling backoff must make later polls to node 6 markedly less
+  // frequent than early ones, while node 5's own cadence stays fast
+  // throughout (proving the rotation isn't just slow overall).
+  TEST_ASSERT_TRUE_MESSAGE(node6PollsLate < node6PollsEarly,
+                           "node 6 poll attempts did not thin out over time");
+
+  // Now let node 6 answer: backoff must clear immediately rather than
+  // waiting out whatever multi-second window it had reached.
+  transport.onSendReplyPacket(6 + kUaOffset, 'P', makePacket(6, 'R'), 0,
+                              MockCMRITransport::kRepeatForever);
+  const uint32_t exchangesBefore = dead->statistics().exchanges;
+  bool recovered = false;
+  for (uint32_t t = 4001; t <= 12000 && !recovered; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+        transport.injectPacketAt(makePacket(5, 'R'), t);
+      }
+    }
+    recovered = dead->statistics().exchanges > exchangesBefore;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(recovered, "node 6 did not recover after its backoff expired");
+
+  // Recovery clears the backoff outright rather than ramping it down:
+  // once online, node 6 gets polled again at ordinary (fast) cadence,
+  // not still throttled by its prior backoff.
+  const uint32_t exchangesAfterFirst = dead->statistics().exchanges;
+  for (uint32_t t = 12001; t <= 12300; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+        transport.injectPacketAt(makePacket(5, 'R'), t);
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(dead->statistics().exchanges > exchangesAfterFirst,
+                           "node 6 stayed throttled after recovery");
+}
+
 // ----------------------------------------------------------------- runner
 
 int main(void) {
@@ -804,5 +994,8 @@ int main(void) {
   RUN_TEST(test_null_listeners_are_harmless);
   RUN_TEST(test_add_remote_node_validation);
   RUN_TEST(test_node_table_capacity_is_enforced);
+  RUN_TEST(test_dirty_output_cannot_starve_poll_forever);
+  RUN_TEST(test_anti_starvation_does_not_starve_transmit);
+  RUN_TEST(test_poll_backoff_doubles_and_clears_on_reply);
   return UNITY_END();
 }

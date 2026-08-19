@@ -235,6 +235,20 @@ class RemoteNodeHandle {
   bool needsInit_ = true;       ///< engine owes this node an I (JMRI mustInit)
   bool reinitArmed_ = false;    ///< re-init ladder fired this miss-run
   uint32_t lastTxMs_ = 0;       ///< last T send time (refresh timer base)
+
+  // Anti-starvation (map issue #41): outputsDirty_ may preempt a poll with
+  // a transmit, but never indefinitely. pollDueBy_ is (re)armed for
+  // maxOutputPreemptMs every time a real poll is sent; once due, the
+  // scheduler forces the next poll through regardless of outputsDirty_.
+  Deadline pollDueBy_;
+
+  // Poll-retry backoff for a node with consecutive misses, so a
+  // chronically offline node cannot tax the round-robin's baseline cycle
+  // time -- pollDueBy_ above depends on that cycle time staying well
+  // under maxOutputPreemptMs. Doubles per consecutive miss up to
+  // maxPollBackoffMs; any accepted reply clears it immediately.
+  Deadline pollBackoff_;
+  uint32_t pollBackoffMs_ = 0;   ///< current backoff duration (0 = none yet)
 };
 
 }  // namespace CMRInet

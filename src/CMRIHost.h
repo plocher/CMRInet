@@ -80,6 +80,29 @@ struct CMRIHostConfig {
   // VALIDATION: Design v1.1 D9: T on change plus optional periodic
   //  refresh, off by default.
   uint32_t transmitRefreshMs = 0;
+
+  /// Anti-starvation bound (map issue #41): the longest a node's due poll
+  /// may be deferred in favor of a pending output transmit before the
+  /// scheduler forces the poll through instead, regardless of
+  /// outputsDirty_. Bounds input staleness to a fixed, human-factors-
+  /// relevant window (e.g. a button press), independent of output-update
+  /// cadence or how many other nodes share the round-robin. Relies on
+  /// the poll-retry backoff below keeping the round-robin's healthy-node
+  /// cycle time well under this value; without that, a chronically
+  /// offline node sharing the rotation can invert this into transmit
+  /// starvation instead of poll starvation.
+  uint32_t maxOutputPreemptMs = 250;
+
+  /// Poll-retry backoff for a node with consecutive misses: the first
+  /// miss backs its next poll attempt off by this many ms; each further
+  /// consecutive miss doubles the backoff, capped at maxPollBackoffMs.
+  /// Any accepted reply clears the backoff immediately -- recovery is
+  /// never throttled. Independent of missThreshold, which governs
+  /// reported health and the re-init ladder, not scheduling.
+  uint32_t initialPollBackoffMs = 250;
+
+  /// Upper bound for the poll-retry backoff above.
+  uint32_t maxPollBackoffMs = 32000;
 };
 
 /// What the Host engine is reporting through its event listener.
@@ -306,7 +329,7 @@ class CMRIHost {
 
   void drainReceive_(uint32_t nowMs);
   void runSchedule_(uint32_t nowMs);
-  bool selectNextNode_();
+  bool selectNextNode_(uint32_t nowMs);
   void buildInitPacket_(size_t nodeIndex);
   void buildTransmitPacket_(size_t nodeIndex);
   void buildPollPacket_(size_t nodeIndex);
