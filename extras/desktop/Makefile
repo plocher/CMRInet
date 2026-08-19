@@ -18,7 +18,7 @@ all: $(BUILD)/cmri_tracer
 
 $(BUILD)/cmri_tracer: cmri_tracer.cpp PosixCMRISerialPort.cpp \
                       PosixCMRISerialPort.h \
-                      ../../src/testbed/CMRITracerEngine.h $(LIB_SRCS)
+                      ../../src/testbed/TracerShell.h $(LIB_SRCS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) cmri_tracer.cpp PosixCMRISerialPort.cpp \
 	    $(LIB_SRCS) -o $@

@@ -1,14 +1,19 @@
-// CMRITracerEngine.h — the shared testbed command-and-control engine:
+// TracerShell.h — the shared testbed command-and-control shell:
 // plain verbs in, JSON-lines telemetry out, wrapped around CMRIHost
 // and its D7 listener seam.
 //
-// This header IS the stage-2 invariant "same engine, same listeners,
+// This header IS the stage-2 invariant "same shell, same listeners,
 // different main()" (map issue #21): the desktop tracer
 // (extras/desktop/cmri_tracer.cpp) and the Xiao Host R&D sketch
-// (examples/XiaoHostTracer) both wrap this engine, so a scenario that
+// (examples/XiaoHostTracer) both wrap this shell, so a scenario that
 // passes against one Host image passes against the other by
 // construction. Only the mains differ: option parsing, the clock
 // source, and the C&C byte stream.
+//
+// This is a Shell, not an Engine (see CONTEXT.md): it drives CMRIHost
+// and renders its observability seam, but it does not implement the
+// image contract. The name carries no CMRI qualifier — it speaks a
+// private C&C vocabulary, not the CMRInet protocol (D1).
 //
 // Testbed-only: nothing in the product library includes this header,
 // and it costs nothing in a sketch that never includes it (the D7
@@ -60,7 +65,7 @@ inline const char* eventName(CMRIHostEventType type) {
   return "unknown";
 }
 
-/// The command-and-control engine one tracer main() wraps: it owns
+/// The command-and-control shell one tracer main() wraps: it owns
 /// the telemetry line format, the seq counter, the quiesced flag, and
 /// the verb vocabulary (quiesce | resume | status | setbit <n> <0|1>
 /// | writeoutputs <hex> | forcetx | quit). It registers both D7
@@ -72,7 +77,7 @@ inline const char* eventName(CMRIHostEventType type) {
 /// configuration phase (it registers the D7 listeners, which
 /// host.begin() locks), then setNow()/handleVerb()/emitLine() at
 /// runtime. Nothing here allocates or blocks.
-class CMRITracerEngine {
+class TracerShell {
  public:
   /// Writes one completed telemetry line (no trailing newline) to the
   /// C&C stream. The writer appends the line terminator and flushes
@@ -86,11 +91,11 @@ class CMRITracerEngine {
     kQuit,     ///< end the loop; the main emits "final" on its way out
   };
 
-  /// Wire the engine to a configured-but-not-begun host. Registers
+  /// Wire the shell to a configured-but-not-begun host. Registers
   /// both D7 listeners (onEvent and onTrace), so it MUST run before
   /// host.begin() locks the configuration. `image` and `version` identify the wrapping
   /// main in every telemetry line; both strings must outlive the
-  /// engine.
+  /// shell.
   void bind(CMRIHost& host, SerialCMRITransport& transport,
             RemoteNodeHandle& node, const char* image, const char* version,
             LineWriter writeLine, void* writeContext) {
@@ -101,11 +106,11 @@ class CMRITracerEngine {
     version_ = version;
     writeLine_ = writeLine;
     writeContext_ = writeContext;
-    host.onEvent(&CMRITracerEngine::onHostEvent_, this);
-    host.onTrace(&CMRITracerEngine::onHostTrace_, this);
+    host.onEvent(&TracerShell::onHostEvent_, this);
+    host.onTrace(&TracerShell::onHostTrace_, this);
   }
 
-  /// Refresh the engine's clock. Call once per loop iteration, with
+  /// Refresh the shell's clock. Call once per loop iteration, with
   /// the same monotonic value handed to host.tick(), before verbs are
   /// dispatched.
   void setNow(uint32_t nowMs) { nowMs_ = nowMs; }
@@ -119,7 +124,7 @@ class CMRITracerEngine {
     emitLineAt_(nowMs_, "epoch", anchorKey, anchorValue, true);
   }
 
-  /// Emit one telemetry line at the engine's current clock. `event`
+  /// Emit one telemetry line at the shell's current clock. `event`
   /// names why the line exists; extraKey/extraValue append one
   /// event-specific string field.
   void emitLine(const char* event, const char* extraKey = nullptr,
@@ -182,7 +187,7 @@ class CMRITracerEngine {
   /// CMRIHost event listener: one telemetry line per engine event,
   /// stamped with the event's own tick time.
   static void onHostEvent_(void* context, const CMRIHostEvent& event) {
-    CMRITracerEngine& self = *static_cast<CMRITracerEngine*>(context);
+    TracerShell& self = *static_cast<TracerShell*>(context);
     if (event.type == CMRIHostEventType::kNodeStateChanged) {
       self.emitLineAt_(event.nowMs, eventName(event.type), "previousState",
                        stateName(event.previousState));
@@ -194,11 +199,11 @@ class CMRITracerEngine {
   /// CMRIHost trace listener: one telemetry line per packet the host
   /// hands to the transport (transmit == true: I, T, P) or the transport
   /// hands up (transmit == false: R, and any unsolicited frame). Fires
-  /// inside host.tick() at the engine's current clock, so I/T visibility
+  /// inside host.tick() at the shell's current clock, so I/T visibility
   /// lands in the stream beside the counters.
   static void onHostTrace_(void* context, bool transmit,
                            const CMRIPacket& packet) {
-    CMRITracerEngine& self = *static_cast<CMRITracerEngine*>(context);
+    TracerShell& self = *static_cast<TracerShell*>(context);
     self.emitTrace_(transmit, packet);
   }
 
