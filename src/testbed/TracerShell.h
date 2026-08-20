@@ -84,6 +84,9 @@ class TracerShell {
   /// as its stream requires.
   using LineWriter = void (*)(void* context, const char* line);
 
+  /// Callback to append additional JSON fields when emitLineAt_ fires.
+  using StatusExtender = void (*)(void* context, char* buffer, size_t remaining_capacity);
+
   /// What handleVerb() asks of the surrounding main loop.
   enum class VerbResult : uint8_t {
     kEmpty,    ///< blank input; nothing happened
@@ -108,6 +111,13 @@ class TracerShell {
     writeContext_ = writeContext;
     host.onEvent(&TracerShell::onHostEvent_, this);
     host.onTrace(&TracerShell::onHostTrace_, this);
+  }
+
+  /// Register an optional callback that can append additional JSON fields (e.g. ",\"generators\":{...}") 
+  /// to the end of any line emitted.
+  void setStatusExtender(StatusExtender extender, void* context = nullptr) {
+    statusExtender_ = extender;
+    statusExtenderContext_ = context;
   }
 
   /// Refresh the shell's clock. Call once per loop iteration, with
@@ -298,6 +308,17 @@ class TracerShell {
         }
       }
     }
+    
+    if (statusExtender_ != nullptr && (strcmp(event, "status") == 0)) {
+      size_t capacity = sizeof(line_) - written - 1; // reserve 1 for '}'
+      if (capacity > 0) {
+         char extBuf[256] = {0};
+         statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
+         int ext_len = snprintf(line_ + written, capacity, "%s", extBuf);
+         if (ext_len > 0) written += ext_len;
+      }
+    }
+
     snprintf(line_ + written, sizeof(line_) - written, "}");
     writeLine_(writeContext_, line_);
   }
@@ -376,6 +397,8 @@ class TracerShell {
   const char* version_ = "";
   LineWriter writeLine_ = nullptr;
   void* writeContext_ = nullptr;
+  StatusExtender statusExtender_ = nullptr;
+  void* statusExtenderContext_ = nullptr;
 
   uint32_t nowMs_ = 0;    ///< the main loop's injected clock
   uint32_t epochMs_ = 0;  ///< clock value at the epoch line; ts base

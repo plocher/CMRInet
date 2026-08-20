@@ -4,6 +4,9 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Fixed
+- Fixed a latent bug in `XiaoHostTracer` where the OLED display perpetually showed `---` and 0 for metrics because the `node` pointer was never initialized in `setup()` (issue #56).
+
 ### Added
 - Host OLED diagnostics, shared across both host sketches (issue #11):
   `src/SimpleHostMetrics.h` gains a `HostStatusPanel` class that owns

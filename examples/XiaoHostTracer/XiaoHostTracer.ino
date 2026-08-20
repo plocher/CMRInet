@@ -430,7 +430,8 @@ void setup() {
   host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
 
   if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
-    engine.bind(host, transport, *host.node(TRACER_ADDRESS), kImage, kVersion,
+    node = host.node(TRACER_ADDRESS);
+    engine.bind(host, transport, *node, kImage, kVersion,
                 writeCdcLine, nullptr);
     engine.setStatusExtender(emitGeneratorsStatus, nullptr);
   }
