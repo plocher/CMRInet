@@ -5,50 +5,40 @@ The canonical entry is authoritative: it names the issue, the defines
 that activate the probe in `RegressionHost.ino`, how to reproduce the
 symptom, and what a correct fix should look like.
 
-`extras/bench/probes/regressions/run.sh <issue-number>` compiles
-`RegressionHost` with the entry's defines, flashes the Host board,
-captures the CDC stream, and (if an analyzer for the issue exists)
-runs it against the capture.
+`extras/bench/probes/regressions/sweep_47.py` is the harness for #47.
+It drives the `XiaoHostTracer` sketch over USB CDC using capture-mode
+verbs (`run`, `dump`, `reset`, `enable stall`, etc.) instead of relying
+on compile-time configuration.
 
 ## Adding a new regression
 
-1. Add a `#if defined(...)` guard block in
-   `extras/bench/probes/RegressionHost/RegressionHost.ino` that
-   activates the desired probe behavior. Name the guard
-   `REGRESSION_<issue-number>_<short-slug>` so the source cross-references
-   the tracker.
-2. Add a case clause to `run.sh` mapping the issue number to the
-   `-D` defines the guard needs.
+1. Extend `examples/XiaoHostTracer/XiaoHostTracer.ino` if new generator
+   commands or trace behaviors are required.
+2. Write a Python harness (like `sweep_47.py`) that sets up the conditions,
+   triggers a `run`, captures the `dump`, and passes it to an analyzer.
 3. (Optional) Drop a `analyzers/<issue>_*.py` next to this file that
-   consumes the CDC capture and prints a PASS/FAIL summary.
+   consumes the captured block and prints a PASS/FAIL summary.
 4. Add a section here.
 
 ## #47 — Backoff-under-loop-stall
 
 - **Issue**: [plocher/CMRInet#47](https://github.com/plocher/CMRInet/issues/47)
 - **Status**: open
-- **Guard**: `REGRESSION_47_BLOCKING_INTERFERES_WITH_BACKOFF`
-- **Activate**: `-DDIAG_FAKE_STALL_MS=25 -DDIAG_FAKE_STALL_PERIOD_MS=150`
-- **Also useful**: `-DDIAG_TRACE` — adds a per-packet TX/RX trace to
-  USB CDC and makes CDC writes non-blocking. The analyzer below
-  requires this.
+- **Harness**: `sweep_47.py`
+- **Sketch**: `XiaoHostTracer`
+- **Commands**: `node add 30 7 7`, `node add 31 4 4`, `enable stall <ms> period <p> mode <m>`
 - **Analyzer**: `analyzers/47_gap_deltas.py`
 
 ### Reproduction
 
-Register two nodes in `nodeTable[]`: UA 30 with a real Node board
-replying, UA 31 phantom (no hardware). The `RegressionHost.ino`
-already has this configuration.
+The Python harness:
 
-Under the probe, the sketch:
-
-1. Suppresses the OLED draw entirely, so nothing about the display
-   path is a confounder.
-2. Injects `delay(DIAG_FAKE_STALL_MS)` every `DIAG_FAKE_STALL_PERIOD_MS`
-   in `loop()` — a plain, minimal, recurring blocking stall.
-3. Writes a splash to the OLED at boot with the exact `stall=` and
-   `period=` values, so a photograph of the board self-labels the
-   captured log.
+1. Connects to `XiaoHostTracer` and validates its boot line.
+2. Registers two nodes via runtime verbs: UA 30 (real node) and UA 31 (phantom).
+3. Sends `enable stall` to inject blocking/yielding stalls in `loop()`.
+4. Arms a capture using `run <secs>`. The sketch records `I` and `T` packets to a RAM ring buffer.
+5. Emits `dump` to retrieve the ring buffer contents, delineated by `BEGIN DUMP` and `END DUMP` markers.
+6. Feeds the dump to the analyzer.
 
 ### Expected vs observed
 
@@ -76,10 +66,9 @@ or triggered by any recurring block.
 
 ### Grid sweep
 
-`sweep_47.sh` (next to `run.sh`) sweeps the (stall_ms × stall_period_ms)
-grid: it recompiles and reflashes `RegressionHost` for every combination,
-captures the CDC trace, and runs the analyzer. Per-combo transcripts and
+`sweep_47.py` sweeps the (stall_ms × stall_period_ms) grid by sending
+C&C verbs to `XiaoHostTracer` over the CDC serial port. Per-combo
 raw captures land in `sweep_results/` with value-named files
-(`s${s}_p${p}.txt` / `.log`), and `sweep_results/summary.csv` records the
+(e.g. `s25_p150_yield.log`), and `sweep_results/summary.csv` records the
 verdict and gap statistics for the whole grid. Resumable (existing combos
-are skipped unless `--force`). Not an agent — run it yourself.
+are skipped). Not an agent — run it yourself.
