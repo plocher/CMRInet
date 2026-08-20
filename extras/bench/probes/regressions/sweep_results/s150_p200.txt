@@ -1,0 +1,54 @@
+>>> regression #47
+    defines : -DDIAG_FAKE_STALL_MS=150 -DDIAG_FAKE_STALL_PERIOD_MS=200 -DDIAG_TRACE
+    port    : /dev/cu.usbmodem282201
+    capture : /Users/jplocher/Dropbox/Arduino/libraries/CMRInet/extras/bench/probes/regressions/captures/47-s150_p200.log
+    secs    : 30
+>>> [1/4] compile RegressionHost
+Sketch uses 310340 bytes (23%) of program storage space. Maximum is 1310720 bytes.
+Global variables use 23256 bytes (7%) of dynamic memory, leaving 304424 bytes for local variables. Maximum is 327680 bytes.
+>>> [2/4] upload to /dev/cu.usbmodem282201
+Hard resetting via RTS pin...
+New upload port: /dev/cu.usbmodem282201 (serial)
+>>> [3/4] boot settle (6s), then capture 30s
+>>> [4/4] analyze
+    running: 47_gap_deltas.py
+phantom UA        : 96 (31 TX events)
+first / last t_ms : 7396 .. 36196
+gaps (ms), median : 805
+gaps (ms), min    : 800
+gaps (ms), max    : 1395
+gaps (ms), p90    : 1200
+
+gap sequence (ms):
+    0: 800
+    1: 805
+    2: 800
+    3: 800
+    4: 1195
+    5: 805
+    6: 800
+    7: 1195
+    8: 1205
+    9: 1200
+   10: 800
+   11: 800
+   12: 1195
+   13: 805
+   14: 1195
+   15: 1005
+   16: 800
+   17: 1200
+   18: 800
+   19: 1000
+   20: 1195
+   21: 1205
+   22: 800
+   23: 1000
+   24: 800
+   25: 800
+   26: 800
+   27: 800
+   28: 800
+   29: 1395
+
+FAIL: max gap 1395 ms < 8000 ms (backoff stuck; bug reproduced)

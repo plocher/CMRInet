@@ -64,10 +64,32 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
   whichever chips it enables.
 - Power: both boards can run from Mac USB during bench work. Note any externally powered configuration in the scenario, since brownout during pattern bursts would masquerade as protocol faults.
 - Manual production-test wiring (card N outputs to card M inputs) is operator work, guided step by step by the runner. The bench does not attempt relay matrices or automated patch panels.
+## Wire-visible signatures for XiaoHostTracer stimulus generators
+When `XiaoHostTracer` (v0.3.0+) drives a stimulus generator, the T-frame payload has a specific bit pattern. This lets a bench observer confirm the generator is correct without relying only on CDC verb responses. The first #55 implementation inverted the `fastwalker` logic. Wire inspection caught the problem; unit tests did not.
+- **`fastwalker`** (default byte 3, 250 ms period): walks a cleared bit through a field of set bits. Byte 3 progresses `0xFF → 0xFE → 0xFD → 0xFB → 0xF7 → 0xEF → 0xDF → 0xBF → 0x7F → 0xFF …`.
+- **`slowwalker`** (default byte 5, 1000 ms period): walks a set bit through a field of cleared bits. Byte 5 progresses `0x00 → 0x01 → 0x02 → 0x04 → 0x08 → 0x10 → 0x20 → 0x40 → 0x80 → 0x00 …`.
+- **`toggleoutfrominput`** (default input bit 48 → output bit 32): inverts output bit 32 on the rising edge of input bit 48. On the wire, this is a single-bit toggle in byte 4, bit 0 of the T payload.
+- **`stall`**: has no direct T-payload signature. Its signature is a change in poll cadence, specifically the miss/backoff behavior on the phantom UA that #47 investigates.
+
+The walkers use different output bytes by default so they can run concurrently without modifying the same byte. UA=30 uses a 7-byte output image on this bench.
+
+## USB board identity and recovery
+Multiple Xiao ESP32-C6 boards enumerate with similar and unstable `/dev/cu.usbmodem*` names. A port number is not a board identity. During #55 validation, `XiaoHostTracer` was initially uploaded to the passive Sniffer board. Commands were accepted, but the supposed Host stayed offline and emitted only miss behavior because the physical bench roles had been reversed.
+
+Before flashing or starting an automated test:
+1. Run `arduino-cli board list` to enumerate candidates.
+2. Confirm the image identity over CDC, not only the port path:
+   - `XiaoHostTracer` answers `status` with its tracer image/version.
+   - `XiaoSniffer` emits periodic stats with `"image":"xiao_sniffer"`.
+   - `SimpleHost` normally stays silent except on a rejected reply.
+3. Confirm physical role: the Host board is attached to the bus crossover as the poll-pair driver; the Sniffer remains passive.
+4. After any corrective flash, restore every board to its intended image before trusting test results.
+
+Automated harnesses must match the exact expected sketch identifier and minimum version before issuing commands. Receiving any valid boot/status JSON is insufficient: the wrong image can parse commands or emit plausible telemetry while the bench topology is invalid.
 
 ## Known physical gaps
 - Agent-controlled power cycling. Negative tests (unplug the node, watch NO-RESPONSE and recovery) stay human-in-the-loop. A per-port switchable USB hub (uhubctl-compatible) would close this later.
-- USB port identity. Multiple Xiaos enumerate as shuffling /dev/cu.usbmodem* names. Deferred with the port registry (software notes); until then, plug in one board at a time or check serial numbers with `arduino-cli board list`.
+- Stable USB port identity. Port names still shuffle between enumerations. Until the port registry described in the software notes exists, identify the active image over CDC as described above; use `arduino-cli board list` only to discover candidate ports.
 - TXEN edge timing proof. The passive tap catches most disputes; a logic analyzer is the deluxe option if turnaround timing itself is ever in question.
 
 ## Flashing the cpNode-Xiao from the command line
