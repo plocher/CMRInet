@@ -125,6 +125,12 @@ class TracerShell {
   /// dispatched.
   void setNow(uint32_t nowMs) { nowMs_ = nowMs; }
 
+  /// Manually emit a trace record into the telemetry stream (e.g. for replaying
+  /// a captured ring buffer). Defers to the same formatter used by the listener.
+  void emitPacket(bool transmit, const CMRIPacket& packet) {
+    emitTrace_(transmit, packet);
+  }
+
   /// Emit the epoch marker: ts restarts at 0 here, so a runner seeing
   /// this line knows every cumulative counter restarted with it. The
   /// anchor pair carries the image's absolute time reference (e.g.
@@ -214,11 +220,10 @@ class TracerShell {
   static void onHostTrace_(void* context, bool transmit,
                            const CMRIPacket& packet) {
     TracerShell& self = *static_cast<TracerShell*>(context);
-    self.emitTrace(transmit, packet);
+    self.emitTrace_(transmit, packet);
   }
 
- public:
-  void emitTrace(bool transmit, const CMRIPacket& packet) {
+  void emitTrace_(bool transmit, const CMRIPacket& packet) {
     char bodyHex[2 * kMaxBody + 1] = "";
     const size_t len = packet.length;
     for (size_t i = 0; i < len; ++i) {
