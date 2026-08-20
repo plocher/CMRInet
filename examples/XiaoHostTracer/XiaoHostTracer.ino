@@ -134,10 +134,14 @@ bool run_active = false;
 uint32_t run_end_ms = 0;
 uint32_t run_start_ms = 0;
 uint32_t run_polls = 0;
-uint32_t run_its = 0;
+uint32_t run_loop_its = 0;
+uint32_t run_it_frames = 0;
 
 void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet) {
   if (run_active) {
+    if (packet.mt == 'I' || packet.mt == 'T') {
+      run_it_frames++;
+    }
     if (ring_used < kRingCap) {
       RingRecord& r = ring[ring_used++];
       r.t_ms = millis();
@@ -147,7 +151,7 @@ void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet)
       r.len = packet.length;
     }
   } else {
-    engine.emitTrace(transmit, packet);
+    engine.emitPacket(transmit, packet);
   }
 }
 
@@ -525,14 +529,15 @@ void loop() {
   }
 
   if (run_active) {
-    run_its++;
+    run_loop_its++;
     if (nowMs >= run_end_ms) {
       run_active = false;
       uint32_t end_ms = millis();
       uint32_t total_polls = host.statistics().pollsSent - run_polls;
       Serial.print("END CAPTURE t="); Serial.print(end_ms);
       Serial.print(" polls="); Serial.print(total_polls);
-      Serial.print(" its="); Serial.print(run_its);
+      Serial.print(" its="); Serial.print(run_it_frames);
+      Serial.print(" loops="); Serial.print(run_loop_its);
       Serial.print(" ring_used="); Serial.print(ring_used);
       Serial.print("/"); Serial.println(kRingCap);
     }
@@ -615,7 +620,8 @@ void loop() {
         run_active = true;
         ring_used = 0;
         run_polls = host.statistics().pollsSent;
-        run_its = 0;
+        run_loop_its = 0;
+        run_it_frames = 0;
         run_start_ms = millis();
         run_end_ms = run_start_ms + secs * 1000;
         Serial.print("BEGIN CAPTURE t="); Serial.println(run_start_ms);
@@ -635,9 +641,12 @@ void loop() {
       Serial.println("END DUMP");
       handled = true;
     } else if (strcmp(verb, "reset") == 0) {
+      run_active = false;
+      run_end_ms = 0;
       ring_used = 0;
       run_polls = 0;
-      run_its = 0;
+      run_loop_its = 0;
+      run_it_frames = 0;
       fastwalker.enabled = false;
       slowwalker.enabled = false;
       toggleoutfrominput.enabled = false;
