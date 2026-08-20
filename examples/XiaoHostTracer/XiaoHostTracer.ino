@@ -104,7 +104,8 @@ constexpr const char* kImage = "xiao_host_tracer";
 // (setbit/writeoutputs/forcetx) so T is exercisable from the bench.
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
 // fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
-constexpr const char* kVersion = "0.3.0";
+// 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
+constexpr const char* kVersion = "0.4.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -115,6 +116,54 @@ CMRInet::RemoteNodeHandle* node = nullptr;
 CMRInet::testbed::TracerShell engine;
 
 bool finished = false;  // quit latched: "final" emitted, polling parked
+
+
+// ---- RAM Ring Buffer ----------------------------------------------------
+struct RingRecord {
+  uint32_t t_ms;
+  uint8_t ua;
+  uint8_t mt;
+  uint8_t flags; // bit 0 = 1 for TX, 0 for RX
+  uint8_t len;
+} __attribute__((packed));
+
+constexpr size_t kRingCap = 12000;
+RingRecord ring[kRingCap];
+size_t ring_used = 0;
+bool run_active = false;
+uint32_t run_end_ms = 0;
+uint32_t run_start_ms = 0;
+uint32_t run_polls = 0;
+uint32_t run_its = 0;
+
+void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet) {
+  if (run_active) {
+    if (ring_used < kRingCap) {
+      RingRecord& r = ring[ring_used++];
+      r.t_ms = millis();
+      r.ua = packet.ua;
+      r.mt = packet.mt;
+      r.flags = transmit ? 1 : 0;
+      r.len = packet.length;
+    }
+  } else {
+    engine.emitTrace(transmit, packet);
+  }
+}
+
+bool host_begun = false;
+void lazyBegin() {
+  if (!host_begun) {
+    if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
+      Serial.print("{\"event\":\"fatal\",\"error\":\"begin rejected configuration: ");
+      Serial.print(CMRInet::configStatusString(host.configStatus()));
+      Serial.println("\"}");
+      for (;;) delay(1000);
+    }
+    host_begun = true;
+  }
+}
+// --------------------------------------------------------------------------
 
 void writeCdcLine(void* /*context*/, const char* line) {
   Serial.write(reinterpret_cast<const uint8_t*>(line), strlen(line));
@@ -313,6 +362,7 @@ bool handleGeneratorControl(char* cmd) {
   }
 
   if (is_enable) {
+    lazyBegin();
     if (strcmp(gen_name, "fastwalker") == 0) { fastwalker.enabled = true; fastwalker.last_ms = 0; }
     else if (strcmp(gen_name, "slowwalker") == 0) { slowwalker.enabled = true; slowwalker.last_ms = 0; }
     else if (strcmp(gen_name, "toggleoutfrominput") == 0) { 
@@ -333,14 +383,32 @@ bool handleGeneratorControl(char* cmd) {
   return true;
 }
 
-void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity) {
+void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_capacity) {
+  char nodesBuf[512] = ",\"nodes\":[";
+  size_t offset = strlen(nodesBuf);
+  bool first = true;
+  for (uint8_t addr = 0; addr <= 127; ++addr) {
+    CMRInet::RemoteNodeHandle* n = host.node(addr);
+    if (n) {
+      if (!first) {
+         offset += snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset, ",");
+      }
+      offset += snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset,
+          "{\"ua\":%u,\"in\":%zu,\"out\":%zu,\"state\":\"%s\"}",
+          n->ua(), n->inputLength(), n->outputLength(), CMRInet::testbed::stateName(n->state()));
+      first = false;
+    }
+  }
+  snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset, "]");
+
   snprintf(buffer, remaining_capacity, 
-    ",\"generators\":{"
+    "%s,\"generators\":{"
     "\"fastwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
     "\"slowwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
     "\"toggleoutfrominput\":{\"enabled\":%s,\"in\":%u,\"out\":%u},"
     "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
     "}",
+    nodesBuf,
     fastwalker.enabled ? "true" : "false", (unsigned long)fastwalker.period_ms, fastwalker.byte,
     slowwalker.enabled ? "true" : "false", (unsigned long)slowwalker.period_ms, slowwalker.byte,
     toggleoutfrominput.enabled ? "true" : "false", toggleoutfrominput.in_bit, toggleoutfrominput.out_bit,
@@ -433,17 +501,8 @@ void setup() {
     node = host.node(TRACER_ADDRESS);
     engine.bind(host, transport, *node, kImage, kVersion,
                 writeCdcLine, nullptr);
-    engine.setStatusExtender(emitGeneratorsStatus, nullptr);
-  }
-  if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
-    // Configuration rejected: report forever rather than run silent.
-    for (;;) {
-      Serial.print(F("{\"event\":\"fatal\",\"error\":\"addRemoteNode "
-                     "rejected the configuration: "));
-      Serial.print(CMRInet::configStatusString(host.configStatus()));
-      Serial.println(F("\"}"));
-      delay(1000);
-    }
+    host.onTrace(ourOnTrace, nullptr);
+    engine.setStatusExtender(emitGeneratorsAndNodesStatus, nullptr);
   }
 
   engine.setNow(millis());
@@ -465,6 +524,20 @@ void loop() {
     stall.tick(nowMs);
   }
 
+  if (run_active) {
+    run_its++;
+    if (nowMs >= run_end_ms) {
+      run_active = false;
+      uint32_t end_ms = millis();
+      uint32_t total_polls = host.statistics().pollsSent - run_polls;
+      Serial.print("END CAPTURE t="); Serial.print(end_ms);
+      Serial.print(" polls="); Serial.print(total_polls);
+      Serial.print(" its="); Serial.print(run_its);
+      Serial.print(" ring_used="); Serial.print(ring_used);
+      Serial.print("/"); Serial.println(kRingCap);
+    }
+  }
+
   char verb[128];
   if (readVerb(verb, sizeof(verb))) {
     char verbCopy[128];
@@ -475,6 +548,102 @@ void loop() {
         strncmp(verb, "disable", 7) == 0 || 
         strncmp(verb, "configure", 9) == 0) {
       handled = handleGeneratorControl(verbCopy);
+    } else if (strncmp(verb, "node ", 5) == 0) {
+      char* saveptr = nullptr;
+      strtok_r(verbCopy, " ", &saveptr); // "node"
+      char* action = strtok_r(nullptr, " ", &saveptr);
+      if (action) {
+        if (strcmp(action, "add") == 0) {
+          char* ua_s = strtok_r(nullptr, " ", &saveptr);
+          char* in_s = strtok_r(nullptr, " ", &saveptr);
+          char* out_s = strtok_r(nullptr, " ", &saveptr);
+          if (ua_s && in_s && out_s) {
+            if (host_begun) {
+              Serial.println("{\"event\":\"error\",\"error\":\"locked\",\"message\":\"node add: configuration locked by begin\"}");
+            } else {
+              uint8_t addr = atoi(ua_s);
+              uint8_t in_b = atoi(in_s);
+              uint8_t out_b = atoi(out_s);
+              CMRInet::RemoteNodeHandle* existing = host.node(addr);
+              if (existing) {
+                  if (existing->inputLength() == in_b && existing->outputLength() == out_b) {
+                      Serial.print("{\"event\":\"node_add\",\"ua\":"); Serial.print(addr); Serial.println("}");
+                  } else {
+                      Serial.println("{\"event\":\"error\",\"error\":\"inUse\",\"message\":\"address already in use with different size\"}");
+                  }
+              } else {
+                  CMRInet::RemoteNodeConfig cfg;
+                  cfg.inputBytes = in_b;
+                  cfg.outputBytes = out_b;
+                  host.addRemoteNode(addr, cfg);
+                  if (host.configStatus() != CMRInet::CMRIHost::ConfigStatus::kOk) {
+                      Serial.println("{\"event\":\"error\",\"error\":\"addFailed\"}");
+                  } else {
+                      Serial.print("{\"event\":\"node_add\",\"ua\":"); Serial.print(addr); Serial.println("}");
+                  }
+              }
+            }
+          }
+        } else if (strcmp(action, "enable") == 0) {
+          char* ua_s = strtok_r(nullptr, " ", &saveptr);
+          if (ua_s) {
+            lazyBegin();
+            uint8_t addr = atoi(ua_s);
+            CMRInet::RemoteNodeHandle* n = host.node(addr);
+            if (n) n->setEnabled(true);
+            Serial.print("{\"event\":\"node_enable\",\"ua\":"); Serial.print(addr); Serial.println("}");
+          }
+        } else if (strcmp(action, "disable") == 0) {
+          char* ua_s = strtok_r(nullptr, " ", &saveptr);
+          if (ua_s) {
+            lazyBegin();
+            uint8_t addr = atoi(ua_s);
+            CMRInet::RemoteNodeHandle* n = host.node(addr);
+            if (n) n->setEnabled(false);
+            Serial.print("{\"event\":\"node_disable\",\"ua\":"); Serial.print(addr); Serial.println("}");
+          }
+        }
+      }
+      handled = true;
+    } else if (strncmp(verb, "run ", 4) == 0) {
+      char* saveptr = nullptr;
+      strtok_r(verbCopy, " ", &saveptr); // "run"
+      char* secs_s = strtok_r(nullptr, " ", &saveptr);
+      if (secs_s) {
+        lazyBegin();
+        uint32_t secs = strtoul(secs_s, nullptr, 10);
+        run_active = true;
+        ring_used = 0;
+        run_polls = host.statistics().pollsSent;
+        run_its = 0;
+        run_start_ms = millis();
+        run_end_ms = run_start_ms + secs * 1000;
+        Serial.print("BEGIN CAPTURE t="); Serial.println(run_start_ms);
+      }
+      handled = true;
+    } else if (strcmp(verb, "dump") == 0) {
+      Serial.print("BEGIN DUMP records="); Serial.println(ring_used);
+      for (size_t i = 0; i < ring_used; ++i) {
+        const RingRecord& r = ring[i];
+        Serial.print("PKT t="); Serial.print(r.t_ms);
+        Serial.print(r.flags == 1 ? " TX " : " RX ");
+        Serial.print("ua="); Serial.print(r.ua);
+        Serial.print(" mt="); Serial.print((char)r.mt);
+        Serial.print(" len="); Serial.print(r.len);
+        Serial.print(" n="); Serial.println(i);
+      }
+      Serial.println("END DUMP");
+      handled = true;
+    } else if (strcmp(verb, "reset") == 0) {
+      ring_used = 0;
+      run_polls = 0;
+      run_its = 0;
+      fastwalker.enabled = false;
+      slowwalker.enabled = false;
+      toggleoutfrominput.enabled = false;
+      stall.enabled = false;
+      Serial.println("{\"event\":\"reset\"}");
+      handled = true;
     } else if (strcmp(verb, "status") == 0) {
       using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
       engine.handleVerb(verb);
