@@ -102,7 +102,9 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.2.0: I/T bench slice (map issue #30) — output image via
 // TRACER_OUTPUT_BYTES, onTrace packet telemetry, and output verbs
 // (setbit/writeoutputs/forcetx) so T is exercisable from the bench.
-constexpr const char* kVersion = "0.2.0";
+// 0.3.0: Add generator-control verbs (enable, disable, configure) for
+// fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
+constexpr const char* kVersion = "0.3.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -144,6 +146,208 @@ bool readVerb(char* out, size_t len) {
 }
 
 }  // namespace
+// ---- Generator definitions (Issue #55) -----------------------------------
+#include "GeneratorParser.h"
+
+struct FastWalkerGenerator {
+  bool enabled = false;
+  uint32_t period_ms = 250;
+  uint8_t byte = 3;
+  uint32_t last_ms = 0;
+  uint8_t step = 0;
+
+  void tick(uint32_t now_ms) {
+    if (!enabled || node == nullptr) return;
+    if (now_ms - last_ms >= period_ms) {
+      node->setOutputBit(byte * 8 + step, true);
+      if (step > 0) {
+        node->setOutputBit(byte * 8 + (step - 1), false);
+      } else if (last_ms != 0) {
+        node->setOutputBit(byte * 8 + 7, false);
+      }
+      step = (step + 1) % 8;
+      last_ms = now_ms;
+    }
+  }
+};
+
+struct SlowWalkerGenerator {
+  bool enabled = false;
+  uint32_t period_ms = 1000;
+  uint8_t byte = 5;
+  uint32_t last_ms = 0;
+  uint8_t step = 0;
+
+  void tick(uint32_t now_ms) {
+    if (!enabled || node == nullptr) return;
+    if (now_ms - last_ms >= period_ms) {
+      node->setOutputBit(byte * 8 + step, true);
+      if (step > 0) {
+        node->setOutputBit(byte * 8 + (step - 1), false);
+      } else if (last_ms != 0) {
+        node->setOutputBit(byte * 8 + 7, false);
+      }
+      step = (step + 1) % 8;
+      last_ms = now_ms;
+    }
+  }
+};
+
+struct ToggleOutFromInputGenerator {
+  bool enabled = false;
+  uint16_t in_bit = 48;
+  uint16_t out_bit = 32;
+  bool last_in = false;
+
+  void tick(uint32_t now_ms) {
+    if (!enabled || node == nullptr) return;
+    bool current_in = node->inputBit(in_bit);
+    if (current_in && !last_in) {
+      node->setOutputBit(out_bit, !node->outputBit(out_bit));
+    }
+    last_in = current_in;
+  }
+};
+
+struct StallGenerator {
+  bool enabled = false;
+  uint32_t ms = 0;
+  uint32_t period_ms = 150;
+  enum class Mode { kYield, kBusy } mode = Mode::kYield;
+  uint32_t last_ms = 0;
+
+  void tick(uint32_t now_ms) {
+    if (!enabled || ms == 0) return;
+    if (now_ms - last_ms >= period_ms || last_ms == 0) {
+      if (mode == Mode::kYield) {
+        delay(ms);
+      } else {
+        uint32_t start = millis();
+        while (millis() - start < ms) {
+          // busy spin
+        }
+      }
+      last_ms = millis();
+    }
+  }
+};
+
+FastWalkerGenerator fastwalker;
+SlowWalkerGenerator slowwalker;
+ToggleOutFromInputGenerator toggleoutfrominput;
+StallGenerator stall;
+
+bool handleGeneratorControl(char* cmd) {
+  char* saveptr = nullptr;
+  char* action = strtok_r(cmd, " ", &saveptr);
+  if (!action) return false;
+
+  bool is_enable = (strcmp(action, "enable") == 0);
+  bool is_disable = (strcmp(action, "disable") == 0);
+  bool is_configure = (strcmp(action, "configure") == 0);
+
+  if (!is_enable && !is_disable && !is_configure) return false;
+
+  char* gen_name = strtok_r(nullptr, " ", &saveptr);
+  if (!gen_name) {
+    Serial.print("{\"event\":\"error\",\"error\":\"badVerb\",\"message\":\"");
+    Serial.print(action);
+    Serial.println(": missing generator\"}");
+    return true;
+  }
+
+  bool valid_gen = (strcmp(gen_name, "fastwalker") == 0 ||
+                    strcmp(gen_name, "slowwalker") == 0 ||
+                    strcmp(gen_name, "toggleoutfrominput") == 0 ||
+                    strcmp(gen_name, "stall") == 0);
+  if (!valid_gen) {
+    Serial.print("{\"event\":\"error\",\"error\":\"badVerb\",\"message\":\"unknown generator '");
+    Serial.print(gen_name);
+    Serial.println("'\"}");
+    return true;
+  }
+
+  if (is_disable) {
+    if (strcmp(gen_name, "fastwalker") == 0) fastwalker.enabled = false;
+    else if (strcmp(gen_name, "slowwalker") == 0) slowwalker.enabled = false;
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominput.enabled = false;
+    else if (strcmp(gen_name, "stall") == 0) stall.enabled = false;
+    
+    Serial.print("{\"event\":\"disable\",\"generator\":\"");
+    Serial.print(gen_name);
+    Serial.println("\"}");
+    return true;
+  }
+
+  char* args = strtok_r(nullptr, "", &saveptr);
+  if (args) {
+    ParsedGeneratorParams p = parseGeneratorParams(args, gen_name);
+    if (p.error_code) {
+      Serial.print("{\"event\":\"error\",\"error\":\"");
+      Serial.print(p.error_code);
+      Serial.print("\",\"message\":\"Invalid parameter '");
+      Serial.print(p.error_val);
+      Serial.println("'\"}");
+      return true;
+    }
+    
+    if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
+      if (p.has_period) {
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalker.period_ms = p.period_ms;
+        else slowwalker.period_ms = p.period_ms;
+      }
+      if (p.has_byte) {
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalker.byte = p.byte_idx;
+        else slowwalker.byte = p.byte_idx;
+      }
+    } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
+      if (p.has_in) toggleoutfrominput.in_bit = p.in_bit;
+      if (p.has_out) toggleoutfrominput.out_bit = p.out_bit;
+    } else if (strcmp(gen_name, "stall") == 0) {
+      if (p.has_stall_ms) stall.ms = p.stall_ms;
+      if (p.has_period) stall.period_ms = p.period_ms;
+      if (p.has_mode) {
+        stall.mode = p.mode_busy ? StallGenerator::Mode::kBusy : StallGenerator::Mode::kYield;
+      }
+    }
+  }
+
+  if (is_enable) {
+    if (strcmp(gen_name, "fastwalker") == 0) { fastwalker.enabled = true; fastwalker.last_ms = 0; }
+    else if (strcmp(gen_name, "slowwalker") == 0) { slowwalker.enabled = true; slowwalker.last_ms = 0; }
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0) { 
+      toggleoutfrominput.enabled = true; 
+      toggleoutfrominput.last_in = node ? node->inputBit(toggleoutfrominput.in_bit) : false; 
+    }
+    else if (strcmp(gen_name, "stall") == 0) { 
+      if (stall.ms == 0) stall.enabled = false;
+      else { stall.enabled = true; stall.last_ms = 0; }
+    }
+  }
+
+  Serial.print("{\"event\":\"");
+  Serial.print(action);
+  Serial.print("\",\"generator\":\"");
+  Serial.print(gen_name);
+  Serial.println("\"}");
+  return true;
+}
+
+void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity) {
+  snprintf(buffer, remaining_capacity, 
+    ",\"generators\":{"
+    "\"fastwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
+    "\"slowwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
+    "\"toggleoutfrominput\":{\"enabled\":%s,\"in\":%u,\"out\":%u},"
+    "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
+    "}",
+    fastwalker.enabled ? "true" : "false", (unsigned long)fastwalker.period_ms, fastwalker.byte,
+    slowwalker.enabled ? "true" : "false", (unsigned long)slowwalker.period_ms, slowwalker.byte,
+    toggleoutfrominput.enabled ? "true" : "false", toggleoutfrominput.in_bit, toggleoutfrominput.out_bit,
+    stall.enabled ? "true" : "false", (unsigned long)stall.ms, (unsigned long)stall.period_ms, stall.mode == StallGenerator::Mode::kYield ? "yield" : "busy"
+  );
+}
+// --------------------------------------------------------------------------
 
 /// Draw the host status panel (shared HostStatusPanel, same layout as
 /// SimpleHost): header with alternating cadence, one per-node row with
@@ -228,6 +432,7 @@ void setup() {
   if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
     engine.bind(host, transport, *host.node(TRACER_ADDRESS), kImage, kVersion,
                 writeCdcLine, nullptr);
+    engine.setStatusExtender(emitGeneratorsStatus, nullptr);
   }
   if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
     // Configuration rejected: report forever rather than run silent.
@@ -252,14 +457,35 @@ void loop() {
   engine.setNow(nowMs);
   if (!finished) {
     host.tick(nowMs);
+    
+    fastwalker.tick(nowMs);
+    slowwalker.tick(nowMs);
+    toggleoutfrominput.tick(nowMs);
+    stall.tick(nowMs);
   }
 
   char verb[128];
   if (readVerb(verb, sizeof(verb))) {
-    using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
-    if (engine.handleVerb(verb) == VerbResult::kQuit && !finished) {
-      engine.emitLine("final");
-      finished = true;  // reset the board to run again
+    char verbCopy[128];
+    strncpy(verbCopy, verb, sizeof(verbCopy));
+    
+    bool handled = false;
+    if (strncmp(verb, "enable", 6) == 0 || 
+        strncmp(verb, "disable", 7) == 0 || 
+        strncmp(verb, "configure", 9) == 0) {
+      handled = handleGeneratorControl(verbCopy);
+    } else if (strcmp(verb, "status") == 0) {
+      using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
+      engine.handleVerb(verb);
+      handled = true;
+    }
+
+    if (!handled) {
+      using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
+      if (engine.handleVerb(verb) == VerbResult::kQuit && !finished) {
+        engine.emitLine("final");
+        finished = true;  // reset the board to run again
+      }
     }
   }
 
