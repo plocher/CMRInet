@@ -214,10 +214,11 @@ class TracerShell {
   static void onHostTrace_(void* context, bool transmit,
                            const CMRIPacket& packet) {
     TracerShell& self = *static_cast<TracerShell*>(context);
-    self.emitTrace_(transmit, packet);
+    self.emitTrace(transmit, packet);
   }
 
-  void emitTrace_(bool transmit, const CMRIPacket& packet) {
+ public:
+  void emitTrace(bool transmit, const CMRIPacket& packet) {
     char bodyHex[2 * kMaxBody + 1] = "";
     const size_t len = packet.length;
     for (size_t i = 0; i < len; ++i) {
