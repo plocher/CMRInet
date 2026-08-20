@@ -159,11 +159,11 @@ struct FastWalkerGenerator {
   void tick(uint32_t now_ms) {
     if (!enabled || node == nullptr) return;
     if (now_ms - last_ms >= period_ms) {
-      node->setOutputBit(byte * 8 + step, true);
+      node->setOutputBit(byte * 8 + step, false);
       if (step > 0) {
-        node->setOutputBit(byte * 8 + (step - 1), false);
+        node->setOutputBit(byte * 8 + (step - 1), true);
       } else if (last_ms != 0) {
-        node->setOutputBit(byte * 8 + 7, false);
+        node->setOutputBit(byte * 8 + 7, true);
       }
       step = (step + 1) % 8;
       last_ms = now_ms;
