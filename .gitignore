@@ -9,3 +9,5 @@ build/
 *.bin
 *.elf
 *.map
+# Ignore sweep logs and csv results
+extras/bench/probes/regressions/sweep_results/
