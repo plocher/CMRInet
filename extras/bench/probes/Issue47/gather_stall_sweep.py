@@ -73,30 +73,7 @@ def main():
                     print(f"  {tag:15s} -> SKIPPED_REDUNDANT")
                 else:
                     print(f"  {tag:15s} -> ACTIVE")
-    
-    # Write manifest
-    manifest_path = out_dir / "manifest.json"
-    if not manifest_path.exists():
-        import subprocess
-        try:
-            sha = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
-        except:
-            sha = "unknown"
-            
-        manifest = {
-            "scenario": "stall_sweep",
-            "stalls": stalls,
-            "periods": periods,
-            "traffic": args.traffic,
-            "secs": args.secs,
-            "port": args.port,
-            "git_sha": sha,
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-        with manifest_path.open("w") as mf:
-            json.dump(manifest, mf, indent=2)
-            
-    return 0
+        return 0
         
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_csv = out_dir / "summary.csv"
@@ -157,7 +134,29 @@ def main():
                 
                 print(f"  -> {res.verdict} max_gap={res.max_gap}")
                 i += 1
-                
+    
+    # Write manifest
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        import subprocess
+        try:
+            sha = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+        except:
+            sha = "unknown"
+            
+        manifest = {
+            "scenario": "stall_sweep",
+            "stalls": stalls,
+            "periods": periods,
+            "traffic": args.traffic,
+            "secs": args.secs,
+            "port": args.port,
+            "git_sha": sha,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        with manifest_path.open("w") as mf:
+            json.dump(manifest, mf, indent=2)
+            
     return 0
 
 if __name__ == "__main__":
