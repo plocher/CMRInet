@@ -11,132 +11,19 @@ import json
 from pathlib import Path
 import importlib.util
 import serial
+import datetime
 
-_DEFAULT_HOST_PORT = "/dev/cu.usbmodem282201"
-
-
-sys.path.insert(0, str(Path(__file__).parent / "analyzers"))
-import importlib
-gap_deltas = importlib.import_module("analyze_data")
-
-def sync_and_validate_boot(ser, timeout=15.0):
-    start = time.time()
-    while time.time() - start < timeout:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-        print(f"BOOT: {line}")
-        if line.startswith('{') and '"image"' in line:
-            try:
-                doc = json.loads(line)
-                image = doc.get("image")
-                version = doc.get("version")
-                if image != "xiao_host_tracer":
-                    print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                # simple version check
-                if not version:
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                ver_parts = tuple(int(x) for x in version.split('.'))
-                if ver_parts < (0, 4, 0):
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                print(f"Verified boot: {image} v{version}")
-                return True
-            except json.JSONDecodeError:
-                pass
-    return False
-
-def flush_lines(ser):
-    # drain any remaining data
-    while ser.in_waiting:
-        ser.readline()
-
-def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
-    print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
-    log_file = out_dir / f"{tag}.log"
-    
-    # Send commands
-    ser.write(b"reset\n")
-    time.sleep(0.1)
-    flush_lines(ser)
-    
-    # Traffic
-    if "fast" in traffic:
-        ser.write(b"enable fastwalker\n")
-        time.sleep(0.1)
-    if "slow" in traffic:
-        ser.write(b"enable slowwalker\n")
-        time.sleep(0.1)
-        
-    # Stall
-    if s > 0:
-        cmd = f"enable stall {s} period {p} mode {mode}\n"
-        ser.write(cmd.encode('utf-8'))
-        time.sleep(0.1)
-        
-    flush_lines(ser)
-    
-    # Run
-    cmd = f"run {secs}\n"
-    ser.write(cmd.encode('utf-8'))
-    
-    print(f"Waiting for END CAPTURE (secs={secs})...")
-    deadline = time.time() + secs + 5.0
-    end_capture_seen = False
-    
-    while time.time() < deadline:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-        if line.startswith("END CAPTURE"):
-            end_capture_seen = True
-            print(f"Seen: {line}")
-            break
-            
-    if not end_capture_seen:
-        print(f"ERROR_TIMEOUT: END CAPTURE not seen for {tag}")
-        return gap_deltas.AnalyzerResult(
-            verdict="ERROR_TIMEOUT", phantom_ua=-1, first_t_ms=-1, last_t_ms=-1
-        )
-        
-    # Dump
-    ser.write(b"dump\n")
-    print("Dumping ring...")
-    deadline = time.time() + 10.0
-    
-    dump_lines = []
-    in_dump = False
-    
-    while time.time() < deadline:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-            
-        if line.startswith("BEGIN DUMP"):
-            in_dump = True
-        elif line == "END DUMP":
-            break
-        elif in_dump:
-            dump_lines.append(line)
-            
-    print(f"Captured {len(dump_lines)} lines for {tag}")
-    
-    with log_file.open("w") as f:
-        for line in dump_lines:
-            f.write(line + "\n")
-            
-    res = gap_deltas.analyze_lines(dump_lines)
-    return res
+import _tracer_client
+import _gap_deltas
 
 def main():
+
     parser = argparse.ArgumentParser(description="Sweep #47")
-    parser.add_argument("--port", default=_DEFAULT_HOST_PORT)
+    parser.add_argument("--port", default=_tracer_client._DEFAULT_HOST_PORT)
     parser.add_argument("--secs", type=int, default=60)
     parser.add_argument("--stalls", default="1 3 5 7 8 9 10 11 12 15 20 30 50 100 250")
     parser.add_argument("--periods", default="125 145 150 155 200 233 250 373 500")
-    parser.add_argument("--traffic", default="fast")
+    parser.add_argument("--traffic", default="fast slow loopback")
     parser.add_argument("--busy", action="store_true")
     parser.add_argument("--yield", dest="mode_yield", action="store_true")
     parser.add_argument("--out", default="sweep_results")
@@ -152,7 +39,7 @@ def main():
     
     if str(out_dir) == "sweep_results":
         today = datetime.datetime.now().strftime("%Y%m%d")
-        base = Path(__file__).parent / "data" / f"results.{today}"
+        base = Path(__file__).parent / "data" / f"results.{today}.stall_sweep"
         candidate = base
         count = 1
         while candidate.exists():
@@ -186,7 +73,30 @@ def main():
                     print(f"  {tag:15s} -> SKIPPED_REDUNDANT")
                 else:
                     print(f"  {tag:15s} -> ACTIVE")
-        return 0
+    
+    # Write manifest
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        import subprocess
+        try:
+            sha = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+        except:
+            sha = "unknown"
+            
+        manifest = {
+            "scenario": "stall_sweep",
+            "stalls": stalls,
+            "periods": periods,
+            "traffic": args.traffic,
+            "secs": args.secs,
+            "port": args.port,
+            "git_sha": sha,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        with manifest_path.open("w") as mf:
+            json.dump(manifest, mf, indent=2)
+            
+    return 0
         
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_csv = out_dir / "summary.csv"
@@ -196,7 +106,7 @@ def main():
     ser = serial.Serial(args.port, 115200, timeout=0.5)
     time.sleep(2) # boot settle
     
-    if not sync_and_validate_boot(ser):
+    if not _tracer_client.sync_and_validate_boot(ser):
         print("ERROR: Boot validation failed (timeout or wrong image).", file=sys.stderr)
         return 1
         
@@ -205,7 +115,7 @@ def main():
     time.sleep(0.1)
     ser.write(b"node add 31 4 4\n")
     time.sleep(0.1)
-    flush_lines(ser)
+    _tracer_client.flush_lines(ser)
     
     with summary_csv.open("a", newline="") as f:
         writer = csv.writer(f)
@@ -235,7 +145,7 @@ def main():
                     i += 1
                     continue
                 
-                res = run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
+                res = _tracer_client.run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
                 
                 # Keep round-1 compat output plus new columns
                 writer.writerow([

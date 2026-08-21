@@ -35,7 +35,7 @@ THRESHOLD_MS = 8000
 PHANTOM_UA_CANDIDATES = (96, 31)
 
 PKT_RE = re.compile(
-    r"PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
+    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
 )
 
 
@@ -192,7 +192,13 @@ def analyze_lines(lines: List[str]) -> AnalyzerResult:
     )
 
 
-def print_result_text(res: AnalyzerResult):
+def print_result_text(res: AnalyzerResult, header_metadata: dict = None):
+    if header_metadata:
+        print("=== Log Context ===")
+        for k, v in header_metadata.items():
+            print(f"{k.ljust(18)}: {v}")
+        print("===================")
+        print()
     print(f"phantom UA        : {res.phantom_ua} ({res.poll_count} TX events, {res.it_count} I/T frames)")
     print(f"first / last t_ms : {res.first_t_ms} .. {res.last_t_ms}")
     if res.gaps:
@@ -220,100 +226,4 @@ def print_result_text(res: AnalyzerResult):
     if res.monotone_prefix_max >= 0:
         print(f"monotone_prefix_max: {res.monotone_prefix_max}")
 
-
-def rescore(sweep_dir: str):
-    sweep_path = Path(sweep_dir)
-    csv_in = sweep_path / "summary.csv"
-    csv_out = sweep_path / "summary_v2.csv"
-    diff_out = sweep_path / "summary_v2_diff.md"
-
-    if not csv_in.exists():
-        print(f"ERROR: {csv_in} not found", file=sys.stderr)
-        return 1
-
-    with open(csv_in, "r") as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        rows = list(reader)
-
-    # v1 columns: stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript
-    cap_idx = header.index("capture")
-    v1_verdict_idx = header.index("verdict")
-    
-    header_v2 = header + ["verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"]
-    
-    rows_v2 = []
-    transitions = defaultdict(list)
-    
-    for row in rows:
-        capture_name = row[cap_idx]
-        v1_verdict = row[v1_verdict_idx]
-        log_path = sweep_path / capture_name
-        
-        if log_path.exists():
-            try:
-                with open(log_path, "r", errors="replace") as f:
-                    res = analyze_lines(f.readlines())
-                v2_verdict = res.verdict
-                m_max = res.monotone_prefix_max
-                it_count = res.it_count
-                poll_count = res.poll_count
-            except Exception as e:
-                v2_verdict = VERDICT_ERROR
-                m_max = -1
-                it_count = 0
-                poll_count = 0
-        else:
-            v2_verdict = VERDICT_ERROR
-            m_max = -1
-            it_count = 0
-            poll_count = 0
-
-        row_v2 = row + [v2_verdict, str(m_max), str(it_count), str(poll_count)]
-        rows_v2.append(row_v2)
-        
-        if v1_verdict != v2_verdict:
-            transitions[f"{v1_verdict} -> {v2_verdict}"].append((capture_name, m_max, row_v2))
-
-    with open(csv_out, "w", newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(header_v2)
-        writer.writerows(rows_v2)
-        
-    with open(diff_out, "w") as f:
-        for trans, items in sorted(transitions.items()):
-            f.write(f"## {trans}\n")
-            for capture_name, m_max, row_v2 in items:
-                f.write(f"- {capture_name}: monotone_prefix_max={m_max}\n")
-            f.write("\n")
-            
-    print(f"Rescore complete. Wrote {csv_out} and {diff_out}")
-    return 0
-
-
-def main(argv: List[str]) -> int:
-    parser = argparse.ArgumentParser(description="Analyzer for regression #47")
-    parser.add_argument("target", help="Capture log file or sweep_results dir (if --rescore)")
-    parser.add_argument("--rescore", action="store_true", help="Batch rescore a directory")
-    args = parser.parse_args(argv[1:])
-    
-    if args.rescore:
-        return rescore(args.target)
-        
-    try:
-        with open(args.target, "r", errors="replace") as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        print(f"ERROR: File not found {args.target}", file=sys.stderr)
-        return 2
-
-    res = analyze_lines(lines)
-    print_result_text(res)
-    
-    if res.verdict == VERDICT_PASS:
-        return 0
-    return 1
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv))
 

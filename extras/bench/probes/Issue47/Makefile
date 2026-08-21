@@ -1,16 +1,31 @@
-.PHONY: all test_tooling gather_data analyze_data
+.PHONY: all test_stall_sweep gather_stall_sweep analyze_stall_sweep test_busy_yield gather_busy_yield analyze_busy_yield
 
 help:
 	@echo "Scenario runner for Issue #47"
 	@echo "make all to run entire scenario"
+	@echo "make stall_sweep to run the stall sweep scenario"
+	@echo "make busy_yield to run the busy vs yield scenario"
 
-all: test_tooling gather_data analyze_data
+all: stall_sweep busy_yield
 
-test_tooling:
-	../../.venv/bin/pytest test_tooling.py
+stall_sweep: test_stall_sweep gather_stall_sweep analyze_stall_sweep
 
-gather_data:
-	../../.venv/bin/python gather_data.py
+busy_yield: test_busy_yield gather_busy_yield analyze_busy_yield
 
-analyze_data:
-	../../.venv/bin/python analyze_data.py --rescore data/results.20260820
+test_stall_sweep:
+	../../.venv/bin/pytest test_stall_sweep.py
+
+gather_stall_sweep:
+	../../.venv/bin/python gather_stall_sweep.py
+
+analyze_stall_sweep:
+	../../.venv/bin/python analyze_stall_sweep.py --rescore data/results.20260820
+
+test_busy_yield:
+	../../.venv/bin/pytest test_busy_yield.py
+
+gather_busy_yield:
+	../../.venv/bin/python gather_busy_yield.py
+
+analyze_busy_yield:
+	../../.venv/bin/python analyze_busy_yield.py

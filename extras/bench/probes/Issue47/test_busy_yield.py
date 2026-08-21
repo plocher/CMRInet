@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.absolute()))
-import gather_data as sweep_47
+import _tracer_client as sweep_47
 
 def test_sync_and_validate_boot_success():
     mock_ser = MagicMock()
@@ -60,7 +60,7 @@ import pytest
 import importlib
 
 # Python doesn't allow importing modules that start with a number directly.
-gap_deltas = importlib.import_module("analyze_data")
+gap_deltas = importlib.import_module("_gap_deltas")
 
 classify_monotonicity = gap_deltas.classify_monotonicity
 VERDICT_PASS = gap_deltas.VERDICT_PASS
