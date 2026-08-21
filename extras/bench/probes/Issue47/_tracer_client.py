@@ -7,6 +7,35 @@ import _gap_deltas
 
 _DEFAULT_HOST_PORT = "/dev/cu.usbmodem282201"
 
+def reboot_and_reconnect(port, timeout=10.0):
+    print(f"Rebooting host on {port}...")
+    try:
+        ser = serial.Serial(port, 115200, timeout=0.5)
+        ser.write(b"reboot\n")
+        ser.flush()
+        time.sleep(0.5)
+        ser.close()
+    except Exception:
+        pass
+        
+    # Wait for the port to drop and reappear
+    time.sleep(2.0)
+    
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            # Busy loop trying to open the port
+            ser = serial.Serial(port, 115200, timeout=0.5)
+            print("Port re-enumerated.")
+            time.sleep(2.0) # Allow Arduino to settle after CDC open
+            return ser
+        except Exception:
+            time.sleep(0.5)
+            
+    raise serial.SerialException("Failed to reconnect after reboot")
+
+
+
 def sync_and_validate_boot(ser, timeout=15.0):
 
     start = time.time()
