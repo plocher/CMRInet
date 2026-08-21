@@ -58,6 +58,9 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
     if "slow" in traffic:
         ser.write(b"enable slowwalker\n")
         time.sleep(0.1)
+    if "loopback" in traffic:
+        ser.write(b"enable toggleoutfrominput\n")
+        time.sleep(0.1)
         
     # Stall
     if s > 0:
@@ -112,7 +115,16 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
             
     print(f"Captured {len(dump_lines)} lines for {tag}")
     
+    import datetime
     with log_file.open("w") as f:
+        f.write(f"# CMRI Tracer Capture\n")
+        f.write(f"# tag: {tag}\n")
+        f.write(f"# stall_ms: {s}\n")
+        f.write(f"# period_ms: {p}\n")
+        f.write(f"# mode: {mode}\n")
+        f.write(f"# traffic: {traffic}\n")
+        f.write(f"# secs: {secs}\n")
+        f.write(f"# timestamp: {datetime.datetime.now().isoformat()}\n")
         for line in dump_lines:
             f.write(line + "\n")
             
