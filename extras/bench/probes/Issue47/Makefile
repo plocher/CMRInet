@@ -1,6 +1,10 @@
 .PHONY: all test_tooling gather_data analyze_data
 
-all: test_tooling
+help:
+	@echo "Scenario runner for Issue #47"
+	@echo "make all to run entire scenario"
+
+all: test_tooling gather_data analyze_data
 
 test_tooling:
 	../../.venv/bin/pytest test_tooling.py
