@@ -35,7 +35,7 @@ THRESHOLD_MS = 8000
 PHANTOM_UA_CANDIDATES = (96, 31)
 
 PKT_RE = re.compile(
-    r"PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
+    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
 )
 
 
@@ -192,7 +192,13 @@ def analyze_lines(lines: List[str]) -> AnalyzerResult:
     )
 
 
-def print_result_text(res: AnalyzerResult):
+def print_result_text(res: AnalyzerResult, header_metadata: dict = None):
+    if header_metadata:
+        print("=== Log Context ===")
+        for k, v in header_metadata.items():
+            print(f"{k.ljust(18)}: {v}")
+        print("===================")
+        print()
     print(f"phantom UA        : {res.phantom_ua} ({res.poll_count} TX events, {res.it_count} I/T frames)")
     print(f"first / last t_ms : {res.first_t_ms} .. {res.last_t_ms}")
     if res.gaps:

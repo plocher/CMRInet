@@ -42,11 +42,36 @@ def rescore(sweep_dir: str):
     cap_idx = header.index("capture")
     v1_verdict_idx = header.index("verdict")
     
-    header_v2 = header + ["verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"]
+    
+    # v1 -> v2 header logic
+    # If the file already has verdict_v2, don't double append
+    if "verdict_v2" in header:
+        header_v2 = header
+    else:
+        header_v2 = header + ["verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"]
     
     rows_v2 = []
     transitions = defaultdict(list)
     
+    import json
+    import hashlib
+    manifest_info = ""
+    manifest_sha = ""
+    manifest_path = sweep_path / "manifest.json"
+    if manifest_path.exists():
+        with manifest_path.open("rb") as f:
+            manifest_bytes = f.read()
+            manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+            try:
+                manifest_data = json.loads(manifest_bytes.decode("utf-8"))
+                manifest_info = f"Scenario: {manifest_data.get('scenario', 'unknown')} | " \
+                                f"Stalls: {manifest_data.get('stalls', [])} | " \
+                                f"Periods: {manifest_data.get('periods', [])} | " \
+                                f"Traffic: '{manifest_data.get('traffic', '')}' | " \
+                                f"Git SHA: {manifest_data.get('git_sha', 'unknown')}"
+            except:
+                pass
+                
     for row in rows:
         capture_name = row[cap_idx]
         v1_verdict = row[v1_verdict_idx]
@@ -71,18 +96,35 @@ def rescore(sweep_dir: str):
             it_count = 0
             poll_count = 0
 
-        row_v2 = row + [v2_verdict, str(m_max), str(it_count), str(poll_count)]
+        
+        if "verdict_v2" in header:
+            # Overwrite the existing columns
+            row_v2 = list(row)
+            row_v2[header.index("verdict_v2")] = v2_verdict
+            row_v2[header.index("monotone_prefix_max_ms")] = str(m_max)
+            row_v2[header.index("it_count")] = str(it_count)
+            row_v2[header.index("poll_count")] = str(poll_count)
+        else:
+            row_v2 = row + [v2_verdict, str(m_max), str(it_count), str(poll_count)]
         rows_v2.append(row_v2)
         
         if v1_verdict != v2_verdict:
             transitions[f"{v1_verdict} -> {v2_verdict}"].append((capture_name, m_max, row_v2))
 
     with open(csv_out, "w", newline='') as f:
+        if manifest_sha:
+            import datetime
+            f.write(f"# manifest: sha:{manifest_sha} date:{datetime.datetime.now().isoformat()}\n")
         writer = csv.writer(f)
         writer.writerow(header_v2)
         writer.writerows(rows_v2)
         
     with open(diff_out, "w") as f:
+        if manifest_info:
+            f.write(f"# Analysis for {manifest_info}\n\n")
+        else:
+            f.write("# Analysis\n\n")
+            
         for trans, items in sorted(transitions.items()):
             f.write(f"## {trans}\n")
             for capture_name, m_max, row_v2 in items:
@@ -105,12 +147,21 @@ def main(argv: List[str]) -> int:
     try:
         with open(args.target, "r", errors="replace") as f:
             lines = f.readlines()
+            
+        header_metadata = {}
+        for line in lines:
+            if line.startswith("# "):
+                parts = line[2:].strip().split(": ", 1)
+                if len(parts) == 2:
+                    header_metadata[parts[0]] = parts[1]
+            else:
+                break
     except FileNotFoundError:
         print(f"ERROR: File not found {args.target}", file=sys.stderr)
         return 2
 
     res = _gap_deltas.analyze_lines(lines)
-    _gap_deltas.print_result_text(res)
+    _gap_deltas.print_result_text(res, header_metadata)
     
     if res.verdict == _gap_deltas.VERDICT_PASS:
         return 0
