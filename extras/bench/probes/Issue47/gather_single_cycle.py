@@ -16,7 +16,7 @@ def main():
     args = parser.parse_args()
 
     # Hardcoded test case
-    s = 1
+    s = 0
     p = 550
     mode = "yield"
     traffic = "fast slow loopback"
@@ -31,8 +31,7 @@ def main():
     print(f"    traffic : {traffic}")
     print(f"    secs    : {args.secs}")
     
-    ser = serial.Serial(args.port, 115200, timeout=0.5)
-    time.sleep(2) # boot settle
+    ser = _tracer_client.reboot_and_reconnect(args.port)
     
     if not _tracer_client.sync_and_validate_boot(ser):
         print("ERROR: Boot validation failed.", file=sys.stderr)
