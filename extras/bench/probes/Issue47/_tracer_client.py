@@ -128,5 +128,11 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
             f.write(line + "\n")
             
     res = _gap_deltas.analyze_lines(dump_lines)
+    
+    # Gracefully shut down the run (disable traffic, logging, etc)
+    ser.write(b"reset\n")
+    time.sleep(0.5)
+    flush_lines(ser)
+    
     return res
 
