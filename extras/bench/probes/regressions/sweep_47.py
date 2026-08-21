@@ -5,6 +5,7 @@ Replaces the old run.sh / sweep_47.sh which used compile-time configuration.
 """
 import argparse
 import sys
+import csv
 import time
 import json
 from pathlib import Path
@@ -31,7 +32,11 @@ def sync_and_validate_boot(ser, timeout=15.0):
                     print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
                     sys.exit(1)
                 # simple version check
-                if not version or version < "0.4.0":
+                if not version:
+                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
+                    sys.exit(1)
+                ver_parts = tuple(int(x) for x in version.split('.'))
+                if ver_parts < (0, 4, 0):
                     print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
                     sys.exit(1)
                 print(f"Verified boot: {image} v{version}")
@@ -53,12 +58,6 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
     ser.write(b"reset\n")
     time.sleep(0.1)
     flush_lines(ser)
-    
-    # Configure topology (errors on subsequent loops are expected and ignored by firmware/us)
-    ser.write(b"node add 30 7 7\n")
-    time.sleep(0.1)
-    ser.write(b"node add 31 4 4\n")
-    time.sleep(0.1)
     
     # Traffic
     if "fast" in traffic:
@@ -172,6 +171,13 @@ def main():
         print("ERROR: Boot validation failed (timeout or wrong image).", file=sys.stderr)
         return 1
         
+    print("Configuring topology for session...")
+    ser.write(b"node add 30 7 7\n")
+    time.sleep(0.1)
+    ser.write(b"node add 31 4 4\n")
+    time.sleep(0.1)
+    flush_lines(ser)
+    
     with summary_csv.open("a", newline="") as f:
         writer = csv.writer(f)
         if write_header:
