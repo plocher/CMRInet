@@ -1,0 +1,15 @@
+stall_ms,period_ms,mode,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript,verdict_v2,monotone_prefix_max_ms,it_count,poll_count
+6,150,yield,FAIL_STUCK,66,1651,900,1350,s6_p150_yield.log,s6_p150_yield.txt,FAIL_STUCK,754,0,66
+6,150,busy,FAIL_STUCK,57,2552,900,1944,s6_p150_busy.log,s6_p150_busy.txt,FAIL_STUCK,1200,0,57
+7,150,yield,FAIL_STUCK,54,2405,905,1800,s7_p150_yield.log,s7_p150_yield.txt,FAIL_STUCK,1051,0,54
+7,150,busy,FAIL_STUCK,55,4204,745,1651,s7_p150_busy.log,s7_p150_busy.txt,FAIL_STUCK,911,0,55
+8,150,yield,FAIL_STUCK,58,3302,749,1653,s8_p150_yield.log,s8_p150_yield.txt,FAIL_STUCK,1496,0,58
+8,150,busy,FAIL_STUCK,58,2545,758,1809,s8_p150_busy.log,s8_p150_busy.txt,FAIL_STUCK,2092,0,58
+9,150,yield,FAIL_STUCK,54,3548,855,1801,s9_p150_yield.log,s9_p150_yield.txt,FAIL_STUCK,1363,0,54
+9,150,busy,FAIL_STUCK,53,2602,993,2015,s9_p150_busy.log,s9_p150_busy.txt,FAIL_STUCK,1529,0,53
+10,150,yield,FAIL_STUCK,61,2602,900,1702,s10_p150_yield.log,s10_p150_yield.txt,FAIL_STUCK,1234,0,61
+10,150,busy,FAIL_STUCK,59,2070,925,1615,s10_p150_busy.log,s10_p150_busy.txt,FAIL_STUCK,1795,0,59
+11,150,yield,FAIL_STUCK,66,2329,800,1296,s11_p150_yield.log,s11_p150_yield.txt,FAIL_STUCK,890,0,66
+11,150,busy,FAIL_STUCK,56,2108,977,1464,s11_p150_busy.log,s11_p150_busy.txt,FAIL_STUCK,1624,0,56
+12,150,yield,FAIL_STUCK,59,2358,952,1591,s12_p150_yield.log,s12_p150_yield.txt,FAIL_STUCK,1591,0,59
+12,150,busy,FAIL_STUCK,70,2018,809,1258,s12_p150_busy.log,s12_p150_busy.txt,FAIL_STUCK,1656,0,70
