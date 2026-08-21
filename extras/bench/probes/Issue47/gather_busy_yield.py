@@ -69,8 +69,7 @@ def main():
     
     write_header = not summary_csv.exists()
     
-    ser = serial.Serial(args.port, 115200, timeout=0.5)
-    time.sleep(2) # boot settle
+    ser = _tracer_client.reboot_and_reconnect(args.port)
     
     if not _tracer_client.sync_and_validate_boot(ser):
         print("ERROR: Boot validation failed (timeout or wrong image).", file=sys.stderr)
