@@ -130,9 +130,9 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
 def main():
     parser = argparse.ArgumentParser(description="Sweep #47")
     parser.add_argument("--port", default="/dev/cu.usbmodem282201")
-    parser.add_argument("--secs", type=int, default=30)
-    parser.add_argument("--stalls", default="1 2 3 4 5 6 7 8 9 10 15 20 25 30 35 50 100 150 250")
-    parser.add_argument("--periods", default="50 100 140 145 150 155 160 200 250")
+    parser.add_argument("--secs", type=int, default=60)
+    parser.add_argument("--stalls", default="1 3 5 7 8 9 10 11 12 15 20 30 50 100 250")
+    parser.add_argument("--periods", default="125 145 150 155 200 233 250 373 500")
     parser.add_argument("--traffic", default="fast")
     parser.add_argument("--busy", action="store_true")
     parser.add_argument("--yield", dest="mode_yield", action="store_true")
@@ -160,14 +160,29 @@ def main():
     print(">>> #47 grid sweep (v2 via CDC capture)")
     print(f"    stalls  : {stalls}")
     print(f"    periods : {periods}")
-    print(f"    combos  : {len(stalls) * len(periods)}")
+    
+    # Calculate non-skipped combos for dry-run
+    active_combos = 0
+    for s in stalls:
+        for p in periods:
+            if p >= 2 * s:
+                active_combos += 1
+                
+    print(f"    combos  : {len(stalls) * len(periods)} total, {active_combos} active (p >= 2*s)")
     print(f"    secs    : {args.secs}")
     print(f"    port    : {args.port}")
     print(f"    mode    : {mode}")
     print(f"    traffic : {args.traffic}")
     
     if args.dry_run:
-        print("Dry run complete.")
+        print("\nDry run complete. Matrix:")
+        for s in stalls:
+            for p in periods:
+                tag = f"s{s}_p{p}_{mode}"
+                if p < 2 * s:
+                    print(f"  {tag:15s} -> SKIPPED_REDUNDANT")
+                else:
+                    print(f"  {tag:15s} -> ACTIVE")
         return 0
         
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -205,6 +220,17 @@ def main():
             for p in periods:
                 tag = f"s{s}_p{p}_{mode}"
                 print(f"[{i}/{total}] {tag}")
+                
+                if p < 2 * s:
+                    print(f"  -> SKIPPED_REDUNDANT (p={p} < 2*s={2*s})")
+                    writer.writerow([
+                        s, p, "SKIPPED_REDUNDANT", 0, 0,
+                        0, 0, "", "",
+                        "SKIPPED_REDUNDANT", 0, 0, 0
+                    ])
+                    f.flush()
+                    i += 1
+                    continue
                 
                 res = run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
                 
