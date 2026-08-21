@@ -39,8 +39,7 @@ def sync_and_validate_boot(ser, timeout=15.0):
 
 def flush_lines(ser):
     # drain any remaining data
-    while ser.in_waiting:
-        ser.readline()
+    ser.reset_input_buffer()
 
 def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
