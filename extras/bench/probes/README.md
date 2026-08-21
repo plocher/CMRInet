@@ -1,57 +1,27 @@
-# Bench probes
+# Bench Probes
 
-Durable reproduction artifacts for filed regressions. Not examples, not
-shipped, not compiled by CI. Reference-only, kept in the repo so that
-the next investigator to touch a known bug does not have to
-reconstruct the setup from chat history.
+This directory holds testbeds for exploring specific, deep issues on real hardware, isolated from the rest of the examples. 
 
-## Layout
+## Structure
 
-- `RegressionHost/RegressionHost.ino` — a single foundation sketch.
-  With no probe defines it behaves identically to
-  `examples/SimpleHost/SimpleHost.ino` (the regression baseline).
-  Individual bugs are activated by CLI defines; guarded blocks in the
-  sketch are named `REGRESSION_<issue-number>_<slug>` so grep points
-  straight at the tracker.
+Each investigation gets its own directory (`IssueNN/`) so its scripts and data do not mingle with other runs.
 
-- `regressions/REGISTRY.md` — the human-readable list of known
-  regressions. One section per issue: activation defines, how to
-  reproduce, expected vs observed behavior, and what a correct fix
-  should look like.
+`IssueNN/`
+├── `README.md` (Context, run instructions)
+├── `Makefile` (test_tooling, gather_data, analyze_data, all)
+├── `gather_data.py` (The harness that speaks to the board)
+├── `analyze_data.py` (The script that computes a verdict)
+├── `test_tooling.py` (Unit tests for the python scripts)
+└── `data/`
+    └── `results.YYYYMMDD/` (Timestamped output so sweeps never overwrite each other)
 
-- `regressions/run.sh <issue-number>` — the harness. Compiles
-  `RegressionHost` with the right defines, uploads, captures the CDC
-  stream, and (if a per-issue analyzer exists) runs it.
+The directory listing is the catalog; there is no separate index document.
 
-- `regressions/analyzers/<issue>_*.py` — optional per-issue capture
-  analyzers. Each prints a PASS/FAIL summary. `run.sh` picks the
-  first match for the requested issue.
+## Sketch Policy
 
-- `regressions/captures/` — bench-run artifacts, gitignored.
+We avoid creating throwaway sketches for each issue. `examples/XiaoHostTracer/XiaoHostTracer.ino` and `TracerShell` are the durable programmable-testbed surface. 
+Verbs added for one investigation stay compatible for all subsequent ones. Any change that would break an old test suite must be backported into an earlier tracer version stored alongside the old investigation's tooling, or the change is not landed. Bump `kVersion` on every additive change.
 
-## Reproducing a filed regression
+## Data Directory Convention
 
-```shell
-extras/bench/probes/regressions/run.sh 47
-```
-
-Options: `--secs N` (capture window, default 30), `--port /dev/cu.usbmodemXXX`
-(default matches the current bench). See `REGISTRY.md` for what a
-given issue's PASS/FAIL means.
-
-## Adding a new regression
-
-1. Guard the probe behavior in `RegressionHost.ino` under a
-   `#if defined(...)` block. Name the derived guard
-   `REGRESSION_<issue-number>_<slug>`.
-2. Add a case clause in `regressions/run.sh` that maps the issue
-   number to the required `-D` defines.
-3. Add a section in `regressions/REGISTRY.md` following the existing
-   format.
-4. If the regression benefits from automatic PASS/FAIL analysis,
-   drop a Python analyzer under `regressions/analyzers/` named
-   `<issue>_<slug>.py`; the harness picks it up by filename glob.
-
-Keep the baseline invariant: with no probe defines,
-`RegressionHost.ino` must still compile and behave exactly like
-`SimpleHost.ino`.
+Sweep outputs must land in `data/results.YYYYMMDD[.#]/`. The harness must never overwrite an existing directory. The trailing `.#` is a same-day disambiguator if needed.
