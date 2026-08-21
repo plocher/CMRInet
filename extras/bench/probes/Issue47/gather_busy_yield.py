@@ -83,37 +83,45 @@ def main():
     time.sleep(0.1)
     _tracer_client.flush_lines(ser)
     
-    with summary_csv.open("a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow([
-                "stall_ms", "period_ms", "mode", "verdict", "tx_events", "max_gap_ms",
-                "median_gap_ms", "p90_gap_ms", "capture", "transcript",
-                "verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"
-            ])
+    try:
+        with summary_csv.open("a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow([
+                    "stall_ms", "period_ms", "mode", "verdict", "tx_events", "max_gap_ms",
+                    "median_gap_ms", "p90_gap_ms", "capture", "transcript",
+                    "verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"
+                ])
+                
+            i = 1
+            total = len(stalls) * len(periods) * 2
             
-        i = 1
-        total = len(stalls) * len(periods) * 2
+            for s in stalls:
+                for p in periods:
+                    for mode in ["yield", "busy"]:
+                        tag = f"s{s}_p{p}_{mode}"
+                        print(f"[{i}/{total}] {tag}")
+                        
+                        res = _tracer_client.run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
+                        
+                        # Keep round-1 compat output plus new columns
+                        writer.writerow([
+                            s, p, mode, res.verdict, res.poll_count, res.max_gap, 
+                            res.median_gap, res.p90_gap, f"{tag}.log", f"{tag}.txt",
+                            res.verdict, res.monotone_prefix_max, res.it_count, res.poll_count
+                        ])
+                        f.flush()
+                        
+                        print(f"  -> {res.verdict} max_gap={res.max_gap}")
+                        i += 1
         
-        for s in stalls:
-            for p in periods:
-                for mode in ["yield", "busy"]:
-                    tag = f"s{s}_p{p}_{mode}"
-                    print(f"[{i}/{total}] {tag}")
-                    
-                    res = _tracer_client.run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
-                    
-                    # Keep round-1 compat output plus new columns
-                    writer.writerow([
-                        s, p, mode, res.verdict, res.poll_count, res.max_gap, 
-                        res.median_gap, res.p90_gap, f"{tag}.log", f"{tag}.txt",
-                        res.verdict, res.monotone_prefix_max, res.it_count, res.poll_count
-                    ])
-                    f.flush()
-                    
-                    print(f"  -> {res.verdict} max_gap={res.max_gap}")
-                    i += 1
-    
+    finally:
+        print("\n--- Cleaning up ---")
+        ser.write(b"reset\n")
+        import time; time.sleep(0.5)
+        _tracer_client.flush_lines(ser)
+        print("Host quiesced.")
+
     # Write manifest
     manifest_path = out_dir / "manifest.json"
     if not manifest_path.exists():
