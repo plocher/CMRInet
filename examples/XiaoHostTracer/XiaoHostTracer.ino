@@ -610,6 +610,11 @@ void loop() {
         }
       }
       handled = true;
+    } else if (strcmp(verb, "reboot") == 0) {
+      Serial.println("{\"event\":\"reboot\"}");
+      Serial.flush();  // ensure the response goes out before we drop CDC
+      ESP.restart();
+      handled = true;
     } else if (strncmp(verb, "run ", 4) == 0) {
       char* saveptr = nullptr;
       strtok_r(verbCopy, " ", &saveptr); // "run"
