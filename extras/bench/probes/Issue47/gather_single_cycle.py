@@ -17,9 +17,9 @@ def main():
 
     # Hardcoded test case
     s = 0
-    p = 550
+    p = 1500
     mode = "yield"
-    traffic = "fast slow loopback"
+    traffic = ""
     tag = "single_cycle"
     
     out_dir = Path("data/results_single_cycle")
