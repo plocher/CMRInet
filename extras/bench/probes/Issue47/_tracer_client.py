@@ -5,7 +5,13 @@ import serial
 from pathlib import Path
 import _gap_deltas
 
-_DEFAULT_HOST_PORT = "/dev/cu.usbmodem282201"
+# Role-based USB port mapping (FIXME: #68 dynamic discovery)
+HOST_PORT = "/dev/cu.usbmodem282201"
+SNIFFER_TX_PORT = "/dev/cu.usbmodem28101"
+SNIFFER_RX_PORT = "/dev/cu.usbmodem2821301"
+
+# Backward compatibility for scripts that still reference _DEFAULT_HOST_PORT
+_DEFAULT_HOST_PORT = HOST_PORT
 
 def reboot_and_reconnect(port, timeout=10.0):
     print(f"Rebooting host on {port}...")
