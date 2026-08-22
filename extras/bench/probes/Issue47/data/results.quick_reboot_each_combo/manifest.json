@@ -1,0 +1,15 @@
+{
+  "scenario": "stall_sweep",
+  "stalls": [
+    1
+  ],
+  "periods": [
+    145,
+    150
+  ],
+  "traffic": "fast slow loopback",
+  "secs": 15,
+  "port": "/dev/cu.usbmodem282201",
+  "git_sha": "d803a8137a0650b98b75cab8ac7e6b633742e878",
+  "timestamp": "2026-08-21T22:31:49.532438"
+}
