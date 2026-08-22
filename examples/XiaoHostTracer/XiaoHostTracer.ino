@@ -105,7 +105,7 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
 // fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
 // 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
-constexpr const char* kVersion = "0.4.0";
+constexpr const char* kVersion = "0.5.0"; // #58 (reboot) + #64 (display verb)
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -609,6 +609,35 @@ void loop() {
           }
         }
       }
+      handled = true;
+    } else if (strncmp(verb, "display ", 8) == 0) {
+      // #64: Allow the harness to inject custom annotations on the OLED
+      if (oledOk) {
+        char* saveptr = nullptr;
+        strtok_r(verbCopy, " ", &saveptr); // "display"
+        char* line_num_str = strtok_r(nullptr, " ", &saveptr); // line number
+        char* text = strtok_r(nullptr, "\n", &saveptr); // rest of the line
+        
+        if (line_num_str && text) {
+          int line_num = atoi(line_num_str);
+          if (line_num >= 1 && line_num <= 2) {
+            display.fillRect(0, line_num == 1 ? 48 : 56, 128, 8, SSD1306_BLACK);
+            display.setTextColor(SSD1306_WHITE);
+            display.setTextSize(1);
+            display.setCursor(0, line_num == 1 ? 48 : 56);
+            
+            char truncated[22] = {0};
+            strncpy(truncated, text, 21); // 21 chars + null = fits 128px width
+            display.print(truncated);
+            display.display();
+          }
+        }
+      }
+      handled = true;
+    } else if (strcmp(verb, "reboot") == 0) {
+      Serial.println("{\"event\":\"reboot\"}");
+      Serial.flush();  // ensure the response goes out before we drop CDC
+      ESP.restart();
       handled = true;
     } else if (strncmp(verb, "run ", 4) == 0) {
       char* saveptr = nullptr;

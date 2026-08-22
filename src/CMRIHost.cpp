@@ -346,12 +346,10 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
 }
 
 /// Pick the next enabled node in round-robin order. Returns false when
-/// no node is enabled.
+/// no node is enabled, or when all enabled nodes are still backoff-armed.
 ///
 /// Skips a node still serving its poll-retry backoff (map issue #41)
-/// unless every enabled node is currently backed off, in which case the
-/// backoff is bypassed so the engine never stalls (Design v1.1 D6:
-/// nothing here blocks or gives up on a silent Node).
+/// so the scheduler never resets another node's wall-clock deadline early.
 bool CMRIHost::selectNextNode_(uint32_t nowMs) {
   for (size_t step = 0; step < nodeCount_; ++step) {
     const size_t candidate = (cursor_ + step) % nodeCount_;
@@ -367,15 +365,12 @@ bool CMRIHost::selectNextNode_(uint32_t nowMs) {
     return true;
   }
   // Every enabled node is currently backed off (or none is enabled).
-  // Fall back to plain round robin rather than stall.
-  for (size_t step = 0; step < nodeCount_; ++step) {
-    const size_t candidate = (cursor_ + step) % nodeCount_;
-    if (nodes_[candidate].config_.enabled) {
-      polledIndex_ = candidate;
-      cursor_ = (candidate + 1) % nodeCount_;
-      return true;
-    }
-  }
+  // Do not force a poll ahead of any node's own backoff deadline.
+  // Returning false lets tick() idle this iteration while preserving each
+  // node's backoff timeline.
+  // VALIDATION: Design v1.1 D6 compatibility: the engine still runs every
+  // tick; backoff deadlines are the schedule, so idling here preserves
+  // progress without violating interop's "poll forever" behavior (2.3.10).
   return false;
 }
 
