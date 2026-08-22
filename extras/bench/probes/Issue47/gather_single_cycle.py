@@ -16,7 +16,7 @@ def main():
     args = parser.parse_args()
 
     # Hardcoded test case
-    s = 0
+    s = 25
     p = 1500
     mode = "yield"
     traffic = ""
