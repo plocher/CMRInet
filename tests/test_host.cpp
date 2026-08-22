@@ -111,6 +111,7 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
     case CMRIHostEventType::kReplyRejected: ++log.rejected; break;
     case CMRIHostEventType::kReplyTimeout: ++log.timeouts; break;
     case CMRIHostEventType::kReinitScheduled: ++log.reinitScheduled; break;
+    case CMRIHostEventType::kPollBackoffChanged: break;
     case CMRIHostEventType::kNodeStateChanged:
       ++log.stateChanges;
       log.lastPreviousState = event.previousState;
@@ -388,7 +389,15 @@ static void test_recovery_after_miss(void) {
   rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 1);
   rig.transport.onSendReplyPacket(
       5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
-  runUntil(rig.host, base, base + 300);
+  bool reachedRecovery = false;
+  for (uint32_t t = base; t <= base + 6000; ++t) {
+    rig.host.tick(t);
+    if (rig.node->statistics().recoveries >= 1) {
+      reachedRecovery = true;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(reachedRecovery, "did not reach first recovery in expected window");
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().recoveries);
@@ -402,13 +411,31 @@ static void test_offline_after_miss_threshold_then_recovers(void) {
   rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 6);
   rig.transport.onSendReplyPacket(
       5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
-  // Six P misses (each 250 ms gate + 5 ms pacing); the 6th arms the
-  // re-init ladder, which re-sends I + full T before the recovery P.
-  runUntil(rig.host, base, base + 1530);
+  // Wait until six misses are actually observed under the active backoff
+  // schedule; the 6th miss arms the re-init ladder.
+  bool reachedSixMisses = false;
+  uint32_t sixMissesAt = base;
+  for (uint32_t t = base; t <= base + 25000; ++t) {
+    rig.host.tick(t);
+    if (rig.node->statistics().noReplies >= 6) {
+      reachedSixMisses = true;
+      sixMissesAt = t;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(reachedSixMisses, "did not reach six misses in expected window");
   TEST_ASSERT_EQUAL_UINT32(6, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
   // VALIDATION: Interop v1.1 2.3.10: keep polling a silent Node forever.
-  runUntil(rig.host, base + 1531, base + 2600);
+  bool recovered = false;
+  for (uint32_t t = sixMissesAt + 1; t <= sixMissesAt + 20000; ++t) {
+    rig.host.tick(t);
+    if (rig.node->statistics().recoveries >= 1) {
+      recovered = true;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(recovered, "did not recover after miss-run");
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().recoveries);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
 }
@@ -420,9 +447,20 @@ static void test_reinit_ladder_fires_after_miss_threshold(void) {
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
                                  MockCMRITransport::kRepeatForever);
-  // Run past six P misses so the ladder arms and re-sends I + full T.
-  runUntil(rig.host, base, base + 2100);
+  // Run until the ladder is observed under the active backoff schedule.
+  bool ladderArmed = false;
+  uint32_t ladderArmedAt = base;
+  for (uint32_t t = base; t <= base + 25000; ++t) {
+    rig.host.tick(t);
+    if (log.reinitScheduled >= 1) {
+      ladderArmed = true;
+      ladderArmedAt = t;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(ladderArmed, "re-init ladder did not arm in expected window");
   TEST_ASSERT_TRUE(log.reinitScheduled >= 1);
+  runUntil(rig.host, ladderArmedAt + 1, ladderArmedAt + 40000);
   int inits = 0, transmits = 0;
   CMRIPacket sent;
   while (rig.transport.takeSent(sent)) {
@@ -444,10 +482,20 @@ static void test_invalidation_keeps_last_good_bytes(void) {
   // Force the re-init ladder: silence forever, run past six misses.
   rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
                                  MockCMRITransport::kRepeatForever);
-  runUntil(rig.host, base + 3, base + 1600);
+  bool reachedSixMisses = false;
+  uint32_t sixMissesAt = base + 3;
+  for (uint32_t t = base + 3; t <= base + 25000; ++t) {
+    rig.host.tick(t);
+    if (rig.node->statistics().noReplies >= 6) {
+      reachedSixMisses = true;
+      sixMissesAt = t;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(reachedSixMisses, "did not reach six misses for invalidation test");
   // Invalidation clears freshness but keeps the last-good bytes: 0 is a
   // valid consumer value, so zeroing would assert "all clear" (QBASIC F15).
-  TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(base + 1600));
+  TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(sixMissesAt));
   TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));  // NOT zeroed
   TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->inputByte(1));
   // Misses exceed the threshold, so health is OFFLINE (misses outrank the
@@ -613,7 +661,15 @@ static void test_event_listener_sees_timeout_and_offline_transition(void) {
   ListenerLog log;
   rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
-  runUntil(rig.host, base, base + 1530);
+  bool reachedSixTimeouts = false;
+  for (uint32_t t = base; t <= base + 25000; ++t) {
+    rig.host.tick(t);
+    if (log.timeouts >= 6) {
+      reachedSixTimeouts = true;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(reachedSixTimeouts, "did not reach six timeout events in expected window");
   TEST_ASSERT_EQUAL_INT(6, log.timeouts);
   TEST_ASSERT_EQUAL_INT(1, log.stateChanges);
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, log.lastPreviousState);
