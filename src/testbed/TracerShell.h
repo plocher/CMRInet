@@ -60,6 +60,7 @@ inline const char* eventName(CMRIHostEventType type) {
     case CMRIHostEventType::kReplyRejected: return "reject";
     case CMRIHostEventType::kReplyTimeout: return "miss";
     case CMRIHostEventType::kReinitScheduled: return "reinit";
+    case CMRIHostEventType::kPollBackoffChanged: return "backoff";
     case CMRIHostEventType::kNodeStateChanged: return "state";
   }
   return "unknown";
@@ -192,6 +193,10 @@ class TracerShell {
   /// True while polling is suspended by the quiesce verb.
   bool quiesced() const { return quiesced_; }
 
+  /// When enabled, emit only backoff-change host events; suppress all
+  /// other event lines. Useful for preserving diagnostic trace density.
+  void setBackoffTraceOnly(bool enabled) { backoffTraceOnly_ = enabled; }
+
  private:
   // Inputs hex + outputs hex (2 chars per byte each) plus ~400 chars of
   // fixed fields and counters and one extra field. Truncation is
@@ -204,6 +209,13 @@ class TracerShell {
   /// stamped with the event's own tick time.
   static void onHostEvent_(void* context, const CMRIHostEvent& event) {
     TracerShell& self = *static_cast<TracerShell*>(context);
+    if (event.type == CMRIHostEventType::kPollBackoffChanged) {
+      self.emitBackoffTrace_(event);
+      return;
+    }
+    if (self.backoffTraceOnly_) {
+      return;
+    }
     if (event.type == CMRIHostEventType::kNodeStateChanged) {
       self.emitLineAt_(event.nowMs, eventName(event.type), "previousState",
                        stateName(event.previousState));
@@ -241,6 +253,37 @@ class TracerShell {
       written = static_cast<int>(sizeof(line_)) - 1;
     }
     snprintf(line_ + written, sizeof(line_) - written, "}");
+    writeLine_(writeContext_, line_);
+  }
+
+  void emitBackoffTrace_(const CMRIHostEvent& event) {
+    if (event.node == nullptr) {
+      return;
+    }
+    const char* deadlineAction = "none";
+    if (event.pollBackoffReason == PollBackoffChangeReason::kAccept ||
+        event.pollBackoffReason == PollBackoffChangeReason::kGeometryMismatch) {
+      deadlineAction = "disarm";
+    } else if (event.pollBackoffReason == PollBackoffChangeReason::kInitial ||
+               event.pollBackoffReason == PollBackoffChangeReason::kMiss) {
+      deadlineAction = "arm";
+    }
+    int written = snprintf(
+        line_, sizeof(line_),
+        "{\"seq\":%u,\"ts\":%u,\"event\":\"diag_backoff_trace\",\"role\":\"host\","
+        "\"image\":\"%s\",\"version\":\"%s\",\"address\":%u,\"ua\":%u,"
+        "\"old_backoff_ms\":%lu,\"new_backoff_ms\":%lu,\"reason\":\"%s\","
+        "\"deadline_action\":\"%s\",\"now_ms\":%lu}",
+        ++seq_, event.nowMs - epochMs_, image_, version_, event.node->address(),
+        event.node->ua(),
+        static_cast<unsigned long>(event.previousPollBackoffMs),
+        static_cast<unsigned long>(event.newPollBackoffMs),
+        pollBackoffChangeReasonString(event.pollBackoffReason),
+        deadlineAction,
+        static_cast<unsigned long>(event.nowMs));
+    if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
+      line_[sizeof(line_) - 1] = '\0';
+    }
     writeLine_(writeContext_, line_);
   }
 
@@ -410,6 +453,7 @@ class TracerShell {
   uint32_t epochMs_ = 0;  ///< clock value at the epoch line; ts base
   uint32_t seq_ = 0;      ///< monotonic line sequence number
   bool quiesced_ = false; ///< bus handed off; polling suspended
+  bool backoffTraceOnly_ = false;
   char line_[kLineCapacity] = {0};
 };
 

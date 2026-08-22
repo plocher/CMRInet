@@ -1,0 +1,4 @@
+stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript,verdict_v2,monotone_prefix_max_ms,it_count,poll_count
+1,125,FAIL_STUCK,4,1262,766,766,s1_p125_yield.log,s1_p125_yield.txt,FAIL_STUCK,1262,1,4
+1,145,FAIL_TOO_FEW,0,-1,-1,-1,s1_p145_yield.log,s1_p145_yield.txt,FAIL_TOO_FEW,-1,1,0
+1,150,FAIL_TOO_FEW,0,-1,-1,-1,s1_p150_yield.log,s1_p150_yield.txt,FAIL_TOO_FEW,-1,0,0

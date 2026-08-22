@@ -1,0 +1,10 @@
+stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript,verdict_v2,monotone_prefix_max_ms,it_count,poll_count
+6,125,PASS,8,16257,2253,8830,s6_p125_yield.log,s6_p125_yield.txt,PASS,16257,3,8
+6,145,PASS,8,16282,2258,8806,s6_p145_yield.log,s6_p145_yield.txt,PASS,16282,3,8
+6,150,PASS,8,16254,2263,8271,s6_p150_yield.log,s6_p150_yield.txt,PASS,16254,3,8
+6,155,FAIL_CYCLING,10,16253,4268,12578,s6_p155_yield.log,s6_p155_yield.txt,FAIL_CYCLING,16253,3,10
+6,200,PASS,8,16267,2266,8805,s6_p200_yield.log,s6_p200_yield.txt,PASS,16267,3,8
+6,233,PASS,8,16264,2263,8791,s6_p233_yield.log,s6_p233_yield.txt,PASS,16264,3,8
+6,250,PASS,8,16262,2262,8803,s6_p250_yield.log,s6_p250_yield.txt,PASS,16262,3,8
+6,373,PASS,8,16283,2283,8799,s6_p373_yield.log,s6_p373_yield.txt,PASS,16283,3,8
+6,500,PASS,8,16258,2253,8815,s6_p500_yield.log,s6_p500_yield.txt,PASS,16258,3,8

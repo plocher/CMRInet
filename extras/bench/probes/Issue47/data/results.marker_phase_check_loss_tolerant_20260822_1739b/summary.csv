@@ -1,0 +1,2 @@
+stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript,sniffer_tx,sniffer_rx,verdict_v2,monotone_prefix_max_ms,it_count,poll_count
+9,150,PASS,7,8806,1764,4277,s9_p150_yield.log,packets.s9_p150_yield.Host.raw,packets.s9_p150_yield.TX.raw,packets.s9_p150_yield.RX.raw,PASS,8806,3,7

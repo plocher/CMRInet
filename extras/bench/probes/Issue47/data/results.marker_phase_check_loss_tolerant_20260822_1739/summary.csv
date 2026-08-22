@@ -1,0 +1,1 @@
+stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript,sniffer_tx,sniffer_rx,verdict_v2,monotone_prefix_max_ms,it_count,poll_count

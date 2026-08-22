@@ -114,6 +114,7 @@ enum class CMRIHostEventType : uint8_t {
   kReplyRejected,     ///< reply discarded: UA/MT mismatch or bad geometry
   kReplyTimeout,      ///< reply gate expired with no reply (a miss)
   kReinitScheduled,   ///< re-init ladder armed: I + full T + invalidation owed
+  kPollBackoffChanged,///< per-node poll backoff duration changed
   kNodeStateChanged,  ///< node health moved between states
 };
 
@@ -126,6 +127,15 @@ enum class ReplyRejectReason : uint8_t {
   kUaMismatch,        ///< reply UA != the polled node's UA
   kMtMismatch,        ///< reply MT != 'R' (kReceiveData)
   kGeometryMismatch,  ///< reply length != configured inputBytes
+};
+
+/// Why pollBackoffMs_ changed for a node.
+enum class PollBackoffChangeReason : uint8_t {
+  kNone,               ///< not a backoff-change event
+  kMiss,               ///< timeout miss increased backoff
+  kAccept,             ///< accepted reply cleared backoff
+  kGeometryMismatch,   ///< geometry-mismatch reply cleared backoff
+  kInitial,            ///< first miss initialized backoff from zero
 };
 
 /// One engine event. `node` is the node of the exchange or state
@@ -143,6 +153,10 @@ struct CMRIHostEvent {
   uint16_t replyLength = 0;  ///< body byte count of the rejected reply
   uint8_t  replyUa = 0;      ///< UA byte of the rejected reply
   uint8_t  replyMt = 0;      ///< MT byte of the rejected reply
+  /// Backoff details. Meaningful only when type == kPollBackoffChanged.
+  PollBackoffChangeReason pollBackoffReason = PollBackoffChangeReason::kNone;
+  uint32_t previousPollBackoffMs = 0;
+  uint32_t newPollBackoffMs = 0;
 };
 
 /// Event listener. Plain function pointer with a context cookie
@@ -345,7 +359,11 @@ class CMRIHost {
                   ReplyRejectReason rejectReason = ReplyRejectReason::kNone,
                   uint16_t replyLength = 0,
                   uint8_t replyUa = 0,
-                  uint8_t replyMt = 0);
+                  uint8_t replyMt = 0,
+                  PollBackoffChangeReason pollBackoffReason =
+                      PollBackoffChangeReason::kNone,
+                  uint32_t previousPollBackoffMs = 0,
+                  uint32_t newPollBackoffMs = 0);
   void emitTrace_(bool transmit, const CMRIPacket& packet);
 
   CMRITransport& transport_;
@@ -378,5 +396,8 @@ const char* configStatusString(CMRIHost::ConfigStatus status);
 
 /// Human-readable name for a ReplyRejectReason value.
 const char* replyRejectReasonString(ReplyRejectReason reason);
+
+/// Human-readable name for a PollBackoffChangeReason value.
+const char* pollBackoffChangeReasonString(PollBackoffChangeReason reason);
 
 }  // namespace CMRInet
