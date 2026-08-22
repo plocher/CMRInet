@@ -97,9 +97,9 @@ class TracerShell {
 
   /// Wire the shell to a configured-but-not-begun host. Registers
   /// both D7 listeners (onEvent and onTrace), so it MUST run before
-  /// host.begin() locks the configuration. `image` and `version` identify the wrapping
-  /// main in every telemetry line; both strings must outlive the
-  /// shell.
+  /// host.begin() locks the configuration. `image` and `version`
+  /// identify the wrapping main on identity lines (`epoch` and
+  /// `status`); both strings must outlive the shell.
   void bind(CMRIHost& host, SerialCMRITransport& transport,
             RemoteNodeHandle& node, const char* image, const char* version,
             LineWriter writeLine, void* writeContext) {
@@ -245,9 +245,8 @@ class TracerShell {
     int written = snprintf(
         line_, sizeof(line_),
         "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
-        "\"image\":\"%s\",\"version\":\"%s\",\"address\":%u,\"ua\":%u,"
-        "\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
-        ++seq_, nowMs_ - epochMs_, image_, version_, node_->address(),
+        "\"address\":%u,\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
+        ++seq_, nowMs_ - epochMs_, node_->address(),
         node_->ua(), transmit ? "tx" : "rx", mtBuf, bodyHex);
     if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
       written = static_cast<int>(sizeof(line_)) - 1;
@@ -271,10 +270,10 @@ class TracerShell {
     int written = snprintf(
         line_, sizeof(line_),
         "{\"seq\":%u,\"ts\":%u,\"event\":\"diag_backoff_trace\",\"role\":\"host\","
-        "\"image\":\"%s\",\"version\":\"%s\",\"address\":%u,\"ua\":%u,"
+        "\"address\":%u,\"ua\":%u,"
         "\"old_backoff_ms\":%lu,\"new_backoff_ms\":%lu,\"reason\":\"%s\","
         "\"deadline_action\":\"%s\",\"now_ms\":%lu}",
-        ++seq_, event.nowMs - epochMs_, image_, version_, event.node->address(),
+        ++seq_, event.nowMs - epochMs_, event.node->address(),
         event.node->ua(),
         static_cast<unsigned long>(event.previousPollBackoffMs),
         static_cast<unsigned long>(event.newPollBackoffMs),
@@ -291,6 +290,8 @@ class TracerShell {
                    const char* extraKey = nullptr,
                    const char* extraValue = nullptr,
                    bool emitConfig = false) {
+    const bool includeIdentity =
+        emitConfig || (strcmp(event, "status") == 0);
     char inputsHex[2 * RemoteNodeHandle::kMaxInputBytes + 1] = "";
     const size_t inputLength = node_->inputLength();
     for (size_t i = 0; i < inputLength; ++i) {
@@ -308,24 +309,47 @@ class TracerShell {
     const CMRIFrameDecoder::Statistics& decoder =
         transport_->decoderStatistics();
 
-    int written = snprintf(
-        line_, sizeof(line_),
-        "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\","
-        "\"role\":\"host\",\"image\":\"%s\",\"version\":\"%s\","
-        "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
-        "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
-        "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
-        "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
-        "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
-        "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
-        "\"inputs\":\"%s\",\"outputs\":\"%s\"",
-        ++seq_, nowMs - epochMs_, event, image_, version_, node_->address(),
-        node_->ua(), stateName(node_->state()), quiesced_ ? "true" : "false",
-        host.pollsSent, host.pollSendRetries, host.repliesAccepted,
-        node.noReplies, host.repliesRejected, host.unsolicitedPackets,
-        node.exchanges, node.errors, node.recoveries, node.consecutiveMisses,
-        node.lastTurnaroundMs, link.decodeErrors, decoder.slowGaps,
-        decoder.maxGapMs, inputsHex, outputsHex);
+    int written = 0;
+    if (includeIdentity) {
+      written = snprintf(
+          line_, sizeof(line_),
+          "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\","
+          "\"role\":\"host\",\"image\":\"%s\",\"version\":\"%s\","
+          "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
+          "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
+          "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
+          "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
+          "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
+          "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
+          "\"inputs\":\"%s\",\"outputs\":\"%s\"",
+          ++seq_, nowMs - epochMs_, event, image_, version_, node_->address(),
+          node_->ua(), stateName(node_->state()),
+          quiesced_ ? "true" : "false", host.pollsSent, host.pollSendRetries,
+          host.repliesAccepted, node.noReplies, host.repliesRejected,
+          host.unsolicitedPackets, node.exchanges, node.errors,
+          node.recoveries, node.consecutiveMisses, node.lastTurnaroundMs,
+          link.decodeErrors, decoder.slowGaps, decoder.maxGapMs, inputsHex,
+          outputsHex);
+    } else {
+      written = snprintf(
+          line_, sizeof(line_),
+          "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\","
+          "\"role\":\"host\","
+          "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
+          "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
+          "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
+          "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
+          "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
+          "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
+          "\"inputs\":\"%s\",\"outputs\":\"%s\"",
+          ++seq_, nowMs - epochMs_, event, node_->address(), node_->ua(),
+          stateName(node_->state()), quiesced_ ? "true" : "false",
+          host.pollsSent, host.pollSendRetries, host.repliesAccepted,
+          node.noReplies, host.repliesRejected, host.unsolicitedPackets,
+          node.exchanges, node.errors, node.recoveries, node.consecutiveMisses,
+          node.lastTurnaroundMs, link.decodeErrors, decoder.slowGaps,
+          decoder.maxGapMs, inputsHex, outputsHex);
+    }
     if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
       written = static_cast<int>(sizeof(line_)) - 1;
     }

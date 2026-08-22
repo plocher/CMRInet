@@ -20,32 +20,36 @@ import importlib
 gap_deltas = importlib.import_module("analyze_data")
 
 def sync_and_validate_boot(ser, timeout=15.0):
+    ser.write(b"status\n")
+    time.sleep(0.5)
     start = time.time()
     while time.time() - start < timeout:
         line = ser.readline().decode('utf-8', errors='replace').strip()
         if not line:
             continue
         print(f"BOOT: {line}")
-        if line.startswith('{') and '"image"' in line:
-            try:
-                doc = json.loads(line)
-                image = doc.get("image")
-                version = doc.get("version")
-                if image != "xiao_host_tracer":
-                    print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                # simple version check
-                if not version:
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                ver_parts = tuple(int(x) for x in version.split('.'))
-                if ver_parts < (0, 4, 0):
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                print(f"Verified boot: {image} v{version}")
-                return True
-            except json.JSONDecodeError:
-                pass
+        if not line.startswith('{'):
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if doc.get("event") not in ("status", "epoch"):
+            continue
+        image = doc.get("image")
+        version = doc.get("version")
+        if image != "xiao_host_tracer":
+            print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        if not version:
+            print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        ver_parts = tuple(int(x) for x in version.split('.'))
+        if ver_parts < (0, 4, 0):
+            print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Verified boot: {image} v{version}")
+        return True
     return False
 
 def flush_lines(ser):
