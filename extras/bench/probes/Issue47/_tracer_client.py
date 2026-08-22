@@ -167,29 +167,38 @@ def sync_and_validate_boot(ser, timeout=15.0):
         if not line:
             continue
         print(f"BOOT: {line}")
-        if line.startswith('{') and '"image"' in line:
-            try:
-                # Use regex to safely extract image and version even if the line is truncated
-                import re
-                img_match = re.search(r'"image":"([^"]+)"', line)
-                ver_match = re.search(r'"version":"([^"]+)"', line)
-                image = img_match.group(1) if img_match else None
-                version = ver_match.group(1) if ver_match else None
-                if image != "xiao_host_tracer":
-                    print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                # simple version check
-                if not version:
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                ver_parts = tuple(int(x) for x in version.split('.'))
-                if ver_parts < (0, 4, 0):
-                    print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
-                    sys.exit(1)
-                print(f"Verified boot: {image} v{version}")
-                return True
-            except Exception:
-                pass
+        if not line.startswith("{"):
+            continue
+        try:
+            doc = json.loads(line)
+            event = doc.get("event")
+            if event not in ("status", "epoch"):
+                continue
+            image = doc.get("image")
+            version = doc.get("version")
+        except json.JSONDecodeError:
+            # Truncated lines are possible under CDC backpressure; only parse
+            # identity if this line is clearly status/epoch scoped.
+            if '"event":"status"' not in line and '"event":"epoch"' not in line:
+                continue
+            import re
+            img_match = re.search(r'\"image\":\"([^\"]+)\"', line)
+            ver_match = re.search(r'\"version\":\"([^\"]+)\"', line)
+            image = img_match.group(1) if img_match else None
+            version = ver_match.group(1) if ver_match else None
+
+        if image != "xiao_host_tracer":
+            print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        if not version:
+            print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        ver_parts = tuple(int(x) for x in version.split('.'))
+        if ver_parts < (0, 4, 0):
+            print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Verified boot: {image} v{version}")
+        return True
     return False
 
 def flush_lines(ser):
