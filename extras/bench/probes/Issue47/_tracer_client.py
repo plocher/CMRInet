@@ -2,7 +2,9 @@ import sys
 import time
 import json
 import serial
+import threading
 from pathlib import Path
+from typing import Callable, Optional
 import _gap_deltas
 
 # Role-based USB port mapping (FIXME: #68 dynamic discovery)
@@ -12,6 +14,118 @@ SNIFFER_RX_PORT = "/dev/cu.usbmodem2821301"
 
 # Backward compatibility for scripts that still reference _DEFAULT_HOST_PORT
 _DEFAULT_HOST_PORT = HOST_PORT
+DEFAULT_NODE_ADDRESSES = (30, 31)
+
+
+def _write_command(ser, cmd: bytes, delay_s: float = 0.1) -> None:
+    ser.write(cmd)
+    time.sleep(delay_s)
+
+def _readline_text(ser, raw_line_sink: Optional[Callable[[bytes], None]] = None) -> str:
+    try:
+        raw_line = ser.readline()
+    except StopIteration:
+        return ""
+    if raw_line and raw_line_sink is not None:
+        raw_line_sink(raw_line)
+    return raw_line.decode("utf-8", errors="replace").strip()
+
+
+def wait_for_sustained_quiet(ser, max_wait_s: float = 30.0, quiet_window_s: float = 2.0,
+                             sample_limit: int = 0, drain_first: bool = True,
+                             line_sink: Optional[Callable[[str], None]] = None,
+                             raw_line_sink: Optional[Callable[[bytes], None]] = None) -> bool:
+    print("Waiting for sustained bus quiet...")
+    if drain_first:
+        flush_lines(ser)
+    deadline = time.time() + max_wait_s
+    quiet_start = None
+    activity_samples = 0
+    while time.time() < deadline:
+        line = _readline_text(ser, raw_line_sink=raw_line_sink)
+        if line:
+            if line_sink is not None:
+                line_sink(line)
+            if activity_samples < sample_limit:
+                print(f"  activity: {line}")
+                activity_samples += 1
+            quiet_start = None
+            continue
+        if quiet_start is None:
+            quiet_start = time.time()
+            continue
+        if time.time() - quiet_start >= quiet_window_s:
+            print("Bus is quiet.")
+            return True
+    print("ERROR: Bus did not become quiet before timeout.")
+    return False
+
+def quiesce_traffic_preserving_ring(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
+                                    max_wait_s: float = 30.0, quiet_window_s: float = 2.0,
+                                    line_sink: Optional[Callable[[str], None]] = None,
+                                    raw_line_sink: Optional[Callable[[bytes], None]] = None) -> bool:
+    _write_command(ser, b"disable fastwalker\n")
+    _write_command(ser, b"disable slowwalker\n")
+    _write_command(ser, b"disable toggleoutfrominput\n")
+    for ua in node_addresses:
+        _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
+    return wait_for_sustained_quiet(
+        ser,
+        max_wait_s=max_wait_s,
+        quiet_window_s=quiet_window_s,
+        drain_first=False,
+        line_sink=line_sink,
+        raw_line_sink=raw_line_sink,
+    )
+
+
+def _capture_serial_stream(port_name: str, out_file: Path, stop_event: threading.Event,
+                           errors: list[str], label: str) -> None:
+    ser = None
+    try:
+        ser = serial.Serial(port_name, 115200, timeout=0.1)
+        with out_file.open("wb") as handle:
+            while not stop_event.is_set():
+                waiting = ser.in_waiting
+                if waiting > 0:
+                    data = ser.read(waiting)
+                    if data:
+                        handle.write(data)
+                        handle.flush()
+                else:
+                    time.sleep(0.005)
+    except Exception as exc:
+        errors.append(f"{label} capture failed on {port_name}: {exc}")
+    finally:
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+
+def shutdown_and_verify_quiet(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
+                              max_wait_s: float = 30.0,
+                              quiet_window_s: float = 2.0,
+                              line_sink: Optional[Callable[[str], None]] = None,
+                              raw_line_sink: Optional[Callable[[bytes], None]] = None) -> bool:
+    ser.write(b"display 2 " + "resetting".encode("utf-8") + b"\n")
+    _write_command(ser, b"reset\n", delay_s=0.5)
+    flush_lines(ser)
+    print("Host quiesced.")
+
+    _write_command(ser, b"disable fastwalker\n")
+    _write_command(ser, b"disable slowwalker\n")
+    _write_command(ser, b"disable toggleoutfrominput\n")
+    for ua in node_addresses:
+        _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
+    return wait_for_sustained_quiet(
+        ser,
+        max_wait_s=max_wait_s,
+        quiet_window_s=quiet_window_s,
+        line_sink=line_sink,
+        raw_line_sink=raw_line_sink,
+    )
 
 def reboot_and_reconnect(port, timeout=10.0):
     print(f"Rebooting host on {port}...")
@@ -82,120 +196,208 @@ def flush_lines(ser):
     # drain any remaining data
     ser.reset_input_buffer()
 
-def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
+def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
+              capture_sniffers: bool = False):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
     log_file = out_dir / f"{tag}.log"
-    
-    # Send commands
-    ser.write(b"reset\n")
-    time.sleep(0.1)
-    flush_lines(ser)
-    
-    # Traffic
-    dstring=""
-    dstringsep="t:"
-    if "fast" in traffic:
-        ser.write(b"enable fastwalker\n")
-        dstring += f"{dstringsep}f"
-        dstringsep = ", "
-        time.sleep(0.1)
-    if "slow" in traffic:
-        ser.write(b"enable slowwalker\n")
-        dstring += f"{dstringsep}s"
-        dstringsep = ", "
-        time.sleep(0.1)
-    if "loopback" in traffic:
-        ser.write(b"enable toggleoutfrominput\n")
-        dstring += f"{dstringsep}l"
-        dstringsep = ", "
-        time.sleep(0.1)
-    if dstring:
-        ser.write(f"display 1 {dstring}\n".encode('utf-8'))
-        time.sleep(0.1)
-    # Stall
-    if s > 0:
-        cmd = f"enable stall {s} period {p} mode {mode}\n"
-        ser.write(cmd.encode('utf-8'))
-        dstring = f"Run: stall:{s}/{p}/{mode}"
-        ser.write(b"display 2 " + dstring.encode('utf-8') + b"\n")
-        time.sleep(0.1)
+    host_raw_file = out_dir / f"packets.{tag}.Host.raw"
+    tx_raw_file = out_dir / f"packets.{tag}.TX.raw"
+    rx_raw_file = out_dir / f"packets.{tag}.RX.raw"
 
-    flush_lines(ser)
-    
-    # Run
-    time.sleep(0.1)
-    cmd = f"run {secs}\n"
-    ser.write(cmd.encode('utf-8'))
-    
-    print(f"Waiting for END CAPTURE (secs={secs})...")
-    deadline = time.time() + secs + 5.0
-    end_capture_seen = False
-    
-    while time.time() < deadline:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-        if line.startswith("END CAPTURE"):
-            end_capture_seen = True
-            print(f"Seen: {line}")
-            break
-            
-    if not end_capture_seen:
-        print(f"ERROR_TIMEOUT: END CAPTURE not seen for {tag}")
-        ser.write(b"display 2 " + "run ERROR_TIMEOUT".encode('utf-8') + b"\n")
-        time.sleep(0.1)
+    sniffer_stop_event = None
+    sniffer_threads: list[threading.Thread] = []
+    sniffer_errors: list[str] = []
+    if capture_sniffers:
+        tx_raw_file.touch()
+        rx_raw_file.touch()
+        sniffer_stop_event = threading.Event()
+        sniffer_threads = [
+            threading.Thread(
+                target=_capture_serial_stream,
+                args=(SNIFFER_TX_PORT, tx_raw_file, sniffer_stop_event,
+                      sniffer_errors, "TX"),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_capture_serial_stream,
+                args=(SNIFFER_RX_PORT, rx_raw_file, sniffer_stop_event,
+                      sniffer_errors, "RX"),
+                daemon=True,
+            ),
+        ]
+        for thread in sniffer_threads:
+            thread.start()
 
-        return _gap_deltas.AnalyzerResult(
-            verdict="ERROR_TIMEOUT", phantom_ua=-1, first_t_ms=-1, last_t_ms=-1
+    def _stop_sniffers() -> None:
+        if sniffer_stop_event is None:
+            return
+        sniffer_stop_event.set()
+        for thread in sniffer_threads:
+            thread.join(timeout=2.0)
+
+    def _apply_sniffer_status(result: _gap_deltas.AnalyzerResult
+                              ) -> _gap_deltas.AnalyzerResult:
+        if capture_sniffers and sniffer_errors:
+            for err in sniffer_errors:
+                print(f"ERROR: {err}", file=sys.stderr)
+            result.verdict = "ERROR_SNIFFER_CAPTURE"
+        return result
+
+    with host_raw_file.open("wb") as host_raw:
+        def _host_raw_sink(raw_line: bytes) -> None:
+            host_raw.write(raw_line)
+            host_raw.flush()
+        def _host_marker(phase: str, **extra_fields) -> None:
+            payload = {"event": "harness_marker", "phase": phase}
+            payload.update(extra_fields)
+            host_raw.write((json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"))
+            host_raw.flush()
+
+        _host_marker(
+            "combo_start",
+            tag=tag,
+            stall_ms=s,
+            period_ms=p,
+            mode=mode,
+            traffic=traffic,
+            secs=secs,
         )
-    ser.write(b"display 2 " + "run complete".encode('utf-8') + b"\n")
-    time.sleep(0.1)
 
-    # Dump
+        # Send commands
+        ser.write(b"reset\n")
+        time.sleep(0.1)
+        flush_lines(ser)
+        for ua in DEFAULT_NODE_ADDRESSES:
+            _write_command(ser, f"node enable {ua}\n".encode("utf-8"))
+        flush_lines(ser)
 
-    ser.write(b"display 2 " + "dumping ring".encode('utf-8') + b"\n")
-    ser.write(b"dump\n")
-    print("Dumping ring...")
-    deadline = time.time() + 10.0
-    
-    dump_lines = []
-    in_dump = False
-    
-    while time.time() < deadline:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
-        if not line:
-            continue
-            
-        if line.startswith("BEGIN DUMP"):
-            in_dump = True
-        elif line == "END DUMP":
-            break
-        elif in_dump:
-            dump_lines.append(line)
-            
-    print(f"Captured {len(dump_lines)} lines for {tag}")
-    ser.write(b"display 2 " + f"dumped {len(dump_lines)} lines".encode('utf-8') + b"\n")
+        # Traffic
+        dstring = ""
+        dstringsep = "t:"
+        if "fast" in traffic:
+            ser.write(b"enable fastwalker\n")
+            dstring += f"{dstringsep}f"
+            dstringsep = ", "
+            time.sleep(0.1)
+        if "slow" in traffic:
+            ser.write(b"enable slowwalker\n")
+            dstring += f"{dstringsep}s"
+            dstringsep = ", "
+            time.sleep(0.1)
+        if "loopback" in traffic:
+            ser.write(b"enable toggleoutfrominput\n")
+            dstring += f"{dstringsep}l"
+            dstringsep = ", "
+            time.sleep(0.1)
+        if dstring:
+            ser.write(f"display 1 {dstring}\n".encode("utf-8"))
+            time.sleep(0.1)
+        if s > 0:
+            cmd = f"enable stall {s} period {p} mode {mode}\n"
+            ser.write(cmd.encode("utf-8"))
+            dstring = f"Run: stall:{s}/{p}/{mode}"
+            ser.write(b"display 2 " + dstring.encode("utf-8") + b"\n")
+            time.sleep(0.1)
 
-    import datetime
-    with log_file.open("w") as f:
-        f.write(f"# CMRI Tracer Capture\n")
-        f.write(f"# tag: {tag}\n")
-        f.write(f"# stall_ms: {s}\n")
-        f.write(f"# period_ms: {p}\n")
-        f.write(f"# mode: {mode}\n")
-        f.write(f"# traffic: {traffic}\n")
-        f.write(f"# secs: {secs}\n")
-        f.write(f"# timestamp: {datetime.datetime.now().isoformat()}\n")
-        for line in dump_lines:
-            f.write(line + "\n")
-            
-    res = _gap_deltas.analyze_lines(dump_lines)
-    
-    # Gracefully shut down the run (disable traffic, logging, etc)
-    ser.write(b"display 2 " + "resetting".encode('utf-8') + b"\n")
-    ser.write(b"reset\n")
-    time.sleep(0.5)
-    flush_lines(ser)
-    
-    return res
+        flush_lines(ser)
+
+        # Run
+        time.sleep(0.1)
+        cmd = f"run {secs}\n"
+        ser.write(cmd.encode("utf-8"))
+        _host_marker("run_command_sent")
+
+        print(f"Waiting for END CAPTURE marker (secs={secs})...")
+        deadline = time.time() + secs + 5.0
+        end_capture_seen = False
+
+        while time.time() < deadline:
+            line = _readline_text(ser, raw_line_sink=_host_raw_sink)
+            if not line:
+                continue
+            if line.startswith("END CAPTURE"):
+                end_capture_seen = True
+                _host_marker("end_capture_marker_seen", marker=line)
+                print(f"Seen run-window marker: {line}")
+                break
+
+        if not end_capture_seen:
+            print(f"ERROR_TIMEOUT: END CAPTURE not seen for {tag}")
+            _host_marker("end_capture_marker_timeout")
+            ser.write(b"display 2 " + "run ERROR_TIMEOUT".encode("utf-8") + b"\n")
+            time.sleep(0.1)
+            shutdown_and_verify_quiet(
+                ser,
+                raw_line_sink=_host_raw_sink,
+            )
+            timeout_res = _gap_deltas.AnalyzerResult(
+                verdict="ERROR_TIMEOUT", phantom_ua=-1, first_t_ms=-1, last_t_ms=-1
+            )
+            _host_marker("combo_complete", verdict=timeout_res.verdict)
+            _stop_sniffers()
+            return _apply_sniffer_status(timeout_res)
+
+        ser.write(b"display 2 " + "run complete".encode("utf-8") + b"\n")
+        time.sleep(0.1)
+
+        _host_marker("quiesce_start")
+        quiet_ok = quiesce_traffic_preserving_ring(
+            ser,
+            raw_line_sink=_host_raw_sink,
+        )
+        _host_marker("quiesce_complete", quiet_ok=quiet_ok)
+
+        # Dump after the bus is quiet so all scenario traffic has been processed.
+        _host_marker("dump_start")
+        ser.write(b"display 2 " + "dumping ring".encode("utf-8") + b"\n")
+        ser.write(b"dump\n")
+        print("Dumping ring...")
+        deadline = time.time() + 10.0
+
+        dump_lines = []
+        in_dump = False
+        dump_end_seen = False
+
+        while time.time() < deadline:
+            line = _readline_text(ser, raw_line_sink=_host_raw_sink)
+            if not line:
+                continue
+
+            if line.startswith("BEGIN DUMP"):
+                in_dump = True
+                _host_marker("dump_begin_seen", marker=line)
+            elif line == "END DUMP":
+                dump_end_seen = True
+                _host_marker("dump_complete")
+                break
+            elif in_dump:
+                dump_lines.append(line)
+
+        if not dump_end_seen:
+            _host_marker("dump_timeout")
+
+        print(f"Captured {len(dump_lines)} lines for {tag}")
+        ser.write(b"display 1 " + f"dumped {len(dump_lines)} lines".encode("utf-8") + b"\n")
+        ser.write(b"display 2 " + "quiesce complete".encode("utf-8") + b"\n")
+
+        import datetime
+        with log_file.open("w") as f:
+            f.write(f"# CMRI Tracer Capture\n")
+            f.write(f"# tag: {tag}\n")
+            f.write(f"# stall_ms: {s}\n")
+            f.write(f"# period_ms: {p}\n")
+            f.write(f"# mode: {mode}\n")
+            f.write(f"# traffic: {traffic}\n")
+            f.write(f"# secs: {secs}\n")
+            f.write(f"# timestamp: {datetime.datetime.now().isoformat()}\n")
+            for line in dump_lines:
+                f.write(line + "\n")
+
+        res = _gap_deltas.analyze_lines(dump_lines)
+        if not quiet_ok:
+            res.verdict = "ERROR_NOT_QUIET"
+        _host_marker("combo_complete", verdict=res.verdict, dump_lines=len(dump_lines))
+
+    _stop_sniffers()
+    return _apply_sniffer_status(res)
 

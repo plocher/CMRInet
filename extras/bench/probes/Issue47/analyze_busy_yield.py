@@ -37,6 +37,11 @@ def rescore(sweep_dir: str):
         reader = csv.reader(f)
         header = next(reader)
         rows = list(reader)
+    def _safe_int(value: str, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     # v1 columns: stall_ms,period_ms,verdict,tx_events,max_gap_ms,median_gap_ms,p90_gap_ms,capture,transcript
     cap_idx = header.index("capture")
@@ -73,11 +78,26 @@ def rescore(sweep_dir: str):
                 pass
                 
     for row in rows:
-        capture_name = row[cap_idx]
-        v1_verdict = row[v1_verdict_idx]
+        capture_name = row[cap_idx].strip()
+        v1_verdict = row[v1_verdict_idx].strip()
         log_path = sweep_path / capture_name
+        is_skipped_row = v1_verdict.startswith("SKIPPED")
         
-        if log_path.exists():
+        if is_skipped_row:
+            v2_verdict = v1_verdict
+            if "monotone_prefix_max_ms" in header:
+                m_max = _safe_int(row[header.index("monotone_prefix_max_ms")], default=0)
+            else:
+                m_max = 0
+            if "it_count" in header:
+                it_count = _safe_int(row[header.index("it_count")], default=0)
+            else:
+                it_count = 0
+            if "poll_count" in header:
+                poll_count = _safe_int(row[header.index("poll_count")], default=0)
+            else:
+                poll_count = 0
+        elif capture_name and log_path.exists():
             try:
                 with open(log_path, "r", errors="replace") as f:
                     res = _gap_deltas.analyze_lines(f.readlines())

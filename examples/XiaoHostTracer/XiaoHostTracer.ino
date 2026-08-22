@@ -49,10 +49,65 @@ constexpr int      kScreenH       = 64;
 constexpr int      kScreenAddr    = 0x3C;
 constexpr uint32_t kDisplayRefreshMs = 150;
 
+// #64: OLED custom annotations
+char displayLine1[22] = {0};
+char displayLine2[22] = {0};
+
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
 bool oledOk = false;
 uint32_t lastDisplayMs = 0;
 CMRInet::examples::HostStatusPanel panel;
+
+// #11: Non-blocking incremental display update
+bool displayDirty = false;
+size_t displayChunkOffset = 0;
+const size_t kDisplayChunkSize = 32; // 32 bytes per loop iteration
+const size_t kDisplayTotalBytes = (128 * 64) / 8; // 1024 bytes
+
+void updateDisplayIncremental() {
+  if (!displayDirty || !oledOk) return;
+  
+  // If we're starting a new update, send the commands to set the address
+  if (displayChunkOffset == 0) {
+    // Send commands to set the page and column address
+    Wire.beginTransmission(kScreenAddr);
+    Wire.write((uint8_t)0x00); // Co = 0, D/C = 0 (command)
+    Wire.write(0x21); // Column start address
+    Wire.write(0);    // Column start
+    Wire.write(127);  // Column end
+    Wire.endTransmission();
+    
+    Wire.beginTransmission(kScreenAddr);
+    Wire.write((uint8_t)0x00); // Co = 0, D/C = 0 (command)
+    Wire.write(0x22); // Page start address
+    Wire.write(0);    // Page start
+    Wire.write(0xFF); // Page end
+    Wire.endTransmission();
+  }
+  
+  // Send the next chunk of the framebuffer
+  Wire.beginTransmission(kScreenAddr);
+  Wire.write((uint8_t)0x40); // Co = 0, D/C = 1
+  
+  size_t end = displayChunkOffset + kDisplayChunkSize;
+  if (end > kDisplayTotalBytes) {
+    end = kDisplayTotalBytes;
+  }
+  
+  for (size_t i = displayChunkOffset; i < end; i++) {
+    Wire.write(display.getBuffer()[i]);
+  }
+  
+  Wire.endTransmission();
+  
+  displayChunkOffset = end;
+  
+  // If we've sent the whole buffer, we're done
+  if (displayChunkOffset >= kDisplayTotalBytes) {
+    displayChunkOffset = 0;
+    displayDirty = false;
+  }
+}
 
 /// Two-letter state tag for the OLED line.
 const char* stateTag(CMRInet::RemoteNodeState s) {
@@ -170,8 +225,35 @@ void lazyBegin() {
 // --------------------------------------------------------------------------
 
 void writeCdcLine(void* /*context*/, const char* line) {
-  Serial.write(reinterpret_cast<const uint8_t*>(line), strlen(line));
-  Serial.write('\n');
+  if (!Serial || line == nullptr) {
+    return;
+  }
+
+  constexpr size_t kMaxCdcLineBytes = 2048;
+  constexpr uint32_t kMaxWaitMs = 250;
+  char out[kMaxCdcLineBytes];
+  size_t lineLen = strnlen(line, kMaxCdcLineBytes - 2);
+  memcpy(out, line, lineLen);
+  out[lineLen] = '\n';
+  const size_t totalLen = lineLen + 1;
+
+  const uint32_t waitStart = millis();
+  size_t written = 0;
+  while (Serial && written < totalLen && (millis() - waitStart) < kMaxWaitMs) {
+    const size_t room = Serial.availableForWrite();
+    if (room == 0) {
+      delay(1);
+      continue;
+    }
+    const size_t chunk = (totalLen - written < room) ? (totalLen - written) : room;
+    const size_t n = Serial.write(
+        reinterpret_cast<const uint8_t*>(out + written), chunk);
+    if (n == 0) {
+      delay(1);
+      continue;
+    }
+    written += n;
+  }
 }
 
 /// One newline-terminated verb from non-blocking CDC input. CRs are
@@ -452,7 +534,18 @@ void drawHostStatus() {
   display.setTextSize(1);
   display.setCursor(0, 20);
   display.print(row);
-  display.display();
+  
+  // #64: print the bottom two lines if set
+  if (displayLine1[0] != '\0') {
+    display.setCursor(0, 48);
+    display.print(displayLine1);
+  }
+  if (displayLine2[0] != '\0') {
+    display.setCursor(0, 56);
+    display.print(displayLine2);
+  }
+  
+  displayDirty = true;
 }
 
 void setup() {
@@ -532,6 +625,7 @@ void loop() {
     run_loop_its++;
     if (nowMs >= run_end_ms) {
       run_active = false;
+      engine.setBackoffTraceOnly(false);
       uint32_t end_ms = millis();
       uint32_t total_polls = host.statistics().pollsSent - run_polls;
       Serial.print("END CAPTURE t="); Serial.print(end_ms);
@@ -620,17 +714,15 @@ void loop() {
         
         if (line_num_str && text) {
           int line_num = atoi(line_num_str);
-          if (line_num >= 1 && line_num <= 2) {
-            display.fillRect(0, line_num == 1 ? 48 : 56, 128, 8, SSD1306_BLACK);
-            display.setTextColor(SSD1306_WHITE);
-            display.setTextSize(1);
-            display.setCursor(0, line_num == 1 ? 48 : 56);
-            
-            char truncated[22] = {0};
-            strncpy(truncated, text, 21); // 21 chars + null = fits 128px width
-            display.print(truncated);
-            display.display();
+          if (line_num == 1) {
+            strncpy(displayLine1, text, sizeof(displayLine1) - 1);
+            displayLine1[sizeof(displayLine1) - 1] = '\0';
+          } else if (line_num == 2) {
+            strncpy(displayLine2, text, sizeof(displayLine2) - 1);
+            displayLine2[sizeof(displayLine2) - 1] = '\0';
           }
+          // Trigger an immediate update instead of waiting for the next timer tick
+          drawHostStatus();
         }
       }
       handled = true;
@@ -653,6 +745,7 @@ void loop() {
         run_it_frames = 0;
         run_start_ms = millis();
         run_end_ms = run_start_ms + secs * 1000;
+        engine.setBackoffTraceOnly(true);
         Serial.print("BEGIN CAPTURE t="); Serial.println(run_start_ms);
       }
       handled = true;
@@ -672,6 +765,7 @@ void loop() {
     } else if (strcmp(verb, "reset") == 0) {
       run_active = false;
       run_end_ms = 0;
+      engine.setBackoffTraceOnly(false);
       ring_used = 0;
       run_polls = 0;
       run_loop_its = 0;
@@ -702,4 +796,7 @@ void loop() {
     drawHostStatus();
     lastDisplayMs = nowMs;
   }
+  
+  // Process the display update incrementally
+  updateDisplayIncremental();
 }

@@ -169,6 +169,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     node.statistics_.consecutiveMisses = 0;
     // The node answered at all, so it is not chronically offline; clear
     // any poll backoff the same as a clean accept (map issue #41).
+    const uint32_t previousBackoffMs = node.pollBackoffMs_;
     node.pollBackoffMs_ = 0;
     node.pollBackoff_.disarm();
     emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
@@ -176,6 +177,11 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
                RemoteNodeState::kUninitialized,
                ReplyRejectReason::kGeometryMismatch, reply.length, reply.ua,
                reply.mt);
+    emitEvent_(CMRIHostEventType::kPollBackoffChanged, node, nowMs,
+               RemoteNodeState::kUninitialized,
+               RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0,
+               0, 0, PollBackoffChangeReason::kGeometryMismatch,
+               previousBackoffMs, node.pollBackoffMs_);
     finishExchange_(nowMs);
     return;
   }
@@ -192,11 +198,17 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   }
   // A reply proves the node is present and responsive: clear any poll
   // backoff immediately rather than ramping it down (map issue #41).
+  const uint32_t previousBackoffMs = node.pollBackoffMs_;
   node.pollBackoffMs_ = 0;
   node.pollBackoff_.disarm();
   node.statistics_.lastTurnaroundMs = nowMs - gateArmedMs_;
   ++statistics_.repliesAccepted;
   emitEvent_(CMRIHostEventType::kReplyAccepted, node, nowMs);
+  emitEvent_(CMRIHostEventType::kPollBackoffChanged, node, nowMs,
+             RemoteNodeState::kUninitialized,
+             RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0, 0,
+             0, PollBackoffChangeReason::kAccept, previousBackoffMs,
+             node.pollBackoffMs_);
   finishExchange_(nowMs);
 }
 
@@ -310,6 +322,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // consecutive miss, capped at maxPollBackoffMs; independent of
       // missThreshold (that governs reported health / the reinit ladder,
       // not scheduling).
+      const uint32_t previousBackoffMs = node.pollBackoffMs_;
       node.pollBackoffMs_ = (node.pollBackoffMs_ == 0)
                                 ? config_.initialPollBackoffMs
                                 : node.pollBackoffMs_ * 2;
@@ -317,6 +330,13 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
         node.pollBackoffMs_ = config_.maxPollBackoffMs;
       }
       node.pollBackoff_.armIn(nowMs, node.pollBackoffMs_);
+      emitEvent_(
+          CMRIHostEventType::kPollBackoffChanged, node, nowMs,
+          RemoteNodeState::kUninitialized,
+          RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0, 0, 0,
+          previousBackoffMs == 0 ? PollBackoffChangeReason::kInitial
+                                 : PollBackoffChangeReason::kMiss,
+          previousBackoffMs, node.pollBackoffMs_);
       // More than missThreshold consecutive misses arms the re-init
       // ladder once per miss-run: the next slot re-sends I + full T and
       // has already invalidated cached inputs.
@@ -467,7 +487,10 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                           RemoteNodeState newState,
                           ReplyRejectReason rejectReason,
                           uint16_t replyLength, uint8_t replyUa,
-                          uint8_t replyMt) {
+                          uint8_t replyMt,
+                          PollBackoffChangeReason pollBackoffReason,
+                          uint32_t previousPollBackoffMs,
+                          uint32_t newPollBackoffMs) {
   if (eventListener_ == nullptr) {
     return;
   }
@@ -481,6 +504,9 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.replyLength = replyLength;
   event.replyUa = replyUa;
   event.replyMt = replyMt;
+  event.pollBackoffReason = pollBackoffReason;
+  event.previousPollBackoffMs = previousPollBackoffMs;
+  event.newPollBackoffMs = newPollBackoffMs;
   eventListener_(eventContext_, event);
 }
 
@@ -511,6 +537,17 @@ const char* replyRejectReasonString(ReplyRejectReason reason) {
     case ReplyRejectReason::kUaMismatch:        return "ua mismatch";
     case ReplyRejectReason::kMtMismatch:        return "mt mismatch";
     case ReplyRejectReason::kGeometryMismatch:  return "geometry mismatch";
+  }
+  return "unknown";
+}
+
+const char* pollBackoffChangeReasonString(PollBackoffChangeReason reason) {
+  switch (reason) {
+    case PollBackoffChangeReason::kNone:              return "none";
+    case PollBackoffChangeReason::kMiss:              return "miss";
+    case PollBackoffChangeReason::kAccept:            return "accept";
+    case PollBackoffChangeReason::kGeometryMismatch:  return "geometry-mismatch";
+    case PollBackoffChangeReason::kInitial:           return "initial";
   }
   return "unknown";
 }

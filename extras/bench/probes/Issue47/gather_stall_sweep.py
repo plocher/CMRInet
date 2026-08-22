@@ -15,6 +15,17 @@ import datetime
 
 import _tracer_client
 import _gap_deltas
+def _connect_and_configure(port: str):
+    ser = _tracer_client.reboot_and_reconnect(port)
+    if not _tracer_client.sync_and_validate_boot(ser):
+        raise RuntimeError("Boot validation failed (timeout or wrong image).")
+    print("Configuring topology for session...")
+    ser.write(b"node add 30 7 7\n")
+    time.sleep(0.1)
+    ser.write(b"node add 31 4 4\n")
+    time.sleep(0.1)
+    _tracer_client.flush_lines(ser)
+    return ser
 
 def main():
 
@@ -80,19 +91,8 @@ def main():
     
     write_header = not summary_csv.exists()
     
-    ser = _tracer_client.reboot_and_reconnect(args.port)
-    
-    if not _tracer_client.sync_and_validate_boot(ser):
-        print("ERROR: Boot validation failed (timeout or wrong image).", file=sys.stderr)
-        return 1
-        
-    print("Configuring topology for session...")
-    ser.write(b"node add 30 7 7\n")
-    time.sleep(0.1)
-    ser.write(b"node add 31 4 4\n")
-    time.sleep(0.1)
-    _tracer_client.flush_lines(ser)
-    
+    ser = None
+    cleanup_ok = True
     try:
         with summary_csv.open("a", newline="") as f:
             writer = csv.writer(f)
@@ -100,6 +100,7 @@ def main():
                 writer.writerow([
                     "stall_ms", "period_ms", "verdict", "tx_events", "max_gap_ms",
                     "median_gap_ms", "p90_gap_ms", "capture", "transcript",
+                    "sniffer_tx", "sniffer_rx",
                     "verdict_v2", "monotone_prefix_max_ms", "it_count", "poll_count"
                 ])
                 
@@ -116,18 +117,32 @@ def main():
                         writer.writerow([
                             s, p, "SKIPPED_REDUNDANT", 0, 0,
                             0, 0, "", "",
+                            "", "",
                             "SKIPPED_REDUNDANT", 0, 0, 0
                         ])
                         f.flush()
                         i += 1
                         continue
+                    try:
+                        if ser is not None:
+                            ser.close()
+                        ser = _connect_and_configure(args.port)
+                    except RuntimeError as exc:
+                        print(f"ERROR: {exc}", file=sys.stderr)
+                        return 1
                     
-                    res = _tracer_client.run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
+                    res = _tracer_client.run_combo(
+                        ser, s, p, mode, args.traffic, args.secs, out_dir, tag,
+                        capture_sniffers=True
+                    )
                     
                     # Keep round-1 compat output plus new columns
                     writer.writerow([
                         s, p, res.verdict, res.poll_count, res.max_gap, 
-                        res.median_gap, res.p90_gap, f"{tag}.log", f"{tag}.txt",
+                        res.median_gap, res.p90_gap, f"{tag}.log",
+                        f"packets.{tag}.Host.raw",
+                        f"packets.{tag}.TX.raw",
+                        f"packets.{tag}.RX.raw",
                         res.verdict, res.monotone_prefix_max, res.it_count, res.poll_count
                     ])
                     f.flush()
@@ -137,10 +152,8 @@ def main():
         
     finally:
         print("\n--- Cleaning up ---")
-        ser.write(b"reset\n")
-        import time; time.sleep(0.5)
-        _tracer_client.flush_lines(ser)
-        print("Host quiesced.")
+        if ser is not None:
+            cleanup_ok = _tracer_client.shutdown_and_verify_quiet(ser)
 
     # Write manifest
     manifest_path = out_dir / "manifest.json"
@@ -164,6 +177,8 @@ def main():
         with manifest_path.open("w") as mf:
             json.dump(manifest, mf, indent=2)
             
+    if not cleanup_ok:
+        return 1
     return 0
 
 if __name__ == "__main__":
