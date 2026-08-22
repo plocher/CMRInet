@@ -55,6 +55,10 @@ def main():
         _tracer_client.flush_lines(ser)
         print("Host quiesced.")
         
+        # Wait for the bus to go quiet
+        print("Waiting for bus to go quiet...")
+        time.sleep(5.0)
+        
     if res.verdict == _gap_deltas.VERDICT_PASS:
         return 0
     else:
