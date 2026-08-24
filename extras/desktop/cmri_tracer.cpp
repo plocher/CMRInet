@@ -238,20 +238,22 @@ int main(int argc, char** argv) {
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = opt.inputBytes;
   nodeConfig.outputBytes = opt.outputBytes;
-  host.addRemoteNode(opt.address, nodeConfig);
+  // The add reports its own outcome (Design v1.2 D5), so bail before
+  // binding rather than inspecting a deferred host-wide status.
+  const CMRInet::CMRIHost::ConfigStatus configStatus =
+      host.addRemoteNode(opt.address, nodeConfig);
+  if (configStatus != CMRInet::CMRIHost::ConfigStatus::kOk) {
+    fprintf(stderr, "error: addRemoteNode rejected the configuration: %s\n",
+            CMRInet::configStatusString(configStatus));
+    return 2;
+  }
   CMRInet::RemoteNodeHandle* node = host.node(opt.address);
 
   CMRInet::testbed::TracerShell engine;
-  if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
-    engine.bind(host, transport, *node, kImage, kVersion,
-                writeStdoutLine, nullptr);
-  }
+  engine.bind(host, transport, *node, kImage, kVersion,
+              writeStdoutLine, nullptr);
 
-  if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
-    fprintf(stderr, "error: addRemoteNode rejected the configuration: %s\n",
-            CMRInet::configStatusString(host.configStatus()));
-    return 2;
-  }
+  host.begin();
   if (!port.isOpen()) {
     fprintf(stderr, "error: %s: %s\n", opt.device, port.lastError());
     return 1;

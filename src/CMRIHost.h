@@ -185,10 +185,12 @@ struct CMRIHostStatistics {
 /// The polled-strategy Host engine.
 ///
 /// Lifecycle: construct with a transport, add nodes, then begin().
-/// begin() locks the configuration. After begin(), the engine
-/// allocates nothing and nodes cannot be removed.
-// VALIDATION: Design v1.1 D5: two-phase lifecycle. Allocation is
-// legal only before begin() locks the configuration.
+/// After begin(), the engine allocates nothing.
+// VALIDATION: Design v1.2 D7: the embedded profile allocates only
+// during setup and never frees.
+// VALIDATION: Design v1.1 D5: the node table is still fixed at begin()
+// -- runtime add/delete/geometry-change specified by Design v1.2 D5 is
+// not implemented yet, so this tag deliberately still cites v1.1.
 ///
 /// Runtime: call tick(nowMs) from loop(). The engine advances only
 /// inside tick() and never blocks, sleeps, or busy-waits.
@@ -225,10 +227,14 @@ class CMRIHost {
     uint8_t transmissionDelayDl = 0;
   };
 
-  /// Result of the configuration phase, reported by begin(). kOk means
-  /// every addRemoteNode() call was accepted. Any other value is the
-  /// reason the first rejected call failed; later calls in the chain
-  /// are short-circuited, so only the first reason is reported.
+  /// Result of one configuration call. Returned directly by each
+  /// mutator; there is no sticky host-wide status and no chaining.
+  ///
+  /// A rejected call affects only itself: the next call is evaluated on
+  /// its own merits. The previous batch model short-circuited every
+  /// later add after the first rejection, which suited a hardcoded test
+  /// rig but silently disabled runtime reconfiguration through the
+  /// verb-based C&C shell (Design v1.2 D5).
   enum class ConfigStatus : uint8_t {
     kOk,
     kAlreadyBegun,        ///< the time for config changes has ended
@@ -243,38 +249,43 @@ class CMRIHost {
   explicit CMRIHost(CMRITransport& transport,
                     const CMRIHostConfig& config = CMRIHostConfig());
 
-  /// Add one remote node during the configuration phase. Returns
-  /// *this so calls chain: host.addRemoteNode(30, cfg).addRemoteNode(31,
-  /// cfg).begin(). A rejected add records the reason in the host's
-  /// config status and short-circuits later adds; begin() reports it.
+  /// Add one remote node. Returns this call's own status: kOk, or the
+  /// reason this call was rejected. The result of one add never affects
+  /// another.
   ///
   /// `address` is the node address (0..127). The wire UA is
   /// address + 65. A call is rejected when it comes after begin(),
   /// when the node table is full, when the address is out of range
   /// or already added, or when config.inputBytes exceeds
   /// RemoteNodeHandle::kMaxInputBytes.
-
+  ///
+  /// Callers registering several nodes decide for themselves how to
+  /// treat a partial failure; the engine holds no opinion and no
+  /// residual state.
   // VALIDATION: Interop v1.1 2.3.4: a Host supports UA 0-127 and
   // flags addresses above 64, which the cpNode family cannot use.
-  CMRIHost& addRemoteNode(uint8_t address,
-                          const RemoteNodeConfig& config,
-                          const RemoteNodePolicy& policy);
+  // VALIDATION: Design v1.2 D5: every mutator reports its own outcome
+  // immediately; no sticky, chain-poisoning status.
+  ConfigStatus addRemoteNode(uint8_t address,
+                             const RemoteNodeConfig& config,
+                             const RemoteNodePolicy& policy);
 
   /// As above, with the host-wide policy defaults.
-  CMRIHost& addRemoteNode(uint8_t address,
-                          const RemoteNodeConfig& config);
+  ConfigStatus addRemoteNode(uint8_t address,
+                             const RemoteNodeConfig& config);
 
   /// Convenience: register a node from its address and input/output byte
   /// counts, with host-wide policy defaults and default staleness/enabled.
   /// Equivalent to building a RemoteNodeConfig and calling the overload
   /// above. The flat form keeps simple sketches readable (issue #31).
-  CMRIHost& addRemoteNode(uint8_t address,
-                          uint16_t inputBytes,
-                          uint16_t outputBytes);
+  ConfigStatus addRemoteNode(uint8_t address,
+                             uint16_t inputBytes,
+                             uint16_t outputBytes);
 
   /// Register the optional event listener (nullptr to clear). Part of
   /// the configuration phase: calls after begin() are ignored.
-  // VALIDATION: Design v1.1 D5: begin() locks the configuration.
+  // VALIDATION: Design v1.2 D5: begin() is the config->running
+  // transition; listener registration closes at that point.
   void onEvent(CMRIHostEventListener listener, void* context = nullptr) {
     if (began_) {
       return;
@@ -294,11 +305,12 @@ class CMRIHost {
     traceContext_ = context;
   }
 
-  /// Lock the configuration and begin() the transport. Idempotent.
-  /// Returns the configuration status: ConfigStatus::kOk when every
-  /// addRemoteNode() call was accepted, or the reason the first call
-  /// failed. The configuration is locked either way (Design D5).
-  ConfigStatus begin();
+  /// Move from configuration to running and begin() the transport.
+  /// Idempotent. Reports nothing, because each configuration call has
+  /// already reported itself.
+  // VALIDATION: Design v1.2 D5: begin() marks the config->running
+  // transition; it is not a deferred error channel.
+  void begin();
 
   /// Advance the engine to `nowMs`. Ticks the transport first, then
   /// runs the poll schedule. `nowMs` must be monotonic.
@@ -319,10 +331,6 @@ class CMRIHost {
   /// node was registered at that address. Valid before and after
   /// begin(); the handle stays valid for the life of the program.
   RemoteNodeHandle* node(uint8_t address);
-
-  /// The configuration-phase status so far. ConfigStatus::kOk until an
-  /// addRemoteNode() call is rejected. Unchanged after begin() locks.
-  ConfigStatus configStatus() const { return configStatus_; }
 
  private:
   enum class Phase : uint8_t {
@@ -380,7 +388,6 @@ class CMRIHost {
   void* traceContext_ = nullptr;
 
   bool began_ = false;
-  ConfigStatus configStatus_ = ConfigStatus::kOk;
   Phase phase_ = Phase::kIdle;
   OutboundKind outboundKind_ = OutboundKind::kPoll;
   size_t cursor_ = 0;       ///< round-robin position: next node to consider

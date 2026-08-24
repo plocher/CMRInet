@@ -4,6 +4,28 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Changed
+- Host configuration error model (issue #80, Design v1.2 D5, breaking):
+  `addRemoteNode(...)` now returns its **own** `ConfigStatus` instead of
+  `CMRIHost&`, and `begin()` returns `void` instead of a deferred status.
+  `configStatus()` and the sticky host-wide status are gone. The previous
+  batch model recorded the first rejection and short-circuited every later
+  add so `begin()` could report it — reasonable for a hardcoded test rig,
+  but wrong once configuration moved to a runtime verb shell, and a
+  prerequisite for the runtime node-table mutation D5 now specifies.
+  Callers registering several nodes decide for themselves how to treat a
+  partial failure; the engine keeps no residual state. Chaining is retired
+  (no call site actually used it except one test). All callers migrated:
+  `SimpleHost`, `XiaoHostTracer`, `cmri_tracer`, `test_host`.
+
+### Fixed
+- `XiaoHostTracer` `node add` reported `addFailed` forever after a single
+  rejected add, and silently ignored every subsequent add for the life of
+  the boot (issue #80). The verb inspected the sticky host-wide
+  `configStatus()`, which the old batch model never cleared, and the
+  engine's own short-circuit suppressed the later calls. Both are gone;
+  the verb now reports the individual call's status and names the reason.
+
 ### Added
 - XiaoHostTracer dual-node validation support (issue #33): generator verbs now
   accept an optional `ua` target (`configure|enable|disable ... ua <n>`),

@@ -14,45 +14,38 @@ namespace CMRInet {
 CMRIHost::CMRIHost(CMRITransport& transport, const CMRIHostConfig& config)
     : transport_(transport), config_(config) {}
 
-CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
-                                  const RemoteNodeConfig& config,
-                                  const RemoteNodePolicy& policy) {
-
-  // Configuration is locked after begin() (Design D5). Silently reject;
-  // the config phase is over, so the status stays as it was.
+// Each rejection returns its own reason and leaves no residue: the next
+// call is judged on its own merits. Callers adding several nodes decide
+// how to treat a partial failure.
+// VALIDATION: Design v1.2 D5: mutators report their own outcome; no
+// sticky, chain-poisoning status.
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
+    uint8_t address, const RemoteNodeConfig& config,
+    const RemoteNodePolicy& policy) {
+  // The node table is not yet mutable at runtime; that arrives with the
+  // rest of Design v1.2 D5.
   if (began_) {
-    configStatus_ = ConfigStatus::kAlreadyBegun;
-    return *this;
+    return ConfigStatus::kAlreadyBegun;
   }
-          // Short-circuit: a prior config-phase rejection poisoned the chain.
-  if (configStatus_ != ConfigStatus::kOk) {
-    return *this;
-  }
-  // Validation at intake: reject, never remap. Each check records its
-  // reason so begin() can report why the configuration failed.
+  // Validation at intake: reject, never remap.
   // VALIDATION: Interop v1.1 E9: Nodes must reject, not remap,
   // out-of-range addresses. The same rule applies to the Host's own
   // configuration.
   if (nodeCount_ >= kMaxNodes) {
-    configStatus_ = ConfigStatus::kTooManyNodes;
-    return *this;
+    return ConfigStatus::kTooManyNodes;
   }
   if (address > 127u) {
-    configStatus_ = ConfigStatus::kAddressOutOfRange;
-    return *this;
+    return ConfigStatus::kAddressOutOfRange;
   }
   if (config.inputBytes > RemoteNodeHandle::kMaxInputBytes) {
-    configStatus_ = ConfigStatus::kInputBytesTooLarge;
-    return *this;
+    return ConfigStatus::kInputBytesTooLarge;
   }
   if (config.outputBytes > RemoteNodeHandle::kMaxOutputBytes) {
-    configStatus_ = ConfigStatus::kOutputBytesTooLarge;
-    return *this;
+    return ConfigStatus::kOutputBytesTooLarge;
   }
   for (size_t i = 0; i < nodeCount_; ++i) {
     if (nodes_[i].address_ == address) {
-      configStatus_ = ConfigStatus::kAddressInUse;
-      return *this;
+      return ConfigStatus::kAddressInUse;
     }
   }
 
@@ -62,17 +55,17 @@ CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
   node.config_ = config;
   policies_[nodeCount_] = policy;
   ++nodeCount_;
-  return *this;
+  return ConfigStatus::kOk;
 }
 
-CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
-                                  const RemoteNodeConfig& config) {
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
+    uint8_t address, const RemoteNodeConfig& config) {
   return addRemoteNode(address, config, RemoteNodePolicy());
 }
 
-CMRIHost& CMRIHost::addRemoteNode(uint8_t address,
-                                  uint16_t inputBytes,
-                                  uint16_t outputBytes) {
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t address,
+                                               uint16_t inputBytes,
+                                               uint16_t outputBytes) {
   RemoteNodeConfig config;
   config.inputBytes = inputBytes;
   config.outputBytes = outputBytes;
@@ -88,12 +81,11 @@ RemoteNodeHandle* CMRIHost::node(uint8_t address) {
   return nullptr;
 }
 
-CMRIHost::ConfigStatus CMRIHost::begin() {
+void CMRIHost::begin() {
   if (!began_) {
     transport_.begin();
     began_ = true;
   }
-  return configStatus_;
 }
 
 void CMRIHost::tick(uint32_t nowMs) {

@@ -268,15 +268,22 @@ void setup() {
   // Register the listener 
   host.onEvent(onHostEvent);
 
-  // Register each node from the table. 
-  // begin() returns the configuration status. 
-  // A rejected add records its failure reason in host.configStatus()
+  // Register each node from the table. Each add reports its own outcome
+  // (Design v1.2 D5); this sketch keeps the first failure so it can name
+  // a reason on the display.
+  CMRInet::CMRIHost::ConfigStatus configStatus =
+      CMRInet::CMRIHost::ConfigStatus::kOk;
   for (size_t i = 0; i < kNodeCount; ++i) {
-    host.addRemoteNode(nodeTable[i].address,
-                       nodeTable[i].inputBytes,
-                       nodeTable[i].outputBytes);
+    const CMRInet::CMRIHost::ConfigStatus st =
+        host.addRemoteNode(nodeTable[i].address,
+                           nodeTable[i].inputBytes,
+                           nodeTable[i].outputBytes);
+    if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&
+        configStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
+      configStatus = st;
+    }
   }
-  if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
+  if (configStatus != CMRInet::CMRIHost::ConfigStatus::kOk) {
     // ****** FAILURE ****** //
 #if USE_OLED
     if (oledOk) {
@@ -285,7 +292,7 @@ void setup() {
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
       display.print(F("addRemoteNode\nrejected:\n"));
-      display.print(CMRInet::configStatusString(host.configStatus()));
+      display.print(CMRInet::configStatusString(configStatus));
       display.display();
     }
 #endif
@@ -293,6 +300,7 @@ void setup() {
       delay(1000);  // HALT: User needs to fix the configuration table and reflash
     }
   }
+  host.begin();
 }
 
 void loop() {

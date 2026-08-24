@@ -60,11 +60,12 @@ struct Rig {
                uint16_t outputBytes = 0)
       : host(transport, config) {
     // Register the node, then look up its handle. addRemoteNode returns
-    // the host (chaining), not the handle; node(address) does.
+    // this call's status, not the handle; node(address) does.
     RemoteNodeConfig nodeConfig;
     nodeConfig.inputBytes = inputBytes;
     nodeConfig.outputBytes = outputBytes;
-    host.addRemoteNode(5, nodeConfig, policy);
+    TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                      host.addRemoteNode(5, nodeConfig, policy));
     node = host.node(5);
     TEST_ASSERT_NOT_NULL_MESSAGE(node, "addRemoteNode failed in rig");
   }
@@ -577,9 +578,9 @@ static void test_round_robin_over_enabled_nodes(void) {
   MockCMRITransport transport;
   CMRIHost host(transport);
   RemoteNodeConfig config;  // inputBytes=0, outputBytes=0
-  host.addRemoteNode(1, config);
-  host.addRemoteNode(2, config);
-  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.begin());
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(1, config));
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(2, config));
+  host.begin();
   // Prime both nodes through I -> T so the next outbounds are P.
   runUntil(host, 0, 1015);
   transport.onSendReplyPacket(MockCMRITransport::kMatchAny, 'P',
@@ -742,66 +743,72 @@ static void test_null_listeners_are_harmless(void) {
 // ------------------------------------------------------ configuration phase
 
 static void test_add_remote_node_validation(void) {
-  // addRemoteNode returns the host (for chaining), not the handle. A
-  // rejected add records its reason in ConfigStatus and short-circuits
-  // later adds; begin() reports it. Each rejection case gets its own
-  // host so the first failure is the one under test.
+  // Each add reports its own outcome immediately (Design v1.2 D5).
+  // One host serves every rejection case, because a rejection leaves no
+  // residue for the next call to trip over.
   using CS = CMRIHost::ConfigStatus;
 
-  {
-    MockCMRITransport t;
-    CMRIHost h(t);
-    RemoteNodeConfig cfg;
-    cfg.inputBytes = 2;
-    h.addRemoteNode(128, cfg);  // address out of range
-    TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.begin());
-  }
-  {
-    MockCMRITransport t;
-    CMRIHost h(t);
-    RemoteNodeConfig cfg;
-    cfg.inputBytes = RemoteNodeHandle::kMaxInputBytes + 1;
-    h.addRemoteNode(5, cfg);
-    TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge, h.begin());
-  }
-  {
-    MockCMRITransport t;
-    CMRIHost h(t);
-    RemoteNodeConfig cfg;
-    cfg.outputBytes = RemoteNodeHandle::kMaxOutputBytes + 1;
-    h.addRemoteNode(5, cfg);
-    TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge, h.begin());
-  }
-  {
-    MockCMRITransport t;
-    CMRIHost h(t);
-    RemoteNodeConfig cfg;
-    cfg.inputBytes = 2;
-    TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(5, cfg).begin());
-    TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
-    // Both contracts: the config phase succeeded AND the address maps to
-    // a registered handle.
-    TEST_ASSERT_NOT_NULL(h.node(5));
-    // A second node at the same address is a duplicate.
-    MockCMRITransport t2;
-    CMRIHost h2(t2);
-    h2.addRemoteNode(5, cfg);
-    h2.addRemoteNode(5, cfg);  // duplicate address
-    TEST_ASSERT_EQUAL(CS::kAddressInUse, h2.begin());
-    TEST_ASSERT_EQUAL_size_t(1, h2.nodeCount());
-  }
-  {
-    // A valid config that adds a node after begin() is rejected with
-    // kAlreadyBegun: the config phase is over.
-    MockCMRITransport t;
-    CMRIHost h(t);
-    RemoteNodeConfig cfg;
-    cfg.inputBytes = 2;
-    TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(5, cfg).begin());
-    h.addRemoteNode(6, cfg);  // too late
-    TEST_ASSERT_EQUAL(CS::kAlreadyBegun, h.configStatus());
-    TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
-  }
+  MockCMRITransport t;
+  CMRIHost h(t);
+
+  RemoteNodeConfig ok;
+  ok.inputBytes = 2;
+
+  RemoteNodeConfig tooManyInputs;
+  tooManyInputs.inputBytes = RemoteNodeHandle::kMaxInputBytes + 1;
+
+  RemoteNodeConfig tooManyOutputs;
+  tooManyOutputs.outputBytes = RemoteNodeHandle::kMaxOutputBytes + 1;
+
+  TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.addRemoteNode(128, ok));
+  TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge, h.addRemoteNode(5, tooManyInputs));
+  TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge,
+                    h.addRemoteNode(5, tooManyOutputs));
+  TEST_ASSERT_EQUAL_size_t(0, h.nodeCount());
+
+  // A good add still succeeds after all of those rejections.
+  TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(5, ok));
+  TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+  TEST_ASSERT_NOT_NULL(h.node(5));
+
+  // A duplicate address is rejected without disturbing the original.
+  TEST_ASSERT_EQUAL(CS::kAddressInUse, h.addRemoteNode(5, ok));
+  TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+
+  // After begin() the table is not yet mutable; that arrives with the
+  // rest of D5.
+  h.begin();
+  TEST_ASSERT_EQUAL(CS::kAlreadyBegun, h.addRemoteNode(6, ok));
+  TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+}
+
+// Regression for the batch error model retired in Design v1.2 D5. The
+// old chain-poisoning short-circuit made one rejected add silently
+// suppress every later add for the life of the host, which broke
+// runtime reconfiguration through the verb shell.
+static void test_rejected_add_does_not_poison_later_adds(void) {
+  using CS = CMRIHost::ConfigStatus;
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+
+  RemoteNodeConfig bad;
+  bad.inputBytes = RemoteNodeHandle::kMaxInputBytes + 1;
+  RemoteNodeConfig good;
+  good.inputBytes = 2;
+
+  TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge, host.addRemoteNode(7, bad));
+  TEST_ASSERT_EQUAL_size_t(0, host.nodeCount());
+
+  // The next add must be judged on its own merits.
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(7, good));
+  TEST_ASSERT_EQUAL_size_t(1, host.nodeCount());
+  TEST_ASSERT_NOT_NULL(host.node(7));
+
+  // And the host must still be usable: a poisoned host would never poll.
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(8, good));
+  host.begin();
+  runUntil(host, 0, 1020);
+  TEST_ASSERT_TRUE(host.statistics().pollsSent >= 1);
 }
 
 static void test_node_table_capacity_is_enforced(void) {
@@ -810,11 +817,13 @@ static void test_node_table_capacity_is_enforced(void) {
   RemoteNodeConfig config;
   config.inputBytes = 0;
   for (size_t i = 0; i < CMRIHost::kMaxNodes; ++i) {
-    host.addRemoteNode(static_cast<uint8_t>(i), config);
+    TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                      host.addRemoteNode(static_cast<uint8_t>(i), config));
   }
   // The next add overflows the table.
-  host.addRemoteNode(static_cast<uint8_t>(CMRIHost::kMaxNodes), config);
-  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kTooManyNodes, host.begin());
+  TEST_ASSERT_EQUAL(
+      CMRIHost::ConfigStatus::kTooManyNodes,
+      host.addRemoteNode(static_cast<uint8_t>(CMRIHost::kMaxNodes), config));
   TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
 }
 
@@ -834,11 +843,13 @@ static void test_dirty_output_cannot_starve_poll_forever(void) {
   RemoteNodeConfig deadConfig;
   deadConfig.inputBytes = 0;
   deadConfig.outputBytes = 0;
-  host.addRemoteNode(5, liveConfig);   // the live, output-heavy node
-  host.addRemoteNode(6, deadConfig);   // permanently silent, no script
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.addRemoteNode(5, liveConfig));  // output-heavy
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.addRemoteNode(6, deadConfig));  // silent, no script
   RemoteNodeHandle* live = host.node(5);
   TEST_ASSERT_NOT_NULL(live);
-  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.begin());
+  host.begin();
 
   // Prime both nodes past their I -> T preambles.
   runUntil(host, 0, 1020);
@@ -1049,6 +1060,7 @@ int main(void) {
   RUN_TEST(test_listener_registration_locked_after_begin);
   RUN_TEST(test_null_listeners_are_harmless);
   RUN_TEST(test_add_remote_node_validation);
+  RUN_TEST(test_rejected_add_does_not_poison_later_adds);
   RUN_TEST(test_node_table_capacity_is_enforced);
   RUN_TEST(test_dirty_output_cannot_starve_poll_forever);
   RUN_TEST(test_anti_starvation_does_not_starve_transmit);
