@@ -9,7 +9,8 @@ import _gap_deltas
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Single cycle harness validation")
-    parser.add_argument("--port", default=_tracer_client._DEFAULT_HOST_PORT)
+    parser.add_argument("--port", default=None,
+                        help="Host device; default resolves from bench.json")
     parser.add_argument("--secs", type=int, default=60)
     parser.add_argument("--stall", type=int, default=1)
     parser.add_argument("--period", type=int, default=550)
@@ -17,6 +18,7 @@ def main() -> int:
     parser.add_argument("--traffic", default="fast slow loopback")
     parser.add_argument("--tag", default="single_cycle")
     args = parser.parse_args()
+    args.port = args.port or _tracer_client.host_port()
     s = args.stall
     p = args.period
     mode = args.mode

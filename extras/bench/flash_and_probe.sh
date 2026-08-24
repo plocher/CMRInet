@@ -7,7 +7,8 @@
 #
 #   sketch    examples/ subdirectory name (default: XiaoHostTracer)
 #             known: XiaoHostTracer, SimpleHost
-#   host_port /dev/cu.usbmodem* for the Host board (default: 282201)
+#   host_port /dev/cu.usbmodem* for the Host board
+#             (default: resolved from bench.json via the bench CLI)
 #
 # Prereqs:
 #   - extras/bench/setup.sh has been run (creates .venv with pyserial)
@@ -23,7 +24,11 @@ BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$BENCH_DIR/../.." && pwd)"
 LIBS_DIR="/Users/jplocher/Dropbox/Arduino/libraries"
 SKETCH="${1:-XiaoHostTracer}"
-HOST_PORT="${2:-/dev/cu.usbmodem282201}"
+if [ -n "$2" ]; then
+    HOST_PORT="$2"
+else
+    HOST_PORT="$("$BENCH_DIR/bench" resolve --role Host)"
+fi
 FQBN="esp32:esp32:XIAO_ESP32C6"
 BUILD_DIR="/tmp/${SKETCH}_build"
 SKETCH_INO="$REPO_DIR/examples/$SKETCH/$SKETCH.ino"

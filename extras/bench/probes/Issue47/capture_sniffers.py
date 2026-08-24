@@ -22,13 +22,15 @@ def read_sniffer(port_name, out_filename, stop_event):
         print(f"[{port_name}] ERROR: {e}")
 
 def main():
+    rx_port = _tracer_client.sniffer_rx_port()
+    tx_port = _tracer_client.sniffer_tx_port()
     print("Starting sniffer captures...")
-    print("Host RX: /dev/cu.usbmodem2821301")
-    print("Host TX: /dev/cu.usbmodem28101")
-    
+    print(f"Host RX: {rx_port}")
+    print(f"Host TX: {tx_port}")
+
     stop_event = threading.Event()
-    t_rx = threading.Thread(target=read_sniffer, args=("/dev/cu.usbmodem2821301", "sniffer_rx.raw", stop_event))
-    t_tx = threading.Thread(target=read_sniffer, args=("/dev/cu.usbmodem28101", "sniffer_tx.raw", stop_event))
+    t_rx = threading.Thread(target=read_sniffer, args=(rx_port, "sniffer_rx.raw", stop_event))
+    t_tx = threading.Thread(target=read_sniffer, args=(tx_port, "sniffer_tx.raw", stop_event))
     
     t_rx.start()
     t_tx.start()

@@ -7,13 +7,27 @@ from pathlib import Path
 from typing import Callable, Optional
 import _gap_deltas
 
-# Role-based USB port mapping (FIXME: #68 dynamic discovery)
-HOST_PORT = "/dev/cu.usbmodem282201"
-SNIFFER_TX_PORT = "/dev/cu.usbmodem28101"
-SNIFFER_RX_PORT = "/dev/cu.usbmodem2821301"
+# Ports resolve through bench_ports (#68): roles key on USB serial in
+# extras/bench/bench.json, so enumeration shuffles no longer matter.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import bench_ports
 
-# Backward compatibility for scripts that still reference _DEFAULT_HOST_PORT
-_DEFAULT_HOST_PORT = HOST_PORT
+
+def host_port() -> str:
+    """Live device for the bench Host role."""
+    return bench_ports.resolve_or_exit("Host")
+
+
+def sniffer_tx_port() -> str:
+    """Live device for the Sniffer/TX (poll-pair) role."""
+    return bench_ports.resolve_or_exit("Sniffer", "TX")
+
+
+def sniffer_rx_port() -> str:
+    """Live device for the Sniffer/RX (reply-pair) role."""
+    return bench_ports.resolve_or_exit("Sniffer", "RX")
+
+
 DEFAULT_NODE_ADDRESSES = (30, 31)
 
 
@@ -206,7 +220,9 @@ def flush_lines(ser):
     ser.reset_input_buffer()
 
 def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
-              capture_sniffers: bool = False):
+              capture_sniffers: bool = False,
+              sniffer_tx_port: Optional[str] = None,
+              sniffer_rx_port: Optional[str] = None):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
     log_file = out_dir / f"{tag}.log"
     host_raw_file = out_dir / f"packets.{tag}.Host.raw"
@@ -217,19 +233,21 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
     sniffer_threads: list[threading.Thread] = []
     sniffer_errors: list[str] = []
     if capture_sniffers:
+        tx_port = sniffer_tx_port or bench_ports.resolve_or_exit("Sniffer", "TX")
+        rx_port = sniffer_rx_port or bench_ports.resolve_or_exit("Sniffer", "RX")
         tx_raw_file.touch()
         rx_raw_file.touch()
         sniffer_stop_event = threading.Event()
         sniffer_threads = [
             threading.Thread(
                 target=_capture_serial_stream,
-                args=(SNIFFER_TX_PORT, tx_raw_file, sniffer_stop_event,
+                args=(tx_port, tx_raw_file, sniffer_stop_event,
                       sniffer_errors, "TX"),
                 daemon=True,
             ),
             threading.Thread(
                 target=_capture_serial_stream,
-                args=(SNIFFER_RX_PORT, rx_raw_file, sniffer_stop_event,
+                args=(rx_port, rx_raw_file, sniffer_stop_event,
                       sniffer_errors, "RX"),
                 daemon=True,
             ),

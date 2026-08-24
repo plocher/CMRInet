@@ -4,15 +4,17 @@ Reports each witness's verdict (frames decoded / raw bytes / frozen counters).""
 import serial, time, re, sys, threading
 from collections import Counter
 
-# Witness ports and their bus-side role (set by the operator's wiring).
-# Override with argv: three.py [s1_port] [s2_port] [dongle_port]
-S1_PORT = "/dev/cu.usbmodem28101"      # Xiao sniffer #1
-S2_PORT = "/dev/cu.usbmodem2821301"    # Xiao sniffer #2
-DONGLE  = "/dev/cu.usbserial-BG04ID4L" # RS485 dongle (raw, 28800 8N2)
+import bench_ports
+
+# Witness ports resolve from bench.json roles (#68); argv overrides win:
+#   three.py [s1_port] [s2_port] [dongle_port]
+S1_PORT = sys.argv[1] if len(sys.argv) > 1 else None
+S2_PORT = sys.argv[2] if len(sys.argv) > 2 else None
+DONGLE  = sys.argv[3] if len(sys.argv) > 3 else None
+S1_PORT = S1_PORT or bench_ports.resolve_or_exit("Sniffer", "TX")  # poll pair
+S2_PORT = S2_PORT or bench_ports.resolve_or_exit("Sniffer", "RX")  # reply pair
+DONGLE  = DONGLE or bench_ports.resolve_or_exit("Dongle")           # 28800 8N2
 DWELL = 15.0
-if len(sys.argv) > 1: S1_PORT = sys.argv[1]
-if len(sys.argv) > 2: S2_PORT = sys.argv[2]
-if len(sys.argv) > 3: DONGLE  = sys.argv[3]
 
 STX, ETX, DLE, SYN = 0x02, 0x03, 0x10, 0xFF
 

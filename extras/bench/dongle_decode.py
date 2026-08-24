@@ -5,8 +5,10 @@ with DLE-escape awareness, and prints UA/MT/body per frame. Use to map which
 physical terminals carry which signal (P/T vs R)."""
 import serial, time, sys
 
-# Defaults; override with argv: dongle_decode.py [label] [port]
-PORT = "/dev/cu.usbserial-BG04ID4L"
+import bench_ports
+
+# Port resolves from bench.json (#68); override with argv:
+#   dongle_decode.py [label] [port]
 BAUD = 28800
 DWELL = 10.0
 STX, ETX, DLE, SYN = 0x02, 0x03, 0x10, 0xFF
@@ -38,8 +40,7 @@ def decode_frames(buf):
     return out
 
 label = sys.argv[1] if len(sys.argv) > 1 else "(unlabeled)"
-if len(sys.argv) > 2:
-    PORT = sys.argv[2]
+PORT = sys.argv[2] if len(sys.argv) > 2 else bench_ports.resolve_or_exit("Dongle")
 print(f"===== dongle decoder @ {BAUD} 8N2, {DWELL}s  tap={label} =====")
 try:
     s = serial.Serial(PORT, BAUD, timeout=0.2, bytesize=8, parity='N', stopbits=2)
