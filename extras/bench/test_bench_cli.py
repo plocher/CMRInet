@@ -188,6 +188,20 @@ def test_resolve_unknown_role_is_config_error(fixtures):
     assert "role not in bench" in result.stderr
 
 
+def test_resolve_role_and_id_are_case_insensitive(fixtures):
+    # The user's bug report: `node 31` failed where `Node 31` worked.
+    result = run_cli(
+        "resolve", "--role", "node", "--id", "30", *std_args(fixtures)
+    )
+    assert result.returncode == 0
+    assert result.stdout == "/dev/cu.usbmodem4444\n"
+    result = run_cli(
+        "resolve", "--role", "sniffer", "--id", "rx", *std_args(fixtures)
+    )
+    assert result.returncode == 0
+    assert result.stdout == "/dev/cu.usbmodem4222\n"
+
+
 def test_resolve_verbose_dumps_json_record(fixtures):
     result = run_cli("resolve", "--role", "Host", "-v", *std_args(fixtures))
     assert result.returncode == 0
