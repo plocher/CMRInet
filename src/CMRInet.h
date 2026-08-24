@@ -12,6 +12,7 @@
 #include "CMRISerialPort.h"
 #include "CMRITime.h"
 #include "CMRITransport.h"
+#include "ConformanceFault.h"
 #include "MockCMRITransport.h"
 #include "RemoteNodeHandle.h"
 #include "SerialCMRITransport.h"
