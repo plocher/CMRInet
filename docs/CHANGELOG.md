@@ -5,6 +5,17 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- XiaoHostTracer dual-node validation support (issue #33): generator verbs now
+  accept an optional `ua` target (`configure|enable|disable ... ua <n>`),
+  defaulting to UA30 when omitted for backward compatibility. Generator runtime
+  state is now per-UA so `slowwalker` and `toggleoutfrominput` can run
+  concurrently on multiple nodes. `toggleoutfrominput` gained explicit
+  byte/bit loopback controls (`src_byte`, `src_bit`, `dst_byte`, `dst_bit`) and
+  a `mode write_read` option to support loopback `write(read())` validation
+  flows. Added a new non-issue-specific bench validation suite at
+  `extras/bench/validation/dual_node/` with
+  `gather_bench_validation.py` and `analyze_bench_validation.py` for the UA30 +
+  UA31 quick validation run.
 - Bench USB port discovery (issue #68): the Python bench harness no longer
   hardcodes `/dev/cu.usbmodem*` paths (they are location-derived and shuffle
   on re-enumeration). New `extras/bench/bench_ports.py` resolver keys each
