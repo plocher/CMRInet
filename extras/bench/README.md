@@ -44,6 +44,11 @@ All gather scripts still take `--port`/argv overrides for one-off runs.
 
 ## Scripts
 
+### Validation suites
+
+Reusable bench validations live under `extras/bench/validation/` (not under issue probes).  
+Current suite: `validation/dual_node/` for UA30 + UA31 quick validation (`gather_bench_validation.py` + `analyze_bench_validation.py`).
+
 ### dongle_decode.py — calibrated CMRI frame decoder over the dongle
 
 Captures raw bytes from the RS485 dongle at 28800 8N2 with DTR and RTS asserted, and decodes `FF FF STX UA MT <body> ETX` frames with DLE-escape awareness. Prints the UA, MT, and body for each frame, plus MT and UA distributions. Use this to map which physical terminals carry which signal (P/T vs R).
