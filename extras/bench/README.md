@@ -10,7 +10,7 @@ These scripts need `pyserial`. The venv lives inside the repo (gitignored) so it
 extras/bench/setup.sh
 ```
 
-This creates `extras/bench/.venv` and installs `pyserial`. It is idempotent, so re-run it any time the venv is missing or broken.
+This creates `extras/bench/.venv` and installs `pyserial` (plus `pytest` for the tooling tests). It is idempotent, so re-run it any time the venv is missing or broken.
 
 Run a script with that interpreter:
 
@@ -20,14 +20,27 @@ extras/bench/.venv/bin/python extras/bench/<script>.py
 
 ## Ports
 
-The Xiaos enumerate as shuffling `/dev/cu.usbmodem*` names. All three report the same FQBN, so identify a board by behavior, not by the port name:
-- a sniffer emits `"image":"xiao_sniffer"` stats every 5 s
-- the tracer answers the `status` verb
-- SimpleHost stays silent except on a reject
+Roles (Host, Sniffer TX/RX, Dongle, Nodes) resolve from `bench.json` by USB serial number, so the shuffling `/dev/cu.usbmodem*` names no longer matter. The `bench` wrapper runs the resolver CLI with the bench venv:
 
-The dongle is `/dev/cu.usbserial-BG04ID4L` on this bench. Confirm with `arduino-cli board list` or `ls /dev/cu.usb*` before each run.
+```shell
+extras/bench/bench list        # roles, live devices, OK/MISSING
+extras/bench/bench check       # resolve + behavioral probe per owned image
+extras/bench/bench resolve --role Host           # prints the /dev path
+extras/bench/bench resolve --role Sniffer --id TX
+```
 
-The scripts take port overrides as argv so a reshuffle does not require an edit. Defaults match the 2026-08-18 session.
+`bench.json` holds named bench sets under a top-level `Benches` map, with a `Default` set used when nothing is selected; pick another set with `--bench <name>` or `$CMRINET_BENCH`. Each role entry keys on `Serial` (every Xiao ESP32-C6 exposes a unique MAC-shaped USB serial; the dongle carries its own in its `/dev` name). `Location` (hub port path like `4-1.3.1`) is advisory only — it answers "which hub port is the TX tap", and is never matched on.
+
+Set up or repair a bench from a seed: record each role's current device as flat `{Type, ID, USB}` entries (any editor; `bench seed` prints a fill-in template of everything attached), then import it:
+
+```shell
+extras/bench/bench import myseed.json --bench mybench --dry-run   # preview, writes nothing
+extras/bench/bench import myseed.json --bench mybench             # writes bench.json
+```
+
+The import harvests serials from the live enumeration, verifies the images we own (the tracer answers the `status` verb; a sniffer emits `"image":"xiao_sniffer"` stats every 5 s; SimpleHost stays silent except on a reject and will report a mismatch), and carries roles whose boards are absent with a null Serial. Re-run it after recabling; add `--force` to overwrite an existing set.
+
+All gather scripts still take `--port`/argv overrides for one-off runs.
 
 ## Scripts
 
@@ -67,7 +80,7 @@ Flashes a host sketch, boots it, captures all three witnesses, and prints a VERD
 extras/bench/flash_and_probe.sh [sketch] [host_port]
 ```
 
-Defaults: sketch `XiaoHostTracer`, port `/dev/cu.usbmodem282201`. Known sketches: `XiaoHostTracer`, `SimpleHost`.
+Defaults: sketch `XiaoHostTracer`, port resolved from bench.json (override with argv). Known sketches: `XiaoHostTracer`, `SimpleHost`.
 
 The expected cycle for issue reproduction:
 ```shell
