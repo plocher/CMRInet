@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run the bench CLI with the bench venv interpreter (see setup.sh).
+exec "$(dirname "$0")/.venv/bin/python" "$(dirname "$0")/bench_ports.py" "$@"
