@@ -4,6 +4,28 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- Bench USB port discovery (issue #68): the Python bench harness no longer
+  hardcodes `/dev/cu.usbmodem*` paths (they are location-derived and shuffle
+  on re-enumeration). New `extras/bench/bench_ports.py` resolver keys each
+  role (Host, Sniffer TX/RX, Dongle, Nodes) on the board's USB serial
+  number — every Xiao ESP32-C6 exposes a unique MAC-shaped iSerialNumber —
+  via `extras/bench/bench.json`, which holds explicitly named bench sets
+  (`Benches` map + `Default`) so multiple benches can share one file and
+  one host. The `extras/bench/bench` CLI wraps it: `list` / `check` /
+  `resolve` / `import` / `export` / `seed` / `default`, with jBOM-style
+  `-o console|-|file` output and `-q`/`-v` detail control. `bench import`
+  enriches a human-supplied seed (flat Type/ID/USB entries) into a
+  serial-keyed set, behaviorally verifying the images we own (the tracer
+  answers `status`; sniffers emit image-bearing stats every 5 s); absent
+  roles are carried with a null Serial and loudly reported. All gather
+  scripts and `_tracer_client` resolve lazily through it; `--port`/argv
+  overrides still win. 28-test functional suite
+  (`extras/bench/test_bench_cli.py`) drives the real CLI against a fixture
+  config plus an injected fake enumeration;
+  `extras/bench/tests/uhubctl_cycle_test.py` (opt-in) power-cycles a hub
+  port and watches the resolver track the disappearance and return.
+
 ### Fixed
 - Fixed a latent bug in `XiaoHostTracer` where the OLED display perpetually showed `---` and 0 for metrics because the `node` pointer was never initialized in `setup()` (issue #56).
 
