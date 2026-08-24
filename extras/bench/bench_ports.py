@@ -177,10 +177,16 @@ def select_bench(doc: dict, bench: Optional[str] = None) -> tuple[str, list]:
 
 
 def find_role(roles: list, type_: str, id_: Optional[str]) -> dict:
-    """Find the {Type, ID} entry for a role; ambiguous Type needs --id."""
-    matches = [r for r in roles if r.get("Type") == type_]
+    """Find the {Type, ID} entry for a role; ambiguous Type needs --id.
+
+    Matching is case-insensitive, like serial matching: `node 31` and
+    `Node 31` are the same role.
+    """
+    wanted_type = str(type_).lower()
+    matches = [r for r in roles if str(r.get("Type", "")).lower() == wanted_type]
     if id_ is not None:
-        matches = [r for r in matches if str(r.get("ID")) == str(id_)]
+        wanted_id = str(id_).lower()
+        matches = [r for r in matches if str(r.get("ID", "")).lower() == wanted_id]
     if not matches:
         wanted = f"{type_}/{id_}" if id_ is not None else type_
         raise BenchError(f"role not in bench: {wanted}")
@@ -319,11 +325,16 @@ def probe_device(
         ser.close()
 
 
+def _canon_type(type_) -> str:
+    """Canonical role Type for rule lookup (seed/config case may vary)."""
+    return str(type_ or "").capitalize()
+
+
 def verify_role(
     entry: dict, device_record: BenchDevice, opener=None
 ) -> tuple[str, str]:
     """Classify one resolved role: ok / mismatch / unverifiable."""
-    type_ = entry["Type"]
+    type_ = _canon_type(entry["Type"])
     if type_ == "Dongle":
         if (device_record.vid, device_record.pid) == FTDI_VID_PID:
             return "ok", "ftdi vid:pid"
@@ -371,8 +382,9 @@ def enrich_seed(
             "Location": port.location,
         }
         enriched.append(record)
-        if verify and entry.get("Type") in _PROBE_RULES:
-            ok, detail = probe_device(port.device, entry["Type"], opener=opener)
+        seed_type = _canon_type(entry.get("Type"))
+        if verify and seed_type in _PROBE_RULES:
+            ok, detail = probe_device(port.device, seed_type, opener=opener)
             if not ok:
                 mismatches.append(
                     f"{entry.get('Type')}/{entry.get('ID')} at {port.device}: "
