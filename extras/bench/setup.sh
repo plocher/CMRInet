@@ -14,8 +14,8 @@ else
     python3 -m venv "$VENV"
 fi
 
-echo "installing pyserial"
-"$VENV/bin/pip" install -q --upgrade pyserial
+echo "installing pyserial and pytest"
+"$VENV/bin/pip" install -q --upgrade pyserial pytest
 
 echo "verifying"
 "$VENV/bin/python" -c "import serial; print('pyserial', serial.__version__, 'ready at', '$VENV')"
