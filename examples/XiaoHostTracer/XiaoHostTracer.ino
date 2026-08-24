@@ -142,6 +142,15 @@ const char* stateTag(CMRInet::RemoteNodeState s) {
 #ifndef TRACER_INTER_BYTE_TIMEOUT_MS
 #define TRACER_INTER_BYTE_TIMEOUT_MS 50  // 0 disables (interop 2.2.6 exception)
 #endif
+#ifndef TRACER_PHANTOM_ADDRESS
+#define TRACER_PHANTOM_ADDRESS 32
+#endif
+#ifndef TRACER_PHANTOM_INPUT_BYTES
+#define TRACER_PHANTOM_INPUT_BYTES 4
+#endif
+#ifndef TRACER_PHANTOM_OUTPUT_BYTES
+#define TRACER_PHANTOM_OUTPUT_BYTES 4
+#endif
 
 namespace {
 
@@ -160,7 +169,7 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
 // fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
 // 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
-constexpr const char* kVersion = "0.5.0"; // #58 (reboot) + #64 (display verb)
+constexpr const char* kVersion = "0.6.2"; // #33: add phantom UA32 + fix write_read loopback dirty-output flood
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -283,6 +292,13 @@ bool readVerb(char* out, size_t len) {
 }  // namespace
 // ---- Generator definitions (Issue #55) -----------------------------------
 #include "GeneratorParser.h"
+constexpr uint8_t kGeneratorDefaultUa = TRACER_ADDRESS;
+constexpr uint8_t kBenchNodeUa = 31;
+constexpr uint8_t kBenchLoopbackByte = 2;
+constexpr uint8_t kBenchLoopbackBit = 1;
+constexpr uint16_t kBenchLoopbackBitIndex =
+    static_cast<uint16_t>(kBenchLoopbackByte) * 8u + kBenchLoopbackBit;
+constexpr size_t kGeneratorUaCount = 128;
 
 struct FastWalkerGenerator {
   bool enabled = false;
@@ -290,15 +306,14 @@ struct FastWalkerGenerator {
   uint8_t byte = 3;
   uint32_t last_ms = 0;
   uint8_t step = 0;
-
-  void tick(uint32_t now_ms) {
-    if (!enabled || node == nullptr) return;
+  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
+    if (!enabled || target == nullptr || byte >= target->outputLength()) return;
     if (now_ms - last_ms >= period_ms) {
-      node->setOutputBit(byte * 8 + step, false);
+      target->setOutputBit(byte * 8 + step, false);
       if (step > 0) {
-        node->setOutputBit(byte * 8 + (step - 1), true);
+        target->setOutputBit(byte * 8 + (step - 1), true);
       } else if (last_ms != 0) {
-        node->setOutputBit(byte * 8 + 7, true);
+        target->setOutputBit(byte * 8 + 7, true);
       }
       step = (step + 1) % 8;
       last_ms = now_ms;
@@ -312,15 +327,14 @@ struct SlowWalkerGenerator {
   uint8_t byte = 5;
   uint32_t last_ms = 0;
   uint8_t step = 0;
-
-  void tick(uint32_t now_ms) {
-    if (!enabled || node == nullptr) return;
+  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
+    if (!enabled || target == nullptr || byte >= target->outputLength()) return;
     if (now_ms - last_ms >= period_ms) {
-      node->setOutputBit(byte * 8 + step, true);
+      target->setOutputBit(byte * 8 + step, true);
       if (step > 0) {
-        node->setOutputBit(byte * 8 + (step - 1), false);
+        target->setOutputBit(byte * 8 + (step - 1), false);
       } else if (last_ms != 0) {
-        node->setOutputBit(byte * 8 + 7, false);
+        target->setOutputBit(byte * 8 + 7, false);
       }
       step = (step + 1) % 8;
       last_ms = now_ms;
@@ -329,16 +343,24 @@ struct SlowWalkerGenerator {
 };
 
 struct ToggleOutFromInputGenerator {
+  enum class Mode { kToggleOnRise, kWriteRead };
   bool enabled = false;
   uint16_t in_bit = 48;
   uint16_t out_bit = 32;
+  Mode mode = Mode::kToggleOnRise;
   bool last_in = false;
-
-  void tick(uint32_t now_ms) {
-    if (!enabled || node == nullptr) return;
-    bool current_in = node->inputBit(in_bit);
-    if (current_in && !last_in) {
-      node->setOutputBit(out_bit, !node->outputBit(out_bit));
+  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
+    if (!enabled || target == nullptr) return;
+    const size_t in_bits = target->inputLength() * 8u;
+    const size_t out_bits = target->outputLength() * 8u;
+    if (in_bit >= in_bits || out_bit >= out_bits) return;
+    bool current_in = target->inputBit(in_bit);
+    if (mode == Mode::kWriteRead) {
+      if (target->outputBit(out_bit) != current_in) {
+        target->setOutputBit(out_bit, current_in);
+      }
+    } else if (current_in && !last_in) {
+      target->setOutputBit(out_bit, !target->outputBit(out_bit));
     }
     last_in = current_in;
   }
@@ -350,7 +372,6 @@ struct StallGenerator {
   uint32_t period_ms = 150;
   enum class Mode { kYield, kBusy } mode = Mode::kYield;
   uint32_t last_ms = 0;
-
   void tick(uint32_t now_ms) {
     if (!enabled || ms == 0) return;
     if (now_ms - last_ms >= period_ms || last_ms == 0) {
@@ -367,10 +388,87 @@ struct StallGenerator {
   }
 };
 
-FastWalkerGenerator fastwalker;
-SlowWalkerGenerator slowwalker;
-ToggleOutFromInputGenerator toggleoutfrominput;
+FastWalkerGenerator fastwalkerByUa[kGeneratorUaCount];
+SlowWalkerGenerator slowwalkerByUa[kGeneratorUaCount];
+ToggleOutFromInputGenerator toggleoutfrominputByUa[kGeneratorUaCount];
+bool generatorDefaultsInitialized[kGeneratorUaCount] = {false};
 StallGenerator stall;
+
+void initializeGeneratorDefaults(uint8_t ua) {
+  if (ua >= kGeneratorUaCount || generatorDefaultsInitialized[ua]) return;
+  fastwalkerByUa[ua] = FastWalkerGenerator{};
+  slowwalkerByUa[ua] = SlowWalkerGenerator{};
+  toggleoutfrominputByUa[ua] = ToggleOutFromInputGenerator{};
+  if (ua == kBenchNodeUa) {
+    slowwalkerByUa[ua].byte = kBenchLoopbackByte;
+    toggleoutfrominputByUa[ua].in_bit = kBenchLoopbackBitIndex;
+    toggleoutfrominputByUa[ua].out_bit = kBenchLoopbackBitIndex;
+    toggleoutfrominputByUa[ua].mode = ToggleOutFromInputGenerator::Mode::kWriteRead;
+  }
+  generatorDefaultsInitialized[ua] = true;
+}
+
+void disableAllNodeScopedGenerators() {
+  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
+    if (!generatorDefaultsInitialized[ua]) continue;
+    fastwalkerByUa[ua].enabled = false;
+    slowwalkerByUa[ua].enabled = false;
+    toggleoutfrominputByUa[ua].enabled = false;
+  }
+}
+
+size_t countEnabledFastwalker() {
+  size_t count = 0;
+  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
+    if (generatorDefaultsInitialized[ua] && fastwalkerByUa[ua].enabled) ++count;
+  }
+  return count;
+}
+
+size_t countEnabledSlowwalker() {
+  size_t count = 0;
+  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
+    if (generatorDefaultsInitialized[ua] && slowwalkerByUa[ua].enabled) ++count;
+  }
+  return count;
+}
+
+size_t countEnabledLoopback() {
+  size_t count = 0;
+  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
+    if (generatorDefaultsInitialized[ua] && toggleoutfrominputByUa[ua].enabled) ++count;
+  }
+  return count;
+}
+
+void tickNodeScopedGenerators(uint32_t now_ms) {
+  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
+    if (!generatorDefaultsInitialized[ua]) continue;
+    FastWalkerGenerator& fast = fastwalkerByUa[ua];
+    SlowWalkerGenerator& slow = slowwalkerByUa[ua];
+    ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[ua];
+    if (!fast.enabled && !slow.enabled && !loopback.enabled) continue;
+    CMRInet::RemoteNodeHandle* target = host.node(static_cast<uint8_t>(ua));
+    fast.tick(now_ms, target);
+    slow.tick(now_ms, target);
+    loopback.tick(now_ms, target);
+  }
+}
+
+void emitGeneratorEvent(const char* event, const char* generator,
+                        bool include_ua, uint8_t ua) {
+  Serial.print("{\"event\":\"");
+  Serial.print(event);
+  Serial.print("\",\"generator\":\"");
+  Serial.print(generator);
+  if (include_ua) {
+    Serial.print("\",\"ua\":");
+    Serial.print(ua);
+    Serial.println("}");
+  } else {
+    Serial.println("\"}");
+  }
+}
 
 bool handleGeneratorControl(char* cmd) {
   char* saveptr = nullptr;
@@ -380,7 +478,6 @@ bool handleGeneratorControl(char* cmd) {
   bool is_enable = (strcmp(action, "enable") == 0);
   bool is_disable = (strcmp(action, "disable") == 0);
   bool is_configure = (strcmp(action, "configure") == 0);
-
   if (!is_enable && !is_disable && !is_configure) return false;
 
   char* gen_name = strtok_r(nullptr, " ", &saveptr);
@@ -391,10 +488,10 @@ bool handleGeneratorControl(char* cmd) {
     return true;
   }
 
-  bool valid_gen = (strcmp(gen_name, "fastwalker") == 0 ||
-                    strcmp(gen_name, "slowwalker") == 0 ||
-                    strcmp(gen_name, "toggleoutfrominput") == 0 ||
-                    strcmp(gen_name, "stall") == 0);
+  const bool valid_gen = (strcmp(gen_name, "fastwalker") == 0 ||
+                          strcmp(gen_name, "slowwalker") == 0 ||
+                          strcmp(gen_name, "toggleoutfrominput") == 0 ||
+                          strcmp(gen_name, "stall") == 0);
   if (!valid_gen) {
     Serial.print("{\"event\":\"error\",\"error\":\"badVerb\",\"message\":\"unknown generator '");
     Serial.print(gen_name);
@@ -402,21 +499,14 @@ bool handleGeneratorControl(char* cmd) {
     return true;
   }
 
-  if (is_disable) {
-    if (strcmp(gen_name, "fastwalker") == 0) fastwalker.enabled = false;
-    else if (strcmp(gen_name, "slowwalker") == 0) slowwalker.enabled = false;
-    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominput.enabled = false;
-    else if (strcmp(gen_name, "stall") == 0) stall.enabled = false;
-    
-    Serial.print("{\"event\":\"disable\",\"generator\":\"");
-    Serial.print(gen_name);
-    Serial.println("\"}");
-    return true;
-  }
-
+  const bool node_scoped_gen =
+      (strcmp(gen_name, "fastwalker") == 0 ||
+       strcmp(gen_name, "slowwalker") == 0 ||
+       strcmp(gen_name, "toggleoutfrominput") == 0);
+  ParsedGeneratorParams p;
   char* args = strtok_r(nullptr, "", &saveptr);
-  if (args) {
-    ParsedGeneratorParams p = parseGeneratorParams(args, gen_name);
+  if (args != nullptr) {
+    p = parseGeneratorParams(args, gen_name);
     if (p.error_code) {
       Serial.print("{\"event\":\"error\",\"error\":\"");
       Serial.print(p.error_code);
@@ -425,51 +515,96 @@ bool handleGeneratorControl(char* cmd) {
       Serial.println("'\"}");
       return true;
     }
-    
-    if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
+  }
+
+  uint8_t target_ua = kGeneratorDefaultUa;
+  if (node_scoped_gen && p.has_ua) target_ua = p.ua;
+  if (node_scoped_gen) initializeGeneratorDefaults(target_ua);
+
+  if (is_disable) {
+    if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].enabled = false;
+    else if (strcmp(gen_name, "slowwalker") == 0) slowwalkerByUa[target_ua].enabled = false;
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominputByUa[target_ua].enabled = false;
+    else if (strcmp(gen_name, "stall") == 0) stall.enabled = false;
+    emitGeneratorEvent("disable", gen_name, node_scoped_gen, target_ua);
+    return true;
+  }
+
+  if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
+    if (args != nullptr) {
       if (p.has_period) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalker.period_ms = p.period_ms;
-        else slowwalker.period_ms = p.period_ms;
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].period_ms = p.period_ms;
+        else slowwalkerByUa[target_ua].period_ms = p.period_ms;
       }
       if (p.has_byte) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalker.byte = p.byte_idx;
-        else slowwalker.byte = p.byte_idx;
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].byte = p.byte_idx;
+        else slowwalkerByUa[target_ua].byte = p.byte_idx;
       }
-    } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
-      if (p.has_in) toggleoutfrominput.in_bit = p.in_bit;
-      if (p.has_out) toggleoutfrominput.out_bit = p.out_bit;
-    } else if (strcmp(gen_name, "stall") == 0) {
+    }
+  } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
+    if (args != nullptr) {
+      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[target_ua];
+      if (p.has_in) loopback.in_bit = p.in_bit;
+      if (p.has_out) loopback.out_bit = p.out_bit;
+      if (p.has_src_byte && p.has_src_bit) {
+        loopback.in_bit = static_cast<uint16_t>(p.src_byte) * 8u + p.src_bit;
+      }
+      if (p.has_dst_byte && p.has_dst_bit) {
+        loopback.out_bit = static_cast<uint16_t>(p.dst_byte) * 8u + p.dst_bit;
+      }
+      if (p.has_loopback_mode) {
+        loopback.mode = p.loopback_mode_write_read
+            ? ToggleOutFromInputGenerator::Mode::kWriteRead
+            : ToggleOutFromInputGenerator::Mode::kToggleOnRise;
+      }
+    }
+  } else if (strcmp(gen_name, "stall") == 0) {
+    if (args != nullptr) {
       if (p.has_stall_ms) stall.ms = p.stall_ms;
       if (p.has_period) stall.period_ms = p.period_ms;
       if (p.has_mode) {
-        stall.mode = p.mode_busy ? StallGenerator::Mode::kBusy : StallGenerator::Mode::kYield;
+        stall.mode = p.mode_busy
+            ? StallGenerator::Mode::kBusy
+            : StallGenerator::Mode::kYield;
       }
     }
   }
 
   if (is_enable) {
     lazyBegin();
-    if (strcmp(gen_name, "fastwalker") == 0) { fastwalker.enabled = true; fastwalker.last_ms = 0; }
-    else if (strcmp(gen_name, "slowwalker") == 0) { slowwalker.enabled = true; slowwalker.last_ms = 0; }
-    else if (strcmp(gen_name, "toggleoutfrominput") == 0) { 
-      toggleoutfrominput.enabled = true; 
-      toggleoutfrominput.last_in = node ? node->inputBit(toggleoutfrominput.in_bit) : false; 
-    }
-    else if (strcmp(gen_name, "stall") == 0) { 
+    if (strcmp(gen_name, "fastwalker") == 0) {
+      FastWalkerGenerator& fast = fastwalkerByUa[target_ua];
+      fast.enabled = true;
+      fast.last_ms = 0;
+      fast.step = 0;
+    } else if (strcmp(gen_name, "slowwalker") == 0) {
+      SlowWalkerGenerator& slow = slowwalkerByUa[target_ua];
+      slow.enabled = true;
+      slow.last_ms = 0;
+      slow.step = 0;
+    } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
+      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[target_ua];
+      loopback.enabled = true;
+      CMRInet::RemoteNodeHandle* target = host.node(target_ua);
+      const size_t in_bits = target ? (target->inputLength() * 8u) : 0u;
+      loopback.last_in = (target != nullptr && loopback.in_bit < in_bits)
+          ? target->inputBit(loopback.in_bit)
+          : false;
+    } else if (strcmp(gen_name, "stall") == 0) {
       if (stall.ms == 0) stall.enabled = false;
-      else { stall.enabled = true; stall.last_ms = 0; }
+      else {
+        stall.enabled = true;
+        stall.last_ms = 0;
+      }
     }
   }
 
-  Serial.print("{\"event\":\"");
-  Serial.print(action);
-  Serial.print("\",\"generator\":\"");
-  Serial.print(gen_name);
-  Serial.println("\"}");
+  emitGeneratorEvent(action, gen_name, node_scoped_gen, target_ua);
   return true;
 }
 
 void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_capacity) {
+  initializeGeneratorDefaults(kGeneratorDefaultUa);
   char nodesBuf[512] = ",\"nodes\":[";
   size_t offset = strlen(nodesBuf);
   bool first = true;
@@ -486,18 +621,38 @@ void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_
     }
   }
   snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset, "]");
+  const FastWalkerGenerator& defaultFastwalker = fastwalkerByUa[kGeneratorDefaultUa];
+  const SlowWalkerGenerator& defaultSlowwalker = slowwalkerByUa[kGeneratorDefaultUa];
+  const ToggleOutFromInputGenerator& defaultLoopback = toggleoutfrominputByUa[kGeneratorDefaultUa];
+  const char* loopbackMode =
+      (defaultLoopback.mode == ToggleOutFromInputGenerator::Mode::kWriteRead)
+          ? "write_read"
+          : "toggle";
 
   snprintf(buffer, remaining_capacity, 
     "%s,\"generators\":{"
-    "\"fastwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
-    "\"slowwalker\":{\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u},"
-    "\"toggleoutfrominput\":{\"enabled\":%s,\"in\":%u,\"out\":%u},"
+    "\"fastwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
+    "\"slowwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
+    "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,\"mode\":\"%s\",\"enabled_count\":%u},"
     "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
     "}",
     nodesBuf,
-    fastwalker.enabled ? "true" : "false", (unsigned long)fastwalker.period_ms, fastwalker.byte,
-    slowwalker.enabled ? "true" : "false", (unsigned long)slowwalker.period_ms, slowwalker.byte,
-    toggleoutfrominput.enabled ? "true" : "false", toggleoutfrominput.in_bit, toggleoutfrominput.out_bit,
+    static_cast<unsigned>(kGeneratorDefaultUa),
+    defaultFastwalker.enabled ? "true" : "false",
+    (unsigned long)defaultFastwalker.period_ms,
+    defaultFastwalker.byte,
+    static_cast<unsigned>(countEnabledFastwalker()),
+    static_cast<unsigned>(kGeneratorDefaultUa),
+    defaultSlowwalker.enabled ? "true" : "false",
+    (unsigned long)defaultSlowwalker.period_ms,
+    defaultSlowwalker.byte,
+    static_cast<unsigned>(countEnabledSlowwalker()),
+    static_cast<unsigned>(kGeneratorDefaultUa),
+    defaultLoopback.enabled ? "true" : "false",
+    defaultLoopback.in_bit,
+    defaultLoopback.out_bit,
+    loopbackMode,
+    static_cast<unsigned>(countEnabledLoopback()),
     stall.enabled ? "true" : "false", (unsigned long)stall.ms, (unsigned long)stall.period_ms, stall.mode == StallGenerator::Mode::kYield ? "yield" : "busy"
   );
 }
@@ -593,6 +748,10 @@ void setup() {
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
   nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
   host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
+  CMRInet::RemoteNodeConfig phantomNodeConfig;
+  phantomNodeConfig.inputBytes = TRACER_PHANTOM_INPUT_BYTES;
+  phantomNodeConfig.outputBytes = TRACER_PHANTOM_OUTPUT_BYTES;
+  host.addRemoteNode(TRACER_PHANTOM_ADDRESS, phantomNodeConfig);
 
   if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
     node = host.node(TRACER_ADDRESS);
@@ -614,10 +773,7 @@ void loop() {
   engine.setNow(nowMs);
   if (!finished) {
     host.tick(nowMs);
-    
-    fastwalker.tick(nowMs);
-    slowwalker.tick(nowMs);
-    toggleoutfrominput.tick(nowMs);
+    tickNodeScopedGenerators(nowMs);
     stall.tick(nowMs);
   }
 
@@ -770,9 +926,7 @@ void loop() {
       run_polls = 0;
       run_loop_its = 0;
       run_it_frames = 0;
-      fastwalker.enabled = false;
-      slowwalker.enabled = false;
-      toggleoutfrominput.enabled = false;
+      disableAllNodeScopedGenerators();
       stall.enabled = false;
       Serial.println("{\"event\":\"reset\"}");
       handled = true;

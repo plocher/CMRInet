@@ -22,7 +22,7 @@ LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRIPacket.h \
             ../src/StreamCMRISerialPort.h ../src/SimpleHostMetrics.h
 
 TESTS   := test_codec test_time test_mock_transport test_serial_transport \
-           test_host test_tracer test_host_display_metrics
+           test_host test_tracer test_host_display_metrics test_xiao_generators
 TARGETS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
