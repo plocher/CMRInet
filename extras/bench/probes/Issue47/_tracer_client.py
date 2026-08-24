@@ -3,37 +3,117 @@ import time
 import json
 import serial
 import threading
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 import _gap_deltas
 
-# Ports resolve through bench_ports (#68): roles key on USB serial in
+# Ports resolve through the #68 bench tooling (`extras/bench/bench`
+# first, `bench_ports` fallback): roles key on USB serial in
 # extras/bench/bench.json, so enumeration shuffles no longer matter.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import bench_ports
 
+BENCH_CLI = Path(__file__).resolve().parents[2] / "bench"
+
+
+def _resolve_role_with_bench_cli(role: str, role_id: Optional[str] = None) -> str:
+    """Resolve a bench role by calling extras/bench/bench resolve."""
+    command = [str(BENCH_CLI), "resolve", "--role", role]
+    if role_id is not None:
+        command.extend(["--id", role_id])
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    resolved = completed.stdout.strip()
+    if not resolved:
+        raise RuntimeError(
+            f"bench resolve returned empty output for role={role} id={role_id}"
+        )
+    return resolved
+
+
+def _resolve_role(role: str, role_id: Optional[str] = None) -> str:
+    """Resolve a bench role, preferring bench CLI and falling back to module API."""
+    try:
+        return _resolve_role_with_bench_cli(role, role_id)
+    except Exception:
+        return bench_ports.resolve_or_exit(role, role_id)
+
 
 def host_port() -> str:
     """Live device for the bench Host role."""
-    return bench_ports.resolve_or_exit("Host")
+    return _resolve_role("Host")
 
 
 def sniffer_tx_port() -> str:
     """Live device for the Sniffer/TX (poll-pair) role."""
-    return bench_ports.resolve_or_exit("Sniffer", "TX")
+    return _resolve_role("Sniffer", "TX")
 
 
 def sniffer_rx_port() -> str:
     """Live device for the Sniffer/RX (reply-pair) role."""
-    return bench_ports.resolve_or_exit("Sniffer", "RX")
+    return _resolve_role("Sniffer", "RX")
 
 
 DEFAULT_NODE_ADDRESSES = (30, 31)
+DEFAULT_LOOPBACK_BYTE = 2
+DEFAULT_LOOPBACK_BIT = 1
 
 
 def _write_command(ser, cmd: bytes, delay_s: float = 0.1) -> None:
     ser.write(cmd)
     time.sleep(delay_s)
+
+
+def send_command(ser, command: str, delay_s: float = 0.1) -> None:
+    """Send one plain-text verb line to the tracer shell."""
+    _write_command(ser, f"{command}\n".encode("utf-8"), delay_s=delay_s)
+
+
+def send_generator_command(
+    ser,
+    action: str,
+    generator: str,
+    ua: Optional[int] = None,
+    extra_args: str = "",
+    delay_s: float = 0.1,
+) -> None:
+    """Send a generator control verb with optional UA targeting."""
+    cmd = f"{action} {generator}"
+    if ua is not None:
+        cmd += f" ua {ua}"
+    if extra_args:
+        cmd += f" {extra_args}"
+    _write_command(ser, f"{cmd}\n".encode("utf-8"), delay_s=delay_s)
+
+
+def configure_loopback_write_read(
+    ser,
+    ua: int,
+    src_byte: int = DEFAULT_LOOPBACK_BYTE,
+    src_bit: int = DEFAULT_LOOPBACK_BIT,
+    dst_byte: int = DEFAULT_LOOPBACK_BYTE,
+    dst_bit: int = DEFAULT_LOOPBACK_BIT,
+    delay_s: float = 0.1,
+) -> None:
+    """Configure loopback as write(read()) with explicit src/dst byte+bit."""
+    extra = (
+        "mode write_read "
+        f"src_byte {src_byte} src_bit {src_bit} "
+        f"dst_byte {dst_byte} dst_bit {dst_bit}"
+    )
+    send_generator_command(
+        ser,
+        "configure",
+        "toggleoutfrominput",
+        ua=ua,
+        extra_args=extra,
+        delay_s=delay_s,
+    )
 
 def _readline_text(ser, raw_line_sink: Optional[Callable[[bytes], None]] = None) -> str:
     try:
@@ -78,9 +158,10 @@ def quiesce_traffic_preserving_ring(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
                                     max_wait_s: float = 30.0, quiet_window_s: float = 2.0,
                                     line_sink: Optional[Callable[[str], None]] = None,
                                     raw_line_sink: Optional[Callable[[bytes], None]] = None) -> bool:
-    _write_command(ser, b"disable fastwalker\n")
-    _write_command(ser, b"disable slowwalker\n")
-    _write_command(ser, b"disable toggleoutfrominput\n")
+    for ua in node_addresses:
+        send_generator_command(ser, "disable", "fastwalker", ua=ua)
+        send_generator_command(ser, "disable", "slowwalker", ua=ua)
+        send_generator_command(ser, "disable", "toggleoutfrominput", ua=ua)
     for ua in node_addresses:
         _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
     return wait_for_sustained_quiet(
@@ -128,9 +209,10 @@ def shutdown_and_verify_quiet(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
     flush_lines(ser)
     print("Host quiesced.")
 
-    _write_command(ser, b"disable fastwalker\n")
-    _write_command(ser, b"disable slowwalker\n")
-    _write_command(ser, b"disable toggleoutfrominput\n")
+    for ua in node_addresses:
+        send_generator_command(ser, "disable", "fastwalker", ua=ua)
+        send_generator_command(ser, "disable", "slowwalker", ua=ua)
+        send_generator_command(ser, "disable", "toggleoutfrominput", ua=ua)
     for ua in node_addresses:
         _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
     return wait_for_sustained_quiet(
@@ -233,8 +315,8 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
     sniffer_threads: list[threading.Thread] = []
     sniffer_errors: list[str] = []
     if capture_sniffers:
-        tx_port = sniffer_tx_port or bench_ports.resolve_or_exit("Sniffer", "TX")
-        rx_port = sniffer_rx_port or bench_ports.resolve_or_exit("Sniffer", "RX")
+        tx_port = sniffer_tx_port or _resolve_role("Sniffer", "TX")
+        rx_port = sniffer_rx_port or _resolve_role("Sniffer", "RX")
         tx_raw_file.touch()
         rx_raw_file.touch()
         sniffer_stop_event = threading.Event()
