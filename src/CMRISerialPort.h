@@ -85,7 +85,7 @@ class CMRISerialPort {
 
  protected:
   // The transport never destroys a port through the seam: nothing is
-  // deallocated after begin() (Design v1.1 D5). Protected non-virtual
+  // deallocated after begin() (Design v1.2 D7). Protected non-virtual
   // destructor, matching CMRITransport.
   ~CMRISerialPort() = default;
 };

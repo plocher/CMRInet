@@ -211,8 +211,9 @@ class RemoteNodeHandle {
 
   /// Disable or re-enable this node. The exchange schedule skips a
   /// disabled node.
-  // VALIDATION: Design v1.1 D5: after begin(), nodes cannot be
-  // removed, only disabled.
+  // VALIDATION: Design v1.2 D5: enable/disable is unchanged. Removal is
+  // specified by v1.2 D5 but not implemented yet, so today disabling is
+  // still the only way to take a node out of the rotation.
   void setEnabled(bool enabled) { config_.enabled = enabled; }
 
  private:

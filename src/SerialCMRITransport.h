@@ -71,7 +71,7 @@ class SerialCMRITransport : public CMRITransport {
   static constexpr uint32_t kShippedInterByteTimeoutMs = 100;
 
   /// The transport drives, and never destroys, the given port. The
-  /// port must outlive the transport (Design v1.1 D5: nothing is
+  /// port must outlive the transport (Design v1.2 D7: nothing is
   /// deallocated after begin()).
   explicit SerialCMRITransport(CMRISerialPort& port) : port_(port) {}
 

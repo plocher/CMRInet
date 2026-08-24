@@ -219,15 +219,21 @@ void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet)
   }
 }
 
+// Set at setup() if either compiled-in node was rejected. Reported once
+// at begin() rather than latched in the engine: each add already told us
+// its own outcome (Design v1.2 D5).
+CMRInet::CMRIHost::ConfigStatus setupStatus = CMRInet::CMRIHost::ConfigStatus::kOk;
+
 bool host_begun = false;
 void lazyBegin() {
   if (!host_begun) {
-    if (host.begin() != CMRInet::CMRIHost::ConfigStatus::kOk) {
+    if (setupStatus != CMRInet::CMRIHost::ConfigStatus::kOk) {
       Serial.print("{\"event\":\"fatal\",\"error\":\"begin rejected configuration: ");
-      Serial.print(CMRInet::configStatusString(host.configStatus()));
+      Serial.print(CMRInet::configStatusString(setupStatus));
       Serial.println("\"}");
       for (;;) delay(1000);
     }
+    host.begin();
     host_begun = true;
   }
 }
@@ -747,13 +753,18 @@ void setup() {
   CMRInet::RemoteNodeConfig nodeConfig;
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
   nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
-  host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
+  const CMRInet::CMRIHost::ConfigStatus realStatus =
+      host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
   CMRInet::RemoteNodeConfig phantomNodeConfig;
   phantomNodeConfig.inputBytes = TRACER_PHANTOM_INPUT_BYTES;
   phantomNodeConfig.outputBytes = TRACER_PHANTOM_OUTPUT_BYTES;
-  host.addRemoteNode(TRACER_PHANTOM_ADDRESS, phantomNodeConfig);
+  const CMRInet::CMRIHost::ConfigStatus phantomStatus =
+      host.addRemoteNode(TRACER_PHANTOM_ADDRESS, phantomNodeConfig);
+  setupStatus = (realStatus != CMRInet::CMRIHost::ConfigStatus::kOk)
+      ? realStatus
+      : phantomStatus;
 
-  if (host.configStatus() == CMRInet::CMRIHost::ConfigStatus::kOk) {
+  if (setupStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
     node = host.node(TRACER_ADDRESS);
     engine.bind(host, transport, *node, kImage, kVersion,
                 writeCdcLine, nullptr);
@@ -830,9 +841,14 @@ void loop() {
                   CMRInet::RemoteNodeConfig cfg;
                   cfg.inputBytes = in_b;
                   cfg.outputBytes = out_b;
-                  host.addRemoteNode(addr, cfg);
-                  if (host.configStatus() != CMRInet::CMRIHost::ConfigStatus::kOk) {
-                      Serial.println("{\"event\":\"error\",\"error\":\"addFailed\"}");
+                  // Per-call status: a rejected add no longer disables
+                  // every later one (Design v1.2 D5).
+                  const CMRInet::CMRIHost::ConfigStatus st =
+                      host.addRemoteNode(addr, cfg);
+                  if (st != CMRInet::CMRIHost::ConfigStatus::kOk) {
+                      Serial.print("{\"event\":\"error\",\"error\":\"addFailed\",\"reason\":\"");
+                      Serial.print(CMRInet::configStatusString(st));
+                      Serial.println("\"}");
                   } else {
                       Serial.print("{\"event\":\"node_add\",\"ua\":"); Serial.print(addr); Serial.println("}");
                   }
