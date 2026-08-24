@@ -188,9 +188,14 @@ struct CMRIHostStatistics {
 /// After begin(), the engine allocates nothing.
 // VALIDATION: Design v1.2 D7: the embedded profile allocates only
 // during setup and never frees.
-// VALIDATION: Design v1.1 D5: the node table is still fixed at begin()
-// -- runtime add/delete/geometry-change specified by Design v1.2 D5 is
-// not implemented yet, so this tag deliberately still cites v1.1.
+// VALIDATION: Design v1.2 D8: table *capacity* is the compile-time knob
+// CMRINET_HOST_MAX_NODES. Every add is checked against it, so the
+// invariant is nodeCount_ <= kMaxNodes, not a frozen membership list.
+// VALIDATION: Design v1.1 D5: table *membership* is still frozen at
+// begin(). Runtime add/delete/geometry-change per Design v1.2 D5 is not
+// implemented yet, so this tag deliberately still cites v1.1. The two
+// are independent: once delete lands, deleting from a full table frees
+// a slot and a subsequent add must succeed.
 ///
 /// Runtime: call tick(nowMs) from loop(). The engine advances only
 /// inside tick() and never blocks, sleeps, or busy-waits.
