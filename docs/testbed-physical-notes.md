@@ -19,6 +19,16 @@ A second adapter unlocks:
 - a passive bus tap: listen-only, logging decoded frames with timestamps, an independent witness when Host and Node disagree
 - on 4-wire, one receiver hears one pair. A full-conversation tap needs a receiver on the poll pair and another on the reply pair (one full-duplex adapter provides only one receiver, so a complete tap takes two adapters or a 2-wire bench)
 
+`extras/bench/bench list`:
+| Type    | ID    | Serial            | Location | Device                     | Status |
+| ------- | ----- | ----------------- | -------- | -------------------------- | ------ |
+| Host    | Host  | 58:E6:C5:1A:88:D8 | 4-1.1    | /dev/cu.usbmodem41101      | OK     |
+| Sniffer | RX    | A0:F2:62:86:B8:18 | 4-1.4.2  | /dev/cu.usbmodem414201     | OK     |
+| Sniffer | TX    | 54:32:04:21:7E:54 | 4-1.4.1  | /dev/cu.usbmodem414101     | OK     |
+| Node    | 30    | 58:E6:C5:1A:77:74 | 4-1.2    | /dev/cu.usbmodem41201      | OK     |
+| Node    | 31    | A0:F2:62:85:CC:64 | 4-1.4.3  | /dev/cu.usbmodem414301     | OK     |
+| Dongle  | RS485 | BG04ID4L          | 5-1      | /dev/cu.usbserial-BG04ID4L | OK     |
+
 ## Pair naming and the crossover rule
 The cpNode-Xiao RS-485 block has five positions: `T-`, `T+`, `R-`, `R+`, shield. The MAX3491 is a full-duplex part: `T±` is the board's driver pair, `R±` is its receiver pair. The labels are perspective-relative — they describe what THIS board does on that pair, not the pair's role on the bus.
 
