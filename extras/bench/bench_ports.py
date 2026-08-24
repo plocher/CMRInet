@@ -239,6 +239,21 @@ def usb_resolve(
     )
 
 
+def resolve_or_exit(
+    type_: str,
+    id_: Optional[str] = None,
+    bench: Optional[str] = None,
+    config: Optional[str] = None,
+    ports_file: Optional[str] = None,
+) -> str:
+    """usb_resolve for script call sites: device path or a clean exit."""
+    try:
+        return usb_resolve(type_, id_, bench, config, ports_file).device
+    except BenchError as exc:
+        eprint(f"error: {exc}")
+        raise SystemExit(exc.exit_code)
+
+
 # --------------------------------------------------------------------------
 # Behavioral verification (only for images we own)
 # --------------------------------------------------------------------------

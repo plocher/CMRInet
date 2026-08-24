@@ -12,8 +12,8 @@ from pathlib import Path
 import importlib.util
 import serial
 
-_DEFAULT_HOST_PORT = "/dev/cu.usbmodem282201"
-
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import bench_ports
 
 sys.path.insert(0, str(Path(__file__).parent / "analyzers"))
 import importlib
@@ -136,7 +136,8 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
 
 def main():
     parser = argparse.ArgumentParser(description="Sweep #47")
-    parser.add_argument("--port", default=_DEFAULT_HOST_PORT)
+    parser.add_argument("--port", default=None,
+                        help="Host device; default resolves from bench.json")
     parser.add_argument("--secs", type=int, default=60)
     parser.add_argument("--stalls", default="1 3 5 7 8 9 10 11 12 15 20 30 50 100 250")
     parser.add_argument("--periods", default="125 145 150 155 200 233 250 373 500")
@@ -146,6 +147,7 @@ def main():
     parser.add_argument("--out", default="sweep_results")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.port = args.port or bench_ports.resolve_or_exit("Host")
     
     stalls = [int(x) for x in args.stalls.replace("*", "").split() if x.strip()]
     periods = [int(x) for x in args.periods.replace("*", "").split() if x.strip()]

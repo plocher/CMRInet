@@ -6,8 +6,10 @@ import _tracer_client
 
 def main():
     parser = argparse.ArgumentParser(description="Force tracer host into quiescent state")
-    parser.add_argument("--port", default=_tracer_client._DEFAULT_HOST_PORT)
+    parser.add_argument("--port", default=None,
+                        help="Host device; default resolves from bench.json")
     args = parser.parse_args()
+    args.port = args.port or _tracer_client.host_port()
 
     print(f"Connecting to {args.port}...")
     ser = serial.Serial(args.port, 115200, timeout=0.5)

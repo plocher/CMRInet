@@ -4,12 +4,15 @@ Proves whether R reaches the Host UART (tracer replies/trace) while the
 dongle on Host R+/- sees nothing (the paradox), or resolves it."""
 import serial, time, re, sys, threading
 
-# Defaults; override with argv: tracer_dongle.py [tracer_port] [dongle_port]
-TRACER = "/dev/cu.usbmodem282201"   # the Host board (reflashed w/ XiaoHostTracer)
-DONGLE = "/dev/cu.usbserial-BG04ID4L"
+import bench_ports
+
+# Defaults resolve from bench.json (#68); argv overrides win:
+#   tracer_dongle.py [tracer_port] [dongle_port]
+TRACER = sys.argv[1] if len(sys.argv) > 1 else None
+DONGLE = sys.argv[2] if len(sys.argv) > 2 else None
+TRACER = TRACER or bench_ports.resolve_or_exit("Host")
+DONGLE = DONGLE or bench_ports.resolve_or_exit("Dongle")
 DWELL = 15.0
-if len(sys.argv) > 1: TRACER = sys.argv[1]
-if len(sys.argv) > 2: DONGLE = sys.argv[2]
 
 STX, ETX, DLE, SYN = 0x02, 0x03, 0x10, 0xFF
 

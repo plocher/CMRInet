@@ -30,7 +30,8 @@ def _connect_and_configure(port: str):
 def main():
 
     parser = argparse.ArgumentParser(description="Sweep #47")
-    parser.add_argument("--port", default=_tracer_client._DEFAULT_HOST_PORT)
+    parser.add_argument("--port", default=None,
+                        help="Host device; default resolves from bench.json")
     parser.add_argument("--secs", type=int, default=60)
     parser.add_argument("--stalls", default="1 3 5 7 8 9 10 11 12 15 20 30 50 100 250")
     parser.add_argument("--periods", default="125 145 150 155 200 233 250 373 500")
@@ -40,6 +41,7 @@ def main():
     parser.add_argument("--out", default="sweep_results")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.port = args.port or _tracer_client.host_port()
     
     stalls = [int(x) for x in args.stalls.replace("*", "").split() if x.strip()]
     periods = [int(x) for x in args.periods.replace("*", "").split() if x.strip()]
