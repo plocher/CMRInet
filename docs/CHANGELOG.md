@@ -22,9 +22,7 @@ High-level changes, newest first.
   scripts and `_tracer_client` resolve lazily through it; `--port`/argv
   overrides still win. 28-test functional suite
   (`extras/bench/test_bench_cli.py`) drives the real CLI against a fixture
-  config plus an injected fake enumeration;
-  `extras/bench/tests/uhubctl_cycle_test.py` (opt-in) power-cycles a hub
-  port and watches the resolver track the disappearance and return.
+  config plus an injected fake enumeration.
 
 ### Fixed
 - Fixed a latent bug in `XiaoHostTracer` where the OLED display perpetually showed `---` and 0 for metrics because the `node` pointer was never initialized in `setup()` (issue #56).
