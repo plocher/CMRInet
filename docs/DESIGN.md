@@ -1,10 +1,20 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.1 (bump when any decision or contract in this document
+Version: 1.2 (bump when any decision or contract in this document
 changes; `// VALIDATION:` tags in code cite this version — see
 `docs/agents/validation-comments.md`).
 Change log:
+- v1.2 (2026-08-24): declared-vs-observed node geometry (issue #80).
+  D1 gains the `RemoteHost*` perspective mirror; D2's health claim is
+  superseded by D16; D5 is rewritten as a lifecycle contract with its
+  allocation clause moved to D7; new D14 (geometry truth), D15 (state
+  substrates), D16 (three health axes plus a projection), and D17
+  (degraded service classes and the conformance breaker).
+  Unlike v1.1, `Design v1.1` tags are NOT re-stamped wholesale: D2, D5,
+  and D16 change substantively, so code that has not yet moved does not
+  validate against v1.2. Tags are re-stamped per clause as the
+  implementing code lands.
 - v1.1 (2026-08-16): D7 platform-guard clarification, transport-
   contract estimated-drain footnote, and D13 inter-byte abort doctrine
   (issue #27). Existing `Design v1.0` tags re-stamped to v1.1.
@@ -121,6 +131,12 @@ outermost = what it runs on.
   `RemoteNode*` family is the Host's view of remote nodes —
   `RemoteNodeHandle`, `RemoteNodeConfig`, `RemoteNodeState`,
   `RemoteNodeStatistics` (issue #2).
+- The mirror holds: the `RemoteHost*` family is the Node's view of its
+  controlling Host (`RemoteHostConformance` and siblings, when #9
+  lands). The "no bare `Host*` product types" rule below prohibits
+  *bare* names; a perspective-qualified `RemoteHost*` is formed exactly
+  as `RemoteNode*` is, and the same single-parse guarantee applies.
+  Stating the mirror explicitly means it need not be re-derived (v1.2).
 - `CMRI` never stacks directly onto a `Node`-family product name:
   `CMRINode` is itself a type, so any such composition
   (`CMRINodeStatistics`) parses two ways. `CMRINodeConfig` and
@@ -152,14 +168,19 @@ bare `Node*` product names, `LinkState`, `NodeStats`, and
 ### D2. The sketch-facing contract is images plus freshness and health
 The per-node handle (`RemoteNodeHandle`) exposes output image writes,
 input image reads, input age, link state, and statistics. It contains
-no poll vocabulary. `RemoteNodeState` is strategy-neutral:
-UNINITIALIZED / ONLINE / STALE / OFFLINE. `RemoteNodeStatistics` is a
-single neutral type — `exchanges`, `noReplies`, `recoveries`,
-`errors`, turnaround, staleness age. Every exchange discipline has
-attempts, failures, and recoveries, so no strategy-extension type
-exists; the bench UI may *display* "polls/misses", but the API
-vocabulary stays neutral. Anything truly polled-only surfaces on
-engine-owned types (`CMRIHostStatistics`), never on the handle.
+no poll vocabulary. `RemoteNodeState` is strategy-neutral; as of v1.2
+it is a *derived projection* over three stored axes rather than a
+stored value, and it carries two further values — see D16.
+`RemoteNodeStatistics` is a single neutral type — `exchanges`,
+`noReplies`, `recoveries`, `errors`, turnaround, staleness age. It is
+pure observation: monotonic, never reset, and never consulted to gate
+behavior (D15). `consecutiveMisses` was documented here in error; it is
+control state and belongs to the control substrate. Every exchange
+discipline has attempts, failures, and recoveries, so no
+strategy-extension type exists; the bench UI may *display*
+"polls/misses", but the API vocabulary stays neutral. Anything truly
+polled-only surfaces on engine-owned types (`CMRIHostStatistics`),
+never on the handle.
 Handle, image, freshness, and health types live in a
 strategy-neutral header owned by no engine.
 
@@ -206,12 +227,47 @@ emission. Protocol-level concerns stay in the strategy: poll schedule,
 reply-gate timeout, re-init ladder, I-then-full-T sequencing, dH/dL
 policy, UA/MT reply verification, health.
 
-### D5. Two-phase lifecycle; allocation only at setup
-Configuration phase: `addNode()` and handler registration; allocation
-is legal (embedded practice: allocate at startup, never free).
-`begin()` locks the configuration. After `begin()`: no allocation and
-no deallocation, ever. Nodes cannot be removed, only disabled.
-Applies to transports too.
+### D5. Lifecycle: what may change, when, and how failure is reported
+v1.2 rewrite. This decision previously conflated *lifecycle* with
+*storage strategy*. Allocation discipline moved to D7; capacity
+ceilings remain in D8. D5 now governs the mutation contract alone.
+
+`begin()` marks the transition from configuration to running. It is
+idempotent. It does not lock the node table.
+
+The node table is mutable at runtime within the D8 ceiling:
+- **add** — legal before and after `begin()`.
+- **delete** — tombstones the slot; a later add may reuse a cleaned
+  tombstone. Never compaction, so handles never relocate.
+- **geometry change** — in place, identity preserved. Invalidates the
+  cached input image and forces a re-init (I, then full T), because the
+  NI/NO announced in the I body has changed.
+- **enable / disable** — unchanged from v1.1.
+
+Address is identity, so changing a node's address is delete + add,
+never an in-place mutation. A handle that silently became a different
+logical device is worse than one that dangles.
+
+Handle lifetime: `host.node(addr)` is the canonical access path and is
+cheap enough to call at point of use. A handle is valid until that node
+is deleted. Caching across a mutation is not a supported pattern;
+`address()` is the self-check for code that does it anyway.
+
+Mutating the node of the outstanding exchange is legal. A send in
+flight cannot be aborted — bytes are on the wire and TXEN is asserted,
+so truncating would violate D13's transmit-drain doctrine. The exchange
+is **orphaned** instead: the frame completes, any reply is discarded,
+and nothing is attributed to any node. Without an explicit orphan mark,
+a late reply is matched against whatever now occupies the slot.
+
+Slot reuse resets all three substrates (D15). Freshness in particular
+must be cleared, or a newly added node reports data it never sent.
+
+Failure surface: every mutator returns its own status immediately.
+There is no sticky, chain-poisoning status and no chaining idiom. That
+was a hardcoded-test-rig ergonomic; the verb-based C&C regime
+invalidated its premise, and in practice it let one rejected add
+silently disable every later add.
 
 ### D6. Non-blocking tick with injected time
 The engine advances only from `tick(nowMs)`. Nothing in the library
@@ -224,6 +280,13 @@ tests, deterministically and faster than real time.
 Function pointers or template functors, not `std::function`. Error
 codes, not exceptions. No RTTI, no `String`, no growable containers
 after `begin()`. Received bytes normalize to `uint8_t` at the read.
+Allocation discipline (moved here from D5 in v1.2, being an
+implementation-profile concern rather than a lifecycle one): the
+embedded profile allocates only during setup and never frees. `begin()`
+may allocate; nothing after it does. This applies to transports as
+well. A desktop Host build may satisfy the same *functional* contract —
+bounded capacity (D8) and a well-defined failure surface (D5) — with
+whatever storage strategy it prefers.
 Observability is listener registration (JMRI pattern): metrics,
 monitor, and trace hooks are optional listeners the linker drops when
 unused. No feature `#ifdef`s inside the library. Platform guards on
@@ -332,6 +395,159 @@ transmit-side doctrine this receive-side doctrine pairs with. The
 conjunction (estimate AND port drain) is kept even for hardware-truth
 ports: the estimate never outlives a real drain, so it costs nothing.
 
+### D14. Declared geometry is a claim; observed geometry is evidence
+There are three sources of truth about a Node's geometry, and under the
+current spec only one direction flows:
+- **Declared** — `RemoteNodeConfig.inputBytes/outputBytes`.
+- **Announced** — the NI/NO fields of the I body (interop E3).
+- **Physical** — the Node's actual card complement.
+
+Declared flows to announced; nothing returns. That yields a
+truth-acquisition ladder:
+- **L0** declared only — config is unfalsifiable.
+- **L1** inferred — reply length reveals actual NI. Available today.
+- **L2** negotiated — an I-ack carrying NDP/NI/NO (issue #34).
+- **L3** discovered — a self-identify MT (issue #35).
+
+**Input geometry is observable; output geometry is not.** A Host can
+catch an over-declared `inputBytes` from an R length, but an
+over-declared `outputBytes` is undetectable until L2. Design for the
+asymmetry rather than around it. L1 populates the same fields L2 and L3
+later populate more precisely, so building the slot now is
+forward-compatible, not a stopgap. Note also that a fielded Node which
+ignores I never sends an I-ack, so L2 cannot cover the installed base:
+L1 remains the only universal mechanism.
+
+Faults are classified on two axes, not one flag:
+- **Layer**, indexed by the units ladder: image (geometry, NI/NO),
+  packet (UA, MT, malformed body), framing/carrier (DLE, truncation,
+  inter-byte abort). The image rung is strategy-invariant; the bottom
+  rung is carrier-specific and is replaced, not merely renamed, by a
+  message carrier (D11).
+- **Attribution**: a **defect** is the counterparty violating the spec;
+  a **disagreement** is two correctly-behaving endpoints configured
+  inconsistently. Geometry mismatch is a *disagreement* — the Node is
+  doing exactly what it was built to do, and the remedy is a config
+  fix, not a firmware fix.
+
+One flat `ConformanceFault` enum names specific faults; free
+`layerOf()` / `attributionOf()` classifiers derive the axes, so invalid
+combinations cannot be constructed and call sites do not chain field
+tests. The vocabulary is role-neutral and carries no poll terms, so
+both roles share it: the polled engine's `ReplyRejectReason` maps into
+it rather than being promoted to it.
+
+### D15. Three state substrates, and an invariant
+Per-node state divides into three kinds, and conflating them is what
+makes protocol drivers fragile:
+1. **Control** — protocol state-machine guards: init/re-init flags,
+   deadlines, backoff, dirty-output, miss counts. Mutable, resettable,
+   drives behavior. Largely strategy-specific.
+2. **Belief** — the product surface: input image, output image,
+   freshness.
+3. **Observation** — monotonic counters and last-fault detail.
+   Reporting only.
+
+**Invariant: control state is never read from observation, and
+observation never gates behavior.**
+
+v1.1 violated this: `consecutiveMisses` was documented as a never-reset
+statistic while resetting on accept and gating both OFFLINE and the
+re-init ladder. `RemoteNodeConfig.enabled` is the same category error
+in the other direction — runtime control state living in a config type
+— and is retained deliberately, recorded here so the exception stays
+visible.
+
+The split also gives slot reuse (D5) a checklist rather than a hunt,
+and keeps the health axes of D16 computable from independent inputs.
+
+### D16. Node health is three axes plus a projection
+Supersedes D2's claim that `RemoteNodeState` is a stored four-value
+enum. It was already an undocumented projection: UNINITIALIZED and
+STALE are statements about data validity, OFFLINE is a statement about
+liveness, and because liveness came first in the ladder it masked the
+validity reading entirely.
+
+Stored axes, one per substrate (D15):
+- `RemoteNodeLiveness` — responsive / missing / silent (control).
+- `RemoteNodeImageState` — none / fresh / stale (belief).
+- `RemoteNodeConformance` — unknown / conforming / nonconforming
+  (content evaluation).
+
+`RemoteNodeState` is retained as the *derived* single-scalar projection
+for displays and simple consumers, extended with MISCONFIGURED
+(nonconforming with no valid image) and DEGRADED (committing data while
+faulting).
+
+Conformance is **current, not latched**: it may only be asserted from
+current evidence, so loss of contact degrades it to unknown. A node
+cannot therefore be simultaneously OFFLINE and nonconforming, which
+makes those two projection values mutually exclusive and removes any
+ordering question between them. History is not lost — it lives in the
+observation substrate as a fault count and last-fault detail.
+
+The lifecycle is chronological rather than a free cross-product:
+OFFLINE → UNINITIALIZED → ONLINE → DEGRADED/MISCONFIGURED → OFFLINE.
+A node that goes nonconforming reaches STALE first, because rejected
+replies stop refreshing freshness; it reaches MISCONFIGURED only when
+re-init invalidation clears freshness (interop 2.3.10). MISCONFIGURED
+is therefore reachable *only because* D17's breaker attempts bounded
+re-init before tripping.
+
+Two predicates answer the two questions consumers actually ask, so no
+call site re-derives them: `isHealthy()` (operator: live, fresh,
+conforming, breaker closed) and `inputsUsable()` (application: may I
+act on this image now). They diverge in both directions.
+
+### D17. Degraded nodes are a service class with a bounded budget
+A Host serves a layout that evolves organically: nodes are added
+mid-construction, unplugged, rewired, and misconfigured, while the rest
+of the layout must keep working. Degraded nodes must therefore have
+bounded, shared, predictable impact on healthy ones.
+
+This introduces the first priority ranking into a deliberately flat
+round-robin: two service classes, healthy and degraded, with different
+guardrails. The scheduler admits degraded work through a rate-limited
+lane governed by **two gates**, both of which must pass:
+- **Rotation slots** — bounds participation share and trace noise.
+  Nonconforming-but-answering nodes bind here: they cost a full turn.
+- **Wall-clock bandwidth** — bounds cycle latency for healthy nodes.
+  Silent nodes bind here, costing a full reply gate per probe.
+
+The asymmetry is measured, not assumed: a silent probe costs the reply
+timeout (order 250 ms) while an answering probe costs turnaround (order
+15-20 ms). A single time budget misses the first failure mode; a single
+slot budget misses the second.
+
+Liveness backoff and the conformance breaker are distinct mechanisms
+that share this allocator rather than holding independent timers. Where
+both apply, the gates AND. `maxPollBackoffMs` is demoted from primary
+knob to ceiling clamp; the operator-meaningful knob is the budget.
+
+The **conformance breaker** trips after a bounded number of corrective
+re-init attempts. It is never a hard stop: a node reflashed with
+correct firmware must recover **without restarting the Host**, and zero
+traffic means no evidence of recovery can arrive. It therefore probes
+at a low rate with a bare P — never a re-init sequence, whose post-I
+settle would stall the round-robin — and re-closes on either a
+conforming reply or a runtime change to the declared geometry, arming
+the re-init ladder on close because a reflashed node has lost its
+session. If a breakered node falls silent, that is the liveness path's
+job, not the breaker's.
+
+Invariant: **the degraded class is never starved to zero**, or recovery
+is never observed. The ceiling clamp guarantees this and may
+deliberately exceed budget — slightly over budget beats never noticed.
+
+Rationale for failing fast rather than polling on: in a static-firmware
+world where Host and Node share an externally supplied configuration
+agreement, there is effectively no such thing as a transient geometry
+mismatch. The population is dominated by permanent errors from a
+miscompiled sketch or a mis-set Host, so the default path must be tuned
+for the field case, not the test case. This is spec-legal: interop
+2.3.10's "poll the silent Node forever" is a liveness obligation and
+says nothing about a Node whose replies are structurally unusable.
+
 ## Transport contract (packet seam)
 
 Scope: transports for the CMRInet polled strategy. Not a product-wide
@@ -342,7 +558,7 @@ namespace CMRInet {
 
 class CMRITransport {
  public:
-  virtual void begin() = 0;                        // may allocate (D5)
+  virtual void begin() = 0;                        // may allocate (D7)
   virtual void tick(uint32_t nowMs) = 0;           // sole CPU entry; never blocks
   virtual bool sendPacket(const CMRIPacket&) = 0;  // accepted != on the wire
   virtual bool sendComplete() const = 0;           // true once fully delivered
@@ -371,7 +587,7 @@ Clause semantics (normative for implementers):
 - Link liveness and error counters surface through `stats()` in
   transport-neutral terms, so the strategy folds them into node
   health without knowing the medium.
-- Allocation only in `begin()` (D5).
+- Allocation only in `begin()` (D7).
 - Lifecycle and ownership: the sketch constructs and configures the
   transport; the engine calls `transport.begin()` exactly once, from
   its own `begin()`. Sketches do not call the transport's `begin()`.
@@ -398,7 +614,7 @@ CMRInet::RemoteNodeHandle& node5 =
         CMRInet::CMRIHost::RemoteNodePolicy{...}); // polled knobs (optional)
 me.onEvent(fn);                                 // timeouts, re-inits, errors
 me.onTrace(fn);                                 // TX/RX packets (monitor)
-me.begin();                                     // lock; no allocation after
+me.begin();                                     // config -> running (D5)
 
 me.tick(nowMs);                                 // runtime, non-blocking
 
@@ -406,9 +622,9 @@ node5.setOutputBit(bit, v);                     // marks dirty -> full-image T
 node5.setOutputs(image, len);
 bool b       = node5.inputBit(bit);             // last good IB
 uint32_t age = node5.inputAgeMs(nowMs);         // staleness (D2)
-CMRInet::RemoteNodeState s = node5.state();     // UNINITIALIZED/ONLINE/STALE/OFFLINE
+CMRInet::RemoteNodeState s = node5.state();     // projection of 3 axes (D16)
 const CMRInet::RemoteNodeStatistics& st = node5.stats();
-node5.setEnabled(false);                        // no removal (D5)
+node5.setEnabled(false);                        // delete is also legal (D5)
 ```
 
 ```cpp
@@ -425,11 +641,29 @@ The families cannot blur: a Host sketch manages *other* nodes through
 the `RemoteNode*` product family; a device sketch IS the machinery
 and touches only `CMRINode` and its own `CMRINode*` types.
 
+Note the strawman above predates the implementation: `addRemoteNode()`
+returns the host for chaining and never hands back a handle. Under D5
+that chaining idiom is retired in favor of per-call status, and handles
+come from `node(addr)` at point of use.
+
 Open items to settle during tracer-bullet implementation:
 1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
    the bench. `forceTransmit()` exists either way.
 2. Per-node input-change callback, or polled-only handle. Start
    polled-only. Add the callback only if diff-scanning hurts.
+3. Counter granularity for conformance faults (D14). Deferred
+   deliberately: events carry layer, attribution, and expected/actual,
+   so the bench analyzer aggregates externally and real failure
+   distributions decide which cuts earn a durable counter. Until then
+   the residue is one total plus last-fault detail.
+4. Warty-Node trait vocabulary (D3 fidelity 3). Traits are
+   individually toggleable rather than a mode enum, because isolating
+   one defect at a time is the point, and because the verb-based C&C
+   regime drives them — so trait identifiers are part of the C&C
+   vocabulary, mapped in one place rather than scattered comparisons.
+   `ignore-init` and `tolerant-geometry` join the traits drawn from the
+   research reviews. The strict Node (fidelity 2) is the default: a
+   forgiving counterparty absorbs Host bugs and defeats the test rig.
 
 ## Test strategy
 
