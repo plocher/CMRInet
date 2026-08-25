@@ -319,17 +319,18 @@ class RemoteNodeHandle {
     if (liveness_ == RemoteNodeLiveness::kSilent) {
       return RemoteNodeState::kOffline;
     }
+    if (conformance_ == RemoteNodeConformance::kNonconforming) {
+      // D16: nonconforming + valid image => DEGRADED.
+      // D16: nonconforming + no valid image => MISCONFIGURED.
+      return (imageState_ == RemoteNodeImageState::kFresh)
+                 ? RemoteNodeState::kDegraded
+                 : RemoteNodeState::kMisconfigured;
+    }
     if (imageState_ == RemoteNodeImageState::kNone) {
-      if (conformance_ == RemoteNodeConformance::kNonconforming) {
-        return RemoteNodeState::kMisconfigured;
-      }
       return RemoteNodeState::kUninitialized;
     }
     if (imageState_ == RemoteNodeImageState::kStale) {
       return RemoteNodeState::kStale;
-    }
-    if (conformance_ == RemoteNodeConformance::kNonconforming) {
-      return RemoteNodeState::kDegraded;
     }
     return RemoteNodeState::kOnline;
   }

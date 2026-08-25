@@ -403,6 +403,48 @@ static void test_wrong_length_reply_counts_error_without_commit(void) {
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, rig.node->state());
 }
 
+static void test_wrong_geometry_after_silent_run_reports_stale(void) {
+  Rig rig;  // node expects 2 input bytes
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  uint32_t base = primeToPoll(rig);
+
+  // Establish a committed image first, so this node has image history.
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  runUntil(rig.host, base, base + 2);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+
+  // Then force the node through a silent miss-run and have it return with
+  // wrong geometry. The mismatch reply must not commit data.
+  rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 6);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+
+  bool reachedGeometryReject = false;
+  uint32_t rejectAt = base + 3;
+  for (uint32_t t = base + 3; t <= base + 45000; ++t) {
+    rig.host.tick(t);
+    if (rig.node->statistics().errors >= 1) {
+      reachedGeometryReject = true;
+      rejectAt = t;
+      break;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(
+      reachedGeometryReject,
+      "did not reach geometry mismatch after silent miss-run");
+
+  // Pin the projection behavior: after image history exists, silent +
+  // invalidation + wrong-geometry return keeps the image axis verdict and
+  // projects STALE (not UNINITIALIZED).
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kStale, rig.node->state());
+  TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(rejectAt));
+}
+
 // ------------------------------------------- miss, recovery, re-init, health
 
 static void test_recovery_after_miss(void) {
@@ -1071,6 +1113,7 @@ int main(void) {
   RUN_TEST(test_wrong_ua_reply_is_rejected);
   RUN_TEST(test_wrong_mt_reply_is_rejected);
   RUN_TEST(test_wrong_length_reply_counts_error_without_commit);
+  RUN_TEST(test_wrong_geometry_after_silent_run_reports_stale);
   RUN_TEST(test_recovery_after_miss);
   RUN_TEST(test_offline_after_miss_threshold_then_recovers);
   RUN_TEST(test_reinit_ladder_fires_after_miss_threshold);
