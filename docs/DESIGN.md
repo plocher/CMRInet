@@ -1,7 +1,7 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.3 (bump when any decision or contract in this document
+Version: 1.4 (bump when any decision or contract in this document
 changes). A `// VALIDATION:` tag cites the version in which *that
 clause* last changed, not the current document version. Tags are
 therefore re-stamped per clause, as the clause changes and the
@@ -9,6 +9,19 @@ implementing code follows — never wholesale, because a tag naming a
 version the code does not yet satisfy asserts something false. See
 `docs/agents/validation-comments.md`.
 Change log:
+- v1.4 (2026-08-25): conformance becomes reachable (issue #85). D14
+  draws the attribution boundary: only image-rung faults move a Node's
+  stored conformance verdict, because the packet rung cannot always
+  tell whose behaviour it observed — on 2-wire media the Host's own
+  echoed poll is indistinguishable from a Node answering with the wrong
+  type. D15 states that belief holds the current verdict and history
+  belongs to observation. D16's chronology is corrected: the image axis
+  is a validity claim, the projection reads it three ways under a
+  nonconforming verdict, a never-conformed node reaches MISCONFIGURED
+  without passing through STALE, and MISCONFIGURED no longer depends on
+  D17's breaker. Behaviour changes, so D14/D15/D16 tags on the
+  implementing paths move to v1.4; unchanged clauses keep their
+  existing version.
 - v1.3 (2026-08-25): D14 refinement (issue #80). Detection and
   attribution are separated: layer says where a fault was observed,
   attribution is a verdict about what it means, and the two do not
@@ -474,6 +487,27 @@ Admission test for a new fault: it may be classified statically if and
 only if its name already encodes the assumption comparison. "Geometry
 mismatch" and "unexpected type" do. "Truncated" does not.
 
+**Naming a fault is not attributing it to a Node** (v1.4). Only
+image-rung faults move a Node's stored conformance verdict. Packet-rung
+observations are named, classified, and reported on the event stream,
+and they leave the axis alone.
+
+The reason is that the packet rung cannot always tell whose behaviour
+it observed. A reply carrying an unexpected address is, definitionally,
+some other device's address. And on 2-wire media the Host sees its own
+frames: its own P comes back carrying the polled Node's UA with MT 'P',
+which at this rung is indistinguishable from that Node answering with
+the wrong type. Wiring either to the axis would park every Node on
+every 2-wire Host in the DEGRADED service class permanently — the
+default topology for much of the fielded population, not a corner case.
+
+The image rung carries no such ambiguity. A reply that claims our UA
+and then contradicts the geometry we declared is evidence about the
+device we addressed, whoever else is on the wire. So the stored verdict
+follows detection that is *also* attribution, and the event stream
+carries everything else. This is the same line the per-node error
+counter already drew, now stated rather than merely practised.
+
 **A framing fact is not yet a conformance fault.** A malformed frame is
 a faithful observation — the frame really was malformed — but it carries
 no causation, and at the framing rung a Node that stopped mid-frame is
@@ -543,6 +577,15 @@ so it gets a new counter starting at zero. Nothing was reset mid-life.
 This is the invariant applied correctly, not an exception to it — the
 only recorded exception remains `RemoteNodeConfig.enabled` above.
 
+Second clarification (v1.4), because the same boundary was crossed in
+the other direction: **belief holds the current verdict, never
+history.** "Is this image valid" is belief. "Has this Node ever worked"
+is `RemoteNodeStatistics::exchanges`, which is observation. A flag
+recording that a Node once received data is history, and keeping one in
+the belief substrate is precisely what made D16's chronology below
+unimplementable until v1.4 — the flag latched, so invalidation could
+never produce a "no valid image" verdict.
+
 ### D16. Node health is three axes plus a projection
 Supersedes D2's claim that `RemoteNodeState` is a stored four-value
 enum. It was already an undocumented projection: UNINITIALIZED and
@@ -552,7 +595,9 @@ validity reading entirely.
 
 Stored axes, one per substrate (D15):
 - `RemoteNodeLiveness` — responsive / missing / silent (control).
-- `RemoteNodeImageState` — none / fresh / stale (belief).
+- `RemoteNodeImageState` — none / fresh / stale (belief). A validity
+  claim about the cached image, not a record that one once arrived:
+  none covers "never acquired" and "invalidated" alike (v1.4).
 - `RemoteNodeConformance` — unknown / conforming / nonconforming
   (content evaluation).
 
@@ -570,11 +615,40 @@ observation substrate as a fault count and last-fault detail.
 
 The lifecycle is chronological rather than a free cross-product:
 OFFLINE → UNINITIALIZED → ONLINE → DEGRADED/MISCONFIGURED → OFFLINE.
-A node that goes nonconforming reaches STALE first, because rejected
-replies stop refreshing freshness; it reaches MISCONFIGURED only when
-re-init invalidation clears freshness (interop 2.3.10). MISCONFIGURED
-is therefore reachable *only because* D17's breaker attempts bounded
-re-init before tripping.
+A node that goes nonconforming while still holding a valid image
+reaches STALE first, because rejected replies stop refreshing
+freshness; it reaches MISCONFIGURED when invalidation clears the image
+(interop 2.3.10).
+
+The projection therefore reads the image axis **three** ways under a
+nonconforming verdict (v1.4): fresh gives DEGRADED, stale gives STALE,
+none gives MISCONFIGURED. Folding the middle case in with the last —
+which earlier code did, undetected, because conformance was inert and
+the branch never executed — makes STALE-while-nonconforming unreachable
+and inverts the order this paragraph states.
+
+A node that **never** conformed takes a shorter path: UNINITIALIZED to
+MISCONFIGURED directly, with no freshness to clear (v1.4). That case is
+what motivated the whole decision. The #80 bench node declared NI=4
+against physically 3-byte hardware, committed no data at all, and
+reported UNINITIALIZED — "hasn't started yet" — which is a large part
+of why it hid. Both paths reach MISCONFIGURED; only one passes through
+STALE.
+
+MISCONFIGURED does **not** depend on D17's breaker (v1.4, correcting
+earlier text that made it a precondition). The ordinary re-init ladder
+of interop 2.3.10 invalidates the image on its own, and the
+never-conformed path needs no invalidation at all. The breaker remains
+D17's business; reachability of this state is not.
+
+One consequence for testing, recorded because it retires a criterion
+(v1.4): silent liveness now implies an invalidated image, so "silent
+with a surviving image verdict" is unreachable and can no longer serve
+as the axis-independence proof. Independence is shown instead at
+*missing* liveness with a fresh image, where the projection reads
+ONLINE while liveness reads missing — a pairing no liveness-derived
+implementation can produce, and one that needs no re-init ladder to set
+up.
 
 Two predicates answer the two questions consumers actually ask, so no
 call site re-derives them: `isHealthy()` (operator: live, fresh,

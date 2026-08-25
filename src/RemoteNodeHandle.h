@@ -138,7 +138,10 @@ inline const char* remoteNodeLivenessString(RemoteNodeLiveness liveness) {
 }
 
 /// Stored input-image axis (belief substrate).
-// VALIDATION: Design v1.3 D16: input validity is an independent stored axis.
+// VALIDATION: Design v1.2 D16: input validity is an independent stored axis.
+// VALIDATION: Design v1.4 D16: it is a validity claim, not a record that
+// an image once arrived; kNone covers "never acquired" and
+// "invalidated" alike.
 enum class RemoteNodeImageState : uint8_t {
   kNone,   ///< no valid image: never acquired, or invalidated
   kFresh,  ///< image is valid and inside staleness threshold
@@ -487,7 +490,7 @@ class RemoteNodeHandle {
   /// where D15 puts history. Belief holds only the current verdict. The
   /// field this replaced stored history in belief, which is what made
   /// D16's chronology unimplementable.
-  // VALIDATION: Design v1.3 D15: belief holds the current verdict;
+  // VALIDATION: Design v1.4 D15: belief holds the current verdict;
   // history lives in observation.
   bool hasValidImage_() const { return freshness_.marked(); }
 
@@ -513,8 +516,9 @@ class RemoteNodeHandle {
       // STALE-while-nonconforming unreachable and inverted D16's stated
       // order. It survived only because conformance was inert, so this
       // branch had never executed.
-      // VALIDATION: Design v1.3 D16: a nonconforming node reaches STALE
-      // first and MISCONFIGURED only once invalidation clears the image.
+      // VALIDATION: Design v1.4 D16: the projection reads the image axis
+      // three ways under a nonconforming verdict -- fresh gives
+      // DEGRADED, stale gives STALE, none gives MISCONFIGURED.
       switch (imageState_) {
         case RemoteNodeImageState::kFresh:
           return RemoteNodeState::kDegraded;

@@ -5,6 +5,70 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Observed node geometry and conformance evaluation (issue #85, Design
+  v1.4 D14/D15/D16, breaking for two projected states): the Host now
+  captures the geometry a Node actually demonstrates and stores a
+  verdict about it, so the conformance axis stops being inert.
+  `RemoteNodeHandle` gains `observedInputBytes()` and
+  `lastConformanceFault()`; `CMRIHostEvent` carries the classified
+  `ConformanceFault` and the expected length.
+  - **This is the behaviour fix for #80.** A node declared `NI=4`
+    against physically 3-byte hardware committed no data at all and
+    reported `UNINITIALIZED` — "hasn't started yet" — while consuming
+    63% of all poll slots. It now reports `MISCONFIGURED`, with expected
+    and observed byte counts on both the handle and the event.
+  - **The image axis became a validity claim, not a history claim.**
+    The flag behind it recorded that a node had *once* received data,
+    which is history living in the belief substrate where D15 puts only
+    the current verdict. It latched, so re-init invalidation could never
+    produce a "no valid image" verdict and D16's chronology was
+    unimplementable. Deleted in favour of deriving validity from
+    freshness; "has this node ever worked" is `statistics().exchanges`.
+    Last-good bytes still survive invalidation — that hazard is about
+    zeroing the buffer, not about the verdict.
+  - **The projection reads the image axis three ways** under a
+    nonconforming verdict: fresh gives `DEGRADED`, stale gives `STALE`,
+    none gives `MISCONFIGURED`. Folding the middle case in with the last
+    made `STALE`-while-nonconforming unreachable and inverted D16's
+    stated order; it survived undetected because conformance was inert,
+    so the branch had never executed.
+  - **Only image-rung faults move the verdict.** A reply carrying
+    another device's UA is definitionally not this node's, and on 2-wire
+    media the Host's own poll echoes back with the polled UA and MT `P`
+    — wiring that branch to the axis would park every node on every
+    2-wire Host in `DEGRADED` permanently. Packet-rung faults are still
+    named, classified, and reported on the event; they just do not
+    change the stored verdict. This is the line the per-node `errors`
+    counter already drew.
+  - **No `conformanceFaults` counter.** It would duplicate per-node
+    `errors` exactly, and the packet-rung total is already derivable at
+    the scope that owns it: host `repliesRejected` minus the sum of
+    per-node `errors`.
+  - Five existing tests change verdict deliberately, including one
+    pinned on #89 that recorded what the projection did *before* the
+    deciding input existed. #84's recorded axis-independence criterion
+    (silent liveness with a surviving image verdict) becomes
+    unsatisfiable and is replaced by missing liveness with a fresh
+    image, where the projection reads `ONLINE` while liveness reads
+    missing — better evidence, and it needs no re-init ladder to set up.
+    Amendment recorded on #84.
+- Tracer node lines carry the health axes (issue #85): `liveness`,
+  `imageState`, `conformance`, `observedIn`, and a `fault` block with
+  the fault name, its derived layer and attribution, and expected vs
+  observed. The line previously carried only the scalar projection,
+  which is lossy by construction — it answers "what is the single worst
+  thing about this node" — so a reader could not tell a geometry
+  disagreement from any other fault. `observedIn` renders as JSON `null`
+  before anything is demonstrated, because 0 is a legal geometry.
+- One shared state rendering (issues #85, #93):
+  `CMRInet::remoteNodeStateString()` and `remoteNodeStateTag()` live
+  beside `RemoteNodeState`, with the OLED tag's three-character width
+  stated as a contract. Both sketches and `TracerShell` kept their own
+  copies of that switch; when `kMisconfigured` and `kDegraded` were
+  added, two of the three silently began rendering `"??"` on the same
+  commit, because `arduino-cli` passes no warning flags to a sketch. The
+  shared helpers are compiled by every desktop test TU under `-Werror`,
+  so the next enumerator breaks the build rather than the display.
 - Runtime node table mutation (issue #86, Design v1.2 D5, breaking):
   the node table is now mutable at runtime within its compile-time
   capacity. `begin()` no longer locks membership — it marks the
@@ -134,6 +198,11 @@ High-level changes, newest first.
   `kMisconfigured`/`kDegraded` are not reachable in this ticket.
   Issue #85 owns conformance population, reachability proofs for those
   projection states, and non-degenerate predicate divergence proofs.
+  *Superseded by #85 above:* once conformance participates, that pinned
+  path reports `kMisconfigured` rather than `kStale` — invalidation has
+  already cleared the image, and reporting "your data is old" would
+  conceal a geometry disagreement. The staging described here was
+  correct for what #84 could observe; it is no longer current behaviour.
 - Host configuration error model (issue #80, Design v1.2 D5, breaking):
   `addRemoteNode(...)` now returns its **own** `ConfigStatus` instead of
   `CMRIHost&`, and `begin()` returns `void` instead of a deferred status.

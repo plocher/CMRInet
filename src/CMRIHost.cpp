@@ -327,7 +327,7 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     // per-node `errors` counter already draws the same line. The event
     // still carries the classified fault, so nothing is hidden -- it is
     // reported without being attributed.
-    // VALIDATION: Design v1.3 D14: only image-rung faults are evidence
+    // VALIDATION: Design v1.4 D14: only image-rung faults are evidence
     // about a Node's conformance; packet-rung observations are named
     // and reported without moving the stored verdict.
     if (rx.ua != node.ua_) {
@@ -740,10 +740,10 @@ void CMRIHost::updateNodeStates_(uint32_t nowMs) {
     // the cached image is equally unusable. "Has this node ever worked"
     // is statistics_.exchanges, which is observation, where D15 puts
     // history.
-    // VALIDATION: Design v1.3 D15: belief carries the current verdict
+    // VALIDATION: Design v1.4 D15: belief carries the current verdict
     // only; history belongs to observation.
-    // VALIDATION: Design v1.3 D16: image validity is an independent
-    // stored axis, computed from belief rather than from liveness.
+    // VALIDATION: Design v1.4 D16: the image axis is a validity claim,
+    // so "never acquired" and "invalidated" both report kNone.
     if (!node.hasValidImage_()) {
       node.imageState_ = RemoteNodeImageState::kNone;
     } else if (node.config_.stalenessMs != 0 &&
