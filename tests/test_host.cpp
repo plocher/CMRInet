@@ -448,6 +448,7 @@ static void test_offline_after_miss_threshold_then_recovers(void) {
   TEST_ASSERT_TRUE_MESSAGE(reachedSixMisses, "did not reach six misses in expected window");
   TEST_ASSERT_EQUAL_UINT32(6, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL(RemoteNodeLiveness::kSilent, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, rig.node->imageState());
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
   // VALIDATION: Interop v1.1 2.3.10: keep polling a silent Node forever.
   bool recovered = false;
@@ -521,8 +522,12 @@ static void test_invalidation_keeps_last_good_bytes(void) {
   TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(sixMissesAt));
   TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));  // NOT zeroed
   TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->inputByte(1));
-  // Misses exceed the threshold, so health is OFFLINE (misses outrank the
-  // cleared freshness in the state computation).
+  // Discriminating D16 assertion: liveness says SILENT, and image state
+  // keeps its own validity verdict (STALE) instead of collapsing to NONE.
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kSilent, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, rig.node->imageState());
+  // Projection still maps this to OFFLINE because liveness dominates the
+  // scalar state.
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
 }
 

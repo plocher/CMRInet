@@ -241,6 +241,9 @@ class RemoteNodeHandle {
   /// Operator predicate: true only when health is fully green.
   // VALIDATION: Design v1.3 D16: operator and application predicates are
   // separate; this predicate is stricter than input usability.
+  // Conformance staging note: in issue #84, conformance remains
+  // kUnknown, so this predicate cannot become true yet. Issue #85 owns
+  // the conformance-population path and the first true proof.
   bool isHealthy() const {
     return liveness_ == RemoteNodeLiveness::kResponsive &&
            imageState_ == RemoteNodeImageState::kFresh &&
@@ -288,6 +291,7 @@ class RemoteNodeHandle {
   RemoteNodeConformance conformance_ = RemoteNodeConformance::kUnknown;
   bool conformanceBreakerOpen_ = false;
   uint32_t consecutiveMisses_ = 0;
+  bool hasInputImage_ = false;    ///< true after first accepted reply
   Age freshness_;
   uint8_t inputs_[kMaxInputBytes] = {0};
   bool needsInit_ = true;       ///< engine owes this node an I (JMRI mustInit)
@@ -308,6 +312,9 @@ class RemoteNodeHandle {
   Deadline pollBackoff_;
   uint32_t pollBackoffMs_ = 0;   ///< current backoff duration (0 = none yet)
 
+  // VALIDATION: Design v1.3 D16: RemoteNodeState is a derived
+  // projection over stored axes. This path maps the D16 extensions
+  // MISCONFIGURED and DEGRADED.
   RemoteNodeState deriveState_() const {
     if (liveness_ == RemoteNodeLiveness::kSilent) {
       return RemoteNodeState::kOffline;
