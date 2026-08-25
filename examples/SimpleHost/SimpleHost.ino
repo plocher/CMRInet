@@ -148,16 +148,14 @@ extern CMRInet::CMRIHost host;
 // feeds it the current counters and renders the strings to the OLED.
 CMRInet::examples::HostStatusPanel panel;
 
-/// Two-letter state tag for the OLED line.
-const char* stateTag(CMRInet::RemoteNodeState s) {
-  switch (s) {
-    case CMRInet::RemoteNodeState::kOnline:        return "ON ";
-    case CMRInet::RemoteNodeState::kStale:         return "OLD";
-    case CMRInet::RemoteNodeState::kOffline:       return "OFF";
-    case CMRInet::RemoteNodeState::kUninitialized: return "---";
-  }
-  return "??";
-}
+// The OLED state tag comes from CMRInet::remoteNodeStateTag(), beside
+// the enum in RemoteNodeHandle.h. This sketch used to keep its own
+// switch, as did XiaoHostTracer and TracerShell -- and when
+// kMisconfigured and kDegraded were added, two of the three silently
+// began rendering "??", because arduino-cli passes no warning flags to
+// a sketch and nothing failed. The shared helper is compiled by every
+// desktop test TU under -Werror, so a future enumerator breaks the
+// build instead of the display (#85, #93).
 
 /// Draw the host status panel. Layout (textSize 1 unless noted):
 ///   HOST           <cadence>      (alternates c/s ↔ ms/cycle every 5 s)
@@ -198,7 +196,8 @@ void drawHostStatus() {
   // right-justified so the columns align.
   for (size_t i = 0; i < kNodeCount; ++i) {
     CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].address);
-    const char* tag = (n != nullptr) ? stateTag(n->state()) : "---";
+    const char* tag =
+        (n != nullptr) ? CMRInet::remoteNodeStateTag(n->state()) : "---";
     const uint32_t latMs = (n != nullptr)
         ? n->statistics().lastTurnaroundMs : 0;
     char row[24];

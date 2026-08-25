@@ -127,13 +127,33 @@ enum class RemoteNodeLiveness : uint8_t {
   kSilent,      ///< misses exceeded the silent threshold
 };
 
+/// Telemetry spelling of the liveness axis.
+inline const char* remoteNodeLivenessString(RemoteNodeLiveness liveness) {
+  switch (liveness) {
+    case RemoteNodeLiveness::kResponsive: return "RESPONSIVE";
+    case RemoteNodeLiveness::kMissing:    return "MISSING";
+    case RemoteNodeLiveness::kSilent:     return "SILENT";
+  }
+  return "UNKNOWN";
+}
+
 /// Stored input-image axis (belief substrate).
 // VALIDATION: Design v1.3 D16: input validity is an independent stored axis.
 enum class RemoteNodeImageState : uint8_t {
-  kNone,   ///< no marked image exists
-  kFresh,  ///< image is present and inside staleness threshold
-  kStale,  ///< image is present but older than staleness threshold
+  kNone,   ///< no valid image: never acquired, or invalidated
+  kFresh,  ///< image is valid and inside staleness threshold
+  kStale,  ///< image is valid but older than staleness threshold
 };
+
+/// Telemetry spelling of the image-validity axis.
+inline const char* remoteNodeImageStateString(RemoteNodeImageState image) {
+  switch (image) {
+    case RemoteNodeImageState::kNone:  return "NONE";
+    case RemoteNodeImageState::kFresh: return "FRESH";
+    case RemoteNodeImageState::kStale: return "STALE";
+  }
+  return "UNKNOWN";
+}
 
 /// Stored conformance axis (content-evaluation substrate).
 // VALIDATION: Design v1.3 D16: conformance is current evidence, not latched.
@@ -142,6 +162,16 @@ enum class RemoteNodeConformance : uint8_t {
   kConforming,
   kNonconforming,
 };
+
+/// Telemetry spelling of the conformance axis.
+inline const char* remoteNodeConformanceString(RemoteNodeConformance c) {
+  switch (c) {
+    case RemoteNodeConformance::kUnknown:        return "UNKNOWN";
+    case RemoteNodeConformance::kConforming:     return "CONFORMING";
+    case RemoteNodeConformance::kNonconforming:  return "NONCONFORMING";
+  }
+  return "UNKNOWN";
+}
 
 /// Per-node configuration, independent of exchange discipline.
 struct RemoteNodeConfig {

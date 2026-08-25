@@ -91,8 +91,15 @@ struct TracerRig {
   TracerShell shell;
   std::vector<std::string> lines;
 
-  explicit TracerRig(uint16_t inBytes = 2, uint16_t outBytes = 3)
-      : transport(port), host(transport, fastConfig()) {
+  /// `replyTimeoutMs` defaults to 1 tick, which suits tests that want a
+  /// poll to time out immediately. A test that needs to land a reply
+  /// inside the gate should widen it rather than try to hit a one-tick
+  /// window -- the schedule's step count is an implementation detail,
+  /// and timing a reply against it is how a test goes green for the
+  /// wrong reason.
+  explicit TracerRig(uint16_t inBytes = 2, uint16_t outBytes = 3,
+                     uint32_t replyTimeoutMs = 1)
+      : transport(port), host(transport, fastConfig(replyTimeoutMs)) {
     host.addRemoteNode(5, inBytes, outBytes);
     TEST_ASSERT_NOT_NULL_MESSAGE(host.node(5), "addRemoteNode failed in rig");
     shell.bind(host, transport, "test", "0.0", &TracerRig::writeLine_, this);
@@ -123,12 +130,12 @@ struct TracerRig {
   }
 
  private:
-  static CMRIHostConfig fastConfig() {
+  static CMRIHostConfig fastConfig(uint32_t replyTimeoutMs) {
     CMRIHostConfig c;
     c.postInitSettleMs = 0;  // I -> T with no settle delay
     c.postTxGapMs = 0;       // T -> idle with no gap
     c.pollPacingMs = 0;      // back-to-back exchanges
-    c.replyTimeoutMs = 1;    // a poll times out one tick after send
+    c.replyTimeoutMs = replyTimeoutMs;
     return c;
   }
   static void writeLine_(void* ctx, const char* line) {
@@ -548,6 +555,98 @@ static void test_epoch_line_includes_image_and_version(void) {
                            "epoch should include version");
 }
 
+// ------------------------------------------- conformance surface (#85)
+
+// Before any reply the node line reports all three stored axes, no
+// observed geometry, and no fault. The scalar `state` alone cannot say
+// this much, which is why the axes are on the line at all.
+static void test_node_status_line_carries_the_health_axes(void) {
+  TracerRig rig;
+  rig.verb("status 5");
+  const std::string& line = rig.lines.back();
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"state\":\"UNINITIALIZED\""),
+                           "status line lost the projected state");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"liveness\":\"RESPONSIVE\""),
+                           "status line missing the liveness axis");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"imageState\":\"NONE\""),
+                           "status line missing the image axis");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"conformance\":\"UNKNOWN\""),
+                           "status line missing the conformance axis");
+  // Nothing has been demonstrated yet. This must render as null: 0 is a
+  // legal geometry, so any number here would be read as a byte count.
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"observedIn\":null"),
+                           "unobserved geometry did not render as null");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"fault\":{\"name\":\"none\""),
+                           "status line missing the last-fault block");
+}
+
+// The #80 shape as an operator would meet it: ask the tracer about a
+// node whose declared geometry the hardware disagrees with, and get
+// back the disagreement named, classified, and quantified. Every one of
+// these fields was absent before #85 -- the line carried only the
+// projected state, which said UNINITIALIZED.
+static void test_node_status_line_reports_the_geometry_disagreement(void) {
+  // A wide reply gate: this test is about what the status line says,
+  // not about hitting a one-tick window.
+  TracerRig rig(2, 3, /*replyTimeoutMs=*/50);  // declares 2 input bytes
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  const CMRIPacket reply = [&] {
+    CMRIPacket p;
+    p.ua = 5 + kUaOffset;
+    p.mt = 'R';
+    p.setBody(threeBytes, sizeof(threeBytes));
+    return p;
+  }();
+  uint8_t wire[16];
+  const size_t n = encodeFrame(reply, wire, sizeof(wire));
+  TEST_ASSERT_GREATER_THAN_size_t(0, n);
+
+  // Wait for the poll to actually reach the wire, then answer it. Which
+  // tick that happens on is the schedule's business, not this test's.
+  uint32_t t = 0;
+  bool polled = false;
+  for (; t <= 50 && !polled; ++t) {
+    rig.tick(t);
+    polled = (findContaining(rig.lines, "\"mt\":\"P\"") != nullptr);
+  }
+  TEST_ASSERT_TRUE_MESSAGE(polled, "node 5 was never polled");
+  rig.tick(t);  // the send completes and the reply gate opens
+  rig.port.queueRx(wire, n);
+
+  bool faulted = false;
+  for (uint32_t u = t + 1; u <= t + 40 && !faulted; ++u) {
+    rig.tick(u);
+    faulted = rig.node()->statistics().errors >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(
+      faulted, "the wrong-geometry reply was never matched to the poll");
+
+  rig.verb("status 5");
+  const std::string& line = rig.lines.back();
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"conformance\":\"NONCONFORMING\""),
+                           "status line did not report the verdict");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"state\":\"MISCONFIGURED\""),
+                           "status line did not project MISCONFIGURED");
+  // Claim against evidence, side by side: `in` is what the Host
+  // declared, `observedIn` is what the Node demonstrated (D14).
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"in\":2"),
+                           "status line lost the declared geometry");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"observedIn\":3"),
+                           "status line did not report the observed geometry");
+  // The fault block carries the classification, so an analyzer can tell
+  // "go fix the configuration" from "go fix the firmware" without
+  // reimplementing the taxonomy.
+  TEST_ASSERT_TRUE_MESSAGE(
+      contains(line, "\"name\":\"image geometry mismatch\""),
+      "fault block did not name the fault");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"layer\":\"image\""),
+                           "fault block did not report the layer");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"attribution\":\"disagreement\""),
+                           "fault block did not report the attribution");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"expected\":2,\"observed\":3"),
+                           "fault block did not carry expected vs observed");
+}
+
 // ----------------------------------------------- unknown verb (pin behavior)
 
 static void test_unknown_verb_emits_error(void) {
@@ -587,6 +686,8 @@ int main(void) {
   RUN_TEST(test_host_status_surfaces_an_orphaned_exchange);
   RUN_TEST(test_status_line_includes_image_and_version);
   RUN_TEST(test_epoch_line_includes_image_and_version);
+  RUN_TEST(test_node_status_line_carries_the_health_axes);
+  RUN_TEST(test_node_status_line_reports_the_geometry_disagreement);
   RUN_TEST(test_unknown_verb_emits_error);
   return UNITY_END();
 }
