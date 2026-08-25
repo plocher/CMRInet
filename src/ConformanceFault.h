@@ -5,8 +5,11 @@
 // attribution) pair, and call sites ask `layerOf(f)` rather than
 // chaining field tests of their own.
 //
-// VALIDATION: Design v1.2 D14: faults are classified on two axes —
-// layer and attribution — not one flag.
+// VALIDATION: Design v1.3 D14: faults are classified on two axes —
+// layer and attribution — not one flag. Attribution is derived from the
+// (Host assumption, Node assumption, observation) tuple: assumptions
+// differ means disagreement, assumptions agree and the observation
+// contradicts them means defect.
 //
 // Role-neutral by construction. The Host records faults it observes in
 // a remote Node; a Node records faults it observes in its Host (the
@@ -41,9 +44,13 @@ namespace CMRInet {
 ///
 /// Tagging the layer is what keeps a carrier swap from silently
 /// producing a vocabulary that is half meaningless.
-// VALIDATION: Design v1.2 D14: layer is indexed by the units ladder;
+///
+/// Layer is where a fault was *detected*. That is not the same question
+/// as who it is attributable to, and the two only collapse when the
+/// fault's name already settles the attribution.
+// VALIDATION: Design v1.3 D14: layer is indexed by the units ladder;
 // the image rung is strategy-invariant, the bottom rung is
-// carrier-specific.
+// carrier-specific. Detection and attribution are separate layers.
 enum class ConformanceLayer : uint8_t {
   kNone,     ///< only for ConformanceFault::kNone
   kImage,    ///< geometry, NI/NO — survives every strategy
@@ -57,9 +64,17 @@ enum class ConformanceLayer : uint8_t {
 /// needs a firmware change, a disagreement needs a configuration
 /// change. Filing one as the other sends the operator to the wrong
 /// place.
-// VALIDATION: Design v1.2 D14: a defect is the counterparty violating
+///
+/// Deliberately two-valued. There is no "environment" or
+/// "indeterminate" attribution: the first would import a link-integrity
+/// verdict into the conformance domain, and the second would conflate
+/// *who is at fault* with *how well we know* — both read as "not my
+/// problem". A finding that is neither a disagreement nor a defect is
+/// not a conformance finding at all, and belongs to link health
+/// (LinkStatistics, CMRIFrameDecoder::Statistics).
+// VALIDATION: Design v1.3 D14: a defect is the counterparty violating
 // the spec; a disagreement is two correctly-behaving endpoints
-// configured inconsistently.
+// configured inconsistently. Attribution stays two-valued.
 enum class FaultAttribution : uint8_t {
   kNone,          ///< only for ConformanceFault::kNone
   kDisagreement,  ///< both endpoints behaving correctly, configured apart
@@ -71,14 +86,26 @@ enum class FaultAttribution : uint8_t {
 /// Enumerator names lead with their layer so a reader can classify one
 /// by eye, and so the classifiers below stay obviously exhaustive.
 ///
-/// Only faults with an identified producer are named. The framing rung
-/// is deliberately empty for now: CMRIFrameDecoder already counts
-/// truncations, dangling escapes, and overflows, but those resist the
-/// two-value attribution above — a truncated frame may be a node that
-/// stopped mid-frame (defect), a mis-tuned abort limit on this side
-/// (disagreement), or line noise (neither). That question is open;
-/// until it is settled, framing health stays where it already lives, in
-/// LinkStatistics and CMRIFrameDecoder::Statistics.
+/// Admission test: a fault may live here, and be classified statically,
+/// only if its name already encodes the assumption comparison.
+/// "Geometry mismatch" does — it *means* the assumptions differed.
+/// "Unexpected type" does — it *means* they agreed and the content
+/// violated them. "Truncated" does not.
+///
+/// That is why the framing rung is empty. A malformed frame is a
+/// faithful observation, but at the framing rung a Node that stopped
+/// mid-frame is indistinguishable from a frame the wire corrupted, so
+/// the fact carries no causation. Separating the two needs history, and
+/// history lives one layer up: framing answers yes/no, analysis calls
+/// the shot. Until that analysis layer exists, framing facts stay where
+/// they already are, in LinkStatistics and
+/// CMRIFrameDecoder::Statistics.
+///
+/// When analysis does promote a framing fact to a name here, it will
+/// have already excluded the abort-limit disagreement (D13) and the
+/// link-integrity reading, so what remains is a defect by construction
+/// — which is exactly what makes the promoted name pass the admission
+/// test above.
 enum class ConformanceFault : uint8_t {
   kNone,  ///< no fault; the "nothing observed yet" value
 
