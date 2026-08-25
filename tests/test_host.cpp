@@ -833,12 +833,74 @@ static void test_axes_and_predicates_diverge_at_missing_with_fresh_image(void) {
                     rig.node->conformance());
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
 
-  // Divergence, and non-degenerate: conformance is genuinely set, so
-  // the predicates disagree because they answer different questions,
-  // not because one input is missing. The application may act on this
-  // image; the operator should still be told the node is missing polls.
+  // Divergence, and non-degenerate: conformance is genuinely set to
+  // kConforming, so the predicates disagree because they answer
+  // different questions, not because an input is missing. The
+  // application may act on this image; the operator should still be
+  // told the node is missing polls.
+  //
+  // The divergence comes from *liveness*, and it has to. #85 originally
+  // asked for it to arise from a conformance fault, which cannot
+  // happen: a real fault sets kNonconforming, which fails both
+  // predicates together, and the only conformance value that separates
+  // them is kUnknown -- the unset case that criterion excluded. That is
+  // correct behaviour rather than a gap: once geometry disagrees, the
+  // committed bytes are of doubtful meaning and the application should
+  // not act on them either. The conformance *domain* will separate the
+  // predicates once D17's breaker has a writer, since isHealthy() reads
+  // the breaker and inputsUsable() does not.
   TEST_ASSERT_TRUE(rig.node->inputsUsable());
   TEST_ASSERT_FALSE(rig.node->isHealthy());
+}
+
+static void test_health_implies_usability_but_not_the_reverse(void) {
+  // Divergence is one-directional. isHealthy() strictly implies
+  // inputsUsable(): healthy requires fresh, responsive implies not
+  // silent, and conforming implies not nonconforming. The operator
+  // predicate is meant to be strictly stricter than the application
+  // one -- but D16 claimed they diverge in *both* directions, which the
+  // predicates cannot do. Corrected in v1.4 and pinned here.
+  //
+  // Checked at every state the schedule passes through rather than at a
+  // few hand-picked points, then shown non-vacuous by requiring that
+  // all three reachable combinations were actually visited.
+  // VALIDATION: Design v1.4 D16: isHealthy() implies inputsUsable(), so
+  // only usable-and-unhealthy occurs.
+  Rig rig;
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  uint32_t base = primeToPoll(rig);
+  // good -> wrong geometry -> good, then silence. That walks
+  // uninitialized, healthy, degraded, healthy, and missing-with-a-fresh
+  // image without needing to know which tick each lands on.
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+
+  bool sawHealthy = false;
+  bool sawUsableNotHealthy = false;
+  bool sawNeither = false;
+  for (uint32_t t = base; t <= base + 3000; ++t) {
+    rig.host.tick(t);
+    const bool healthy = rig.node->isHealthy();
+    const bool usable = rig.node->inputsUsable();
+    TEST_ASSERT_TRUE_MESSAGE(
+        !healthy || usable,
+        "isHealthy() was true while inputsUsable() was false");
+    if (healthy) sawHealthy = true;
+    if (usable && !healthy) sawUsableNotHealthy = true;
+    if (!usable && !healthy) sawNeither = true;
+  }
+  // Without these the implication above could pass vacuously.
+  TEST_ASSERT_TRUE_MESSAGE(sawHealthy, "never reached a healthy state");
+  TEST_ASSERT_TRUE_MESSAGE(sawUsableNotHealthy,
+                           "never reached usable-but-not-healthy");
+  TEST_ASSERT_TRUE_MESSAGE(sawNeither, "never reached neither");
 }
 
 // ------------------------------------------- miss, recovery, re-init, health
@@ -1957,6 +2019,7 @@ int main(void) {
   RUN_TEST(test_wrong_geometry_after_invalidation_reports_misconfigured);
   RUN_TEST(test_self_echoed_poll_does_not_make_the_node_nonconforming);
   RUN_TEST(test_axes_and_predicates_diverge_at_missing_with_fresh_image);
+  RUN_TEST(test_health_implies_usability_but_not_the_reverse);
   RUN_TEST(test_recovery_after_miss);
   RUN_TEST(test_offline_after_miss_threshold_then_recovers);
   RUN_TEST(test_reinit_ladder_fires_after_miss_threshold);
