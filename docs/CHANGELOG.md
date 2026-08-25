@@ -4,6 +4,51 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- Runtime node table mutation (issue #86, Design v1.2 D5, breaking):
+  the node table is now mutable at runtime within its compile-time
+  capacity. `begin()` no longer locks membership — it marks the
+  configuration-to-running transition and nothing more. New
+  `deleteRemoteNode(address)` and
+  `setRemoteNodeGeometry(address, inputBytes, outputBytes)`;
+  `addRemoteNode(...)` is now legal after `begin()`. A layout can grow,
+  shrink, and be rewired without restarting the Host, which is also the
+  architectural prerequisite for bus discovery (#35) — auto-configuring a
+  node table by polling UAs *is* runtime node addition.
+  - **Capacity is not membership.** Capacity is slot availability, not a
+    count that only rises, so deleting from a full table frees a slot and
+    the next add succeeds. `nodeCount()` reports live nodes.
+  - **Delete tombstones, never compacts**, so no surviving handle
+    relocates. The slot is cleaned at delete rather than at reuse, which
+    is what makes `address()` a working self-check: a handle cached
+    across the delete reads back as address 0 instead of continuing to
+    impersonate the node it used to serve.
+  - **Address is identity**, so changing a node's address is delete +
+    add. There is no in-place variant, because a cached handle would
+    silently become a different logical device.
+  - **Geometry change is in place and identity-preserving** — same
+    address, same handle, same counters — but invalidates the cached
+    input image, clears the output image, forces a re-init (I then full
+    T) because the NI/NO announced in the I body changed, and degrades
+    conformance to unknown since prior evidence measured a geometry that
+    no longer applies.
+  - **Mutating the node of the outstanding exchange is legal.** A send
+    already accepted by the transport cannot be aborted (D13), so the
+    exchange is *orphaned*: the frame completes, any reply is discarded,
+    and nothing is attributed to any node — no node counter, no host
+    reply counter, and no event either, since an event fired there would
+    name a tombstone or the slot's next occupant. A packet not yet
+    accepted is cancelled outright instead; nothing is on the wire to
+    protect. New host-wide `CMRIHostStatistics::orphanedExchanges` keeps
+    the packet ledger honest at the only scope that can own it.
+  - `ConfigStatus::kAlreadyBegun` is **removed** (no mutator can return
+    it now that the table is unlocked); `kNoSuchNode` added.
+  - 7 new Unity tests covering the full `add -> disable -> geometry
+    change -> enable -> disable -> delete -> add(reuse)` sequence,
+    delete-while-in-flight asserting no attribution anywhere including
+    onto the slot's new occupant, slot reuse proving a fresh node is not
+    ONLINE before its first reply, and fill-to-capacity -> delete -> add.
+
 ### Changed
 - Per-node state model split by substrate (issue #84, Design v1.3 D15/D16):
   control state, belief state, and observation state are now explicit in

@@ -534,6 +534,15 @@ visible.
 The split also gives slot reuse (D5) a checklist rather than a hunt,
 and keeps the health axes of D16 computable from independent inputs.
 
+Clarification, because slot reuse reads like a violation and is not:
+D5 resets all three substrates on reuse, observation included, and
+observation is supposed to be monotonic and never reset. Monotonicity
+is a property of a counter **for a given subject**. `delete` ends that
+subject; the next occupant of the slot is a different logical device,
+so it gets a new counter starting at zero. Nothing was reset mid-life.
+This is the invariant applied correctly, not an exception to it — the
+only recorded exception remains `RemoteNodeConfig.enabled` above.
+
 ### D16. Node health is three axes plus a projection
 Supersedes D2's claim that `RemoteNodeState` is a stored four-value
 enum. It was already an undocumented projection: UNINITIALIZED and

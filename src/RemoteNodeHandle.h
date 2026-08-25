@@ -116,8 +116,13 @@ struct RemoteNodeConfig {
   bool enabled = true;
 };
 
-/// Per-node statistics. All counters start at 0 at begin(), increase
-/// monotonically, and never reset.
+/// Per-node statistics. All counters start at 0, increase monotonically,
+/// and are never reset.
+///
+/// Monotonicity is a property of a counter for a given subject, and
+/// delete ends that subject: the next occupant of a reused slot is a
+/// different logical device and counts from zero. Nothing is reset
+/// mid-life, so the guarantee above is intact (Design v1.2 D5).
 struct RemoteNodeStatistics {
   uint32_t exchanges = 0;         ///< exchanges that committed fresh inputs
   uint32_t noReplies = 0;         ///< exchanges that ended with no reply
@@ -127,8 +132,16 @@ struct RemoteNodeStatistics {
 };
 
 /// The per-node handle a Host sketch holds. It exposes input image
-/// reads, freshness, health, and statistics. The engine returns it at
-/// configuration time and it stays valid for the life of the program.
+/// reads, freshness, health, and statistics.
+///
+/// Obtain one from CMRIHost::node(addr) at the point of use. It is valid
+/// until that node is deleted; the storage outlives the node, but the
+/// slot may be reused by a different logical device, so a handle cached
+/// across a mutation can silently describe somebody else. address() is
+/// the self-check for code that caches one anyway -- a deleted node
+/// reads back as address 0.
+// VALIDATION: Design v1.2 D5: host.node(addr) is the canonical access
+// path; caching a handle across a mutation is not a supported pattern.
 ///
 /// The sketch reads the handle. setEnabled() is the only sketch-side
 /// write. The engine that created the handle is the sole writer of
@@ -266,10 +279,11 @@ class RemoteNodeHandle {
   bool enabled() const { return config_.enabled; }
 
   /// Disable or re-enable this node. The exchange schedule skips a
-  /// disabled node.
-  // VALIDATION: Design v1.2 D5: enable/disable is unchanged. Removal is
-  // specified by v1.2 D5 but not implemented yet, so today disabling is
-  // still the only way to take a node out of the rotation.
+  /// disabled node, but the node keeps its slot, its image, and its
+  /// counters -- this is "out of service", not "gone". To remove a node
+  /// outright, use CMRIHost::deleteRemoteNode().
+  // VALIDATION: Design v1.2 D5: enable/disable is unchanged from v1.1
+  // and is a separate axis from membership.
   void setEnabled(bool enabled) { config_.enabled = enabled; }
 
  private:
