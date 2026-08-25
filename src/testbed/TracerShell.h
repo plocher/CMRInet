@@ -49,6 +49,8 @@ inline const char* stateName(RemoteNodeState state) {
     case RemoteNodeState::kOnline: return "ONLINE";
     case RemoteNodeState::kStale: return "STALE";
     case RemoteNodeState::kOffline: return "OFFLINE";
+    case RemoteNodeState::kMisconfigured: return "MISCONFIGURED";
+    case RemoteNodeState::kDegraded: return "DEGRADED";
   }
   return "UNKNOWN";
 }
@@ -327,7 +329,7 @@ class TracerShell {
           quiesced_ ? "true" : "false", host.pollsSent, host.pollSendRetries,
           host.repliesAccepted, node.noReplies, host.repliesRejected,
           host.unsolicitedPackets, node.exchanges, node.errors,
-          node.recoveries, node.consecutiveMisses, node.lastTurnaroundMs,
+          node.recoveries, node_->consecutiveMisses(), node.lastTurnaroundMs,
           link.decodeErrors, decoder.slowGaps, decoder.maxGapMs, inputsHex,
           outputsHex);
     } else {
@@ -346,7 +348,7 @@ class TracerShell {
           stateName(node_->state()), quiesced_ ? "true" : "false",
           host.pollsSent, host.pollSendRetries, host.repliesAccepted,
           node.noReplies, host.repliesRejected, host.unsolicitedPackets,
-          node.exchanges, node.errors, node.recoveries, node.consecutiveMisses,
+          node.exchanges, node.errors, node.recoveries, node_->consecutiveMisses(),
           node.lastTurnaroundMs, link.decodeErrors, decoder.slowGaps,
           decoder.maxGapMs, inputsHex, outputsHex);
     }

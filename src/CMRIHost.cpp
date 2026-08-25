@@ -158,7 +158,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     // on a valid frame. A geometry mismatch is not valid data.
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
-    node.statistics_.consecutiveMisses = 0;
+    node.consecutiveMisses_ = 0;
     // The node answered at all, so it is not chronically offline; clear
     // any poll backoff the same as a clean accept (map issue #41).
     const uint32_t previousBackoffMs = node.pollBackoffMs_;
@@ -183,9 +183,9 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   }
   node.freshness_.mark(nowMs);
   ++node.statistics_.exchanges;
-  if (node.statistics_.consecutiveMisses != 0) {
+  if (node.consecutiveMisses_ != 0) {
     ++node.statistics_.recoveries;
-    node.statistics_.consecutiveMisses = 0;
+    node.consecutiveMisses_ = 0;
     node.reinitArmed_ = false;  // a reply ends the miss-run, disarming the ladder
   }
   // A reply proves the node is present and responsive: clear any poll
@@ -305,7 +305,10 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // message. Count the miss and poll the next Node.
       RemoteNodeHandle& node = nodes_[polledIndex_];
       ++node.statistics_.noReplies;
-      ++node.statistics_.consecutiveMisses;
+      // VALIDATION: Design v1.3 D15: miss-run counters are control
+      // state and gate behavior, so they are not stored in observation
+      // statistics.
+      ++node.consecutiveMisses_;
       emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
       // Poll-retry backoff (map issue #41): back off this node's next
       // poll attempt so a chronically offline node cannot tax the
@@ -335,7 +338,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // VALIDATION: Interop v1.1 2.3.10: after more than 5 consecutive
       // poll misses, re-send I, then a full T, and invalidate cached
       // input state. Keep polling the silent Node forever.
-      if (node.statistics_.consecutiveMisses > config_.missThreshold &&
+      if (node.consecutiveMisses_ > config_.missThreshold &&
           !node.reinitArmed_) {
         node.reinitArmed_ = true;
         node.needsInit_ = true;
@@ -443,24 +446,39 @@ void CMRIHost::invalidateNodeInputs_(RemoteNodeHandle& node) {
   node.freshness_.clear();
 }
 
-/// Recompute every node's health from its counters and freshness.
+/// Recompute every node's health axes from control and belief state.
 void CMRIHost::updateNodeStates_(uint32_t nowMs) {
   for (size_t i = 0; i < nodeCount_; ++i) {
     RemoteNodeHandle& node = nodes_[i];
-    const RemoteNodeState previous = node.state_;
-    if (node.statistics_.consecutiveMisses > config_.missThreshold) {
-      node.state_ = RemoteNodeState::kOffline;
-    } else if (!node.freshness_.marked()) {
-      node.state_ = RemoteNodeState::kUninitialized;
+    const RemoteNodeState previous = node.state();
+    if (node.consecutiveMisses_ > config_.missThreshold) {
+      node.liveness_ = RemoteNodeLiveness::kSilent;
+    } else if (node.consecutiveMisses_ != 0) {
+      node.liveness_ = RemoteNodeLiveness::kMissing;
+    } else {
+      node.liveness_ = RemoteNodeLiveness::kResponsive;
+    }
+
+    if (!node.freshness_.marked()) {
+      node.imageState_ = RemoteNodeImageState::kNone;
     } else if (node.config_.stalenessMs != 0 &&
                node.freshness_.atLeast(nowMs, node.config_.stalenessMs)) {
-      node.state_ = RemoteNodeState::kStale;
+      node.imageState_ = RemoteNodeImageState::kStale;
     } else {
-      node.state_ = RemoteNodeState::kOnline;
+      node.imageState_ = RemoteNodeImageState::kFresh;
     }
-    if (node.state_ != previous) {
+
+    // VALIDATION: Design v1.3 D16: conformance is current evidence,
+    // not latched. When a node is silent, conformance degrades to
+    // unknown until current evidence returns.
+    if (node.liveness_ == RemoteNodeLiveness::kSilent) {
+      node.conformance_ = RemoteNodeConformance::kUnknown;
+    }
+
+    const RemoteNodeState current = node.state();
+    if (current != previous) {
       emitEvent_(CMRIHostEventType::kNodeStateChanged, node, nowMs, previous,
-                 node.state_);
+                 current);
     }
   }
 }
