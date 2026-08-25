@@ -64,6 +64,51 @@ High-level changes, newest first.
   it at runtime stops them.
 
 ### Changed
+- `TracerShell` no longer holds a node, and every verb names its UA
+  (issue #86, breaking for the C&C vocabulary):
+  - The shell bound one `RemoteNodeHandle` at `bind()` and used it for
+    three different jobs — verb target, event attribution, and trace
+    attribution. That is exactly the cached-handle pattern D5 deprecates,
+    and it was already wrong for more than one node: every `reply`,
+    `miss`, and `state` line on the dual-node bench claimed UA 30, and
+    every trace line reported the bound node's address beside a packet
+    that might be addressed elsewhere. Event lines now come from
+    `event.node`; trace lines from `packet.ua`.
+  - `bind()` drops its `RemoteNodeHandle&` parameter. Verbs take a UA:
+    `quiesce <ua>`, `resume <ua>`, `forcetx <ua>`,
+    `setbit <ua> <bit> <0|1>`, `writeoutputs <ua> <hex>`.
+  - A UA with no live node is now a reported `noSuchNode` error rather
+    than a silent no-op. After runtime delete that is an ordinary
+    outcome, and a verb that quietly does nothing repeats the #82 defect
+    of misreporting its own failure.
+  - New D5 mutation verbs: `node delete <ua>` and
+    `node geometry <ua> <in> <out>`. These exist so the interaction
+    hazards can be driven against real wire timing — a mock transport
+    cannot reproduce an orphan across an actual TXEN drain.
+  - `node add|enable|disable` move out of `XiaoHostTracer` into the
+    shared shell, so both tracer images speak one vocabulary (issue #21).
+    The sketch's private copy refused `node add` after `begin()` with a
+    "locked" error D5 retired, and reported success for
+    `node enable|disable` on an unknown UA while doing nothing.
+  - `status` splits by scope: bare `status` reports host-owned counters
+    (now including `orphaned`) plus a `roster` of live nodes; `status
+    <ua>` reports one node's image, health, and counters. A flat line
+    mixing both was only meaningful while there was exactly one node.
+  - **Telemetry speaks the UA, never the wire byte.** The old
+    `"address":30,"ua":95` pair is replaced by `"ua":30`. As a side
+    effect this repairs a dead check: the sketch keyed its status roster
+    by `n->ua()` (the wire byte, 95) while
+    `analyze_bench_validation.py` looked it up by the semantic address
+    (30), so `status_state` was always `None` and its
+    `UNINITIALIZED`/`OFFLINE` failure branch could never fire. See #90
+    for the remaining consumers.
+  - `quiesced` (a shell-wide flag that actually disabled one node) is
+    replaced by per-node `enabled`.
+- `XiaoHostTracer` telemetry lines are streamed rather than copied
+  through a 2 KB stack buffer that silently truncated longer lines
+  (issue #86). Harmless until the status line grew a roster; a truncated
+  line is malformed JSON, which is worse for a runner than a slow one.
+  Also returns 2 KB of stack to `loop()`.
 - Per-node state model split by substrate (issue #84, Design v1.3 D15/D16):
   control state, belief state, and observation state are now explicit in
   the Host path. `consecutiveMisses` moved out of `RemoteNodeStatistics`

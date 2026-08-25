@@ -25,10 +25,19 @@
 // gate remains the genuine truncation guard. Be strict in what you
 // send, forgiving in what you accept.
 //
-// C&C: verbs on the CDC stream (quiesce | resume | status |
-// setbit <n> <0|1> | writeoutputs <hex> | forcetx | quit),
-// JSON lines back. After quit the image emits "final" and parks;
-// reset the board to run again.
+// C&C: verbs on the CDC stream, JSON lines back. Every verb that acts
+// on a node names its UA — the shell holds no bound node (Design v1.2
+// D5), so there is no implicit target:
+//   status | status <ua>
+//   quiesce <ua> | resume <ua> | forcetx <ua>
+//   setbit <ua> <bit> <0|1> | writeoutputs <ua> <hex>
+//   node add <ua> <in> <out> | node delete <ua>
+//   node geometry <ua> <in> <out>
+//   node enable <ua> | node disable <ua>
+//   enable|disable|configure <generator> [ua <n>] ...
+//   run <secs> | dump | reset | reboot | display <1|2> <text> | quit
+// After quit the image emits "final" and parks; reset the board to run
+// again.
 
 #include <Arduino.h>
 
@@ -169,14 +178,19 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
 // fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
 // 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
-constexpr const char* kVersion = "0.6.2"; // #33: add phantom UA32 + fix write_read loopback dirty-output flood
+// 0.7.0 (#86): every node verb names its UA, and the node verbs moved
+// into the shared shell so both tracer images speak one vocabulary. New
+// `node delete` / `node geometry`; `node add` works after begin() now
+// that D5 unlocked the table. `status` reports host scope plus a roster;
+// `status <ua>` reports one node. Telemetry carries the UA and never the
+// wire byte, so the roster is keyed the way its readers key it (#90).
+constexpr const char* kVersion = "0.7.0"; // #86: UA-scoped verbs, D5 runtime mutation
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                      TRACER_BAUD);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
-CMRInet::RemoteNodeHandle* node = nullptr;
 CMRInet::testbed::TracerShell engine;
 
 bool finished = false;  // quit latched: "final" emitted, polling parked
@@ -239,35 +253,44 @@ void lazyBegin() {
 }
 // --------------------------------------------------------------------------
 
+/// Stream one telemetry line to the CDC console, then terminate it.
+///
+/// Writes straight from the caller's buffer. The previous version copied
+/// into a 2 KB stack array and silently truncated anything longer, which
+/// was invisible until the shell's status line grew a full node roster --
+/// and a truncated line is malformed JSON, which is worse for a runner
+/// than a slow one. Dropping the copy also returns 2 KB of stack to
+/// loop().
 void writeCdcLine(void* /*context*/, const char* line) {
   if (!Serial || line == nullptr) {
     return;
   }
 
-  constexpr size_t kMaxCdcLineBytes = 2048;
   constexpr uint32_t kMaxWaitMs = 250;
-  char out[kMaxCdcLineBytes];
-  size_t lineLen = strnlen(line, kMaxCdcLineBytes - 2);
-  memcpy(out, line, lineLen);
-  out[lineLen] = '\n';
-  const size_t totalLen = lineLen + 1;
-
+  const size_t lineLen = strlen(line);
   const uint32_t waitStart = millis();
   size_t written = 0;
-  while (Serial && written < totalLen && (millis() - waitStart) < kMaxWaitMs) {
+  while (Serial && written < lineLen && (millis() - waitStart) < kMaxWaitMs) {
     const size_t room = Serial.availableForWrite();
     if (room == 0) {
       delay(1);
       continue;
     }
-    const size_t chunk = (totalLen - written < room) ? (totalLen - written) : room;
+    const size_t remaining = lineLen - written;
+    const size_t chunk = (remaining < room) ? remaining : room;
     const size_t n = Serial.write(
-        reinterpret_cast<const uint8_t*>(out + written), chunk);
+        reinterpret_cast<const uint8_t*>(line + written), chunk);
     if (n == 0) {
       delay(1);
       continue;
     }
     written += n;
+  }
+  // Terminate even if the deadline cut the body short: a reader needs the
+  // record boundary more than it needs the last few bytes.
+  if (Serial) {
+    const uint8_t newline = '\n';
+    Serial.write(&newline, 1);
   }
 }
 
@@ -609,24 +632,17 @@ bool handleGeneratorControl(char* cmd) {
   return true;
 }
 
-void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_capacity) {
+/// Append the generator block to a status line.
+///
+/// This used to also emit a `nodes` array, which the shell now owns as
+/// `roster`. Two reasons it had to move: the shell can keep it in step
+/// with runtime membership changes, and the copy here keyed each entry by
+/// `n->ua()` -- the *wire byte* (95), not the UA (30) -- so
+/// analyze_bench_validation.py built its map on 95 and looked it up on
+/// 30, missed every time, and left its UNINITIALIZED/OFFLINE check dead.
+/// See #90.
+void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity) {
   initializeGeneratorDefaults(kGeneratorDefaultUa);
-  char nodesBuf[512] = ",\"nodes\":[";
-  size_t offset = strlen(nodesBuf);
-  bool first = true;
-  for (uint8_t addr = 0; addr <= 127; ++addr) {
-    CMRInet::RemoteNodeHandle* n = host.node(addr);
-    if (n) {
-      if (!first) {
-         offset += snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset, ",");
-      }
-      offset += snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset,
-          "{\"ua\":%u,\"in\":%zu,\"out\":%zu,\"state\":\"%s\"}",
-          n->ua(), n->inputLength(), n->outputLength(), CMRInet::testbed::stateName(n->state()));
-      first = false;
-    }
-  }
-  snprintf(nodesBuf + offset, sizeof(nodesBuf) - offset, "]");
   const FastWalkerGenerator& defaultFastwalker = fastwalkerByUa[kGeneratorDefaultUa];
   const SlowWalkerGenerator& defaultSlowwalker = slowwalkerByUa[kGeneratorDefaultUa];
   const ToggleOutFromInputGenerator& defaultLoopback = toggleoutfrominputByUa[kGeneratorDefaultUa];
@@ -636,13 +652,12 @@ void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_
           : "toggle";
 
   snprintf(buffer, remaining_capacity, 
-    "%s,\"generators\":{"
+    ",\"generators\":{"
     "\"fastwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
     "\"slowwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
     "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,\"mode\":\"%s\",\"enabled_count\":%u},"
     "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
     "}",
-    nodesBuf,
     static_cast<unsigned>(kGeneratorDefaultUa),
     defaultFastwalker.enabled ? "true" : "false",
     (unsigned long)defaultFastwalker.period_ms,
@@ -671,6 +686,10 @@ void emitGeneratorsAndNodesStatus(void* context, char* buffer, size_t remaining_
 void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
+  // Resolved at the point of use, not cached: the operator can delete
+  // this node at runtime now, and a cached handle would keep drawing a
+  // tombstone -- or a different device that reused its slot (D5).
+  CMRInet::RemoteNodeHandle* node = host.node(TRACER_ADDRESS);
   const uint32_t pollsSent = host.statistics().pollsSent;
   uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
   panel.sample(now, pollsSent, nodeErrs, 1);
@@ -764,13 +783,12 @@ void setup() {
       ? realStatus
       : phantomStatus;
 
-  if (setupStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
-    node = host.node(TRACER_ADDRESS);
-    engine.bind(host, transport, *node, kImage, kVersion,
-                writeCdcLine, nullptr);
-    host.onTrace(ourOnTrace, nullptr);
-    engine.setStatusExtender(emitGeneratorsAndNodesStatus, nullptr);
-  }
+  // Bind unconditionally: the shell holds no node (Design v1.2 D5), so
+  // there is nothing for a rejected compiled-in add to invalidate -- and
+  // a shell that failed to bind could not report the rejection.
+  engine.bind(host, transport, kImage, kVersion, writeCdcLine, nullptr);
+  host.onTrace(ourOnTrace, nullptr);
+  engine.setStatusExtender(emitGeneratorsStatus, nullptr);
 
   engine.setNow(millis());
   char bootMs[16];
@@ -815,67 +833,21 @@ void loop() {
         strncmp(verb, "configure", 9) == 0) {
       handled = handleGeneratorControl(verbCopy);
     } else if (strncmp(verb, "node ", 5) == 0) {
-      char* saveptr = nullptr;
-      strtok_r(verbCopy, " ", &saveptr); // "node"
-      char* action = strtok_r(nullptr, " ", &saveptr);
-      if (action) {
-        if (strcmp(action, "add") == 0) {
-          char* ua_s = strtok_r(nullptr, " ", &saveptr);
-          char* in_s = strtok_r(nullptr, " ", &saveptr);
-          char* out_s = strtok_r(nullptr, " ", &saveptr);
-          if (ua_s && in_s && out_s) {
-            if (host_begun) {
-              Serial.println("{\"event\":\"error\",\"error\":\"locked\",\"message\":\"node add: configuration locked by begin\"}");
-            } else {
-              uint8_t addr = atoi(ua_s);
-              uint8_t in_b = atoi(in_s);
-              uint8_t out_b = atoi(out_s);
-              CMRInet::RemoteNodeHandle* existing = host.node(addr);
-              if (existing) {
-                  if (existing->inputLength() == in_b && existing->outputLength() == out_b) {
-                      Serial.print("{\"event\":\"node_add\",\"ua\":"); Serial.print(addr); Serial.println("}");
-                  } else {
-                      Serial.println("{\"event\":\"error\",\"error\":\"inUse\",\"message\":\"address already in use with different size\"}");
-                  }
-              } else {
-                  CMRInet::RemoteNodeConfig cfg;
-                  cfg.inputBytes = in_b;
-                  cfg.outputBytes = out_b;
-                  // Per-call status: a rejected add no longer disables
-                  // every later one (Design v1.2 D5).
-                  const CMRInet::CMRIHost::ConfigStatus st =
-                      host.addRemoteNode(addr, cfg);
-                  if (st != CMRInet::CMRIHost::ConfigStatus::kOk) {
-                      Serial.print("{\"event\":\"error\",\"error\":\"addFailed\",\"reason\":\"");
-                      Serial.print(CMRInet::configStatusString(st));
-                      Serial.println("\"}");
-                  } else {
-                      Serial.print("{\"event\":\"node_add\",\"ua\":"); Serial.print(addr); Serial.println("}");
-                  }
-              }
-            }
-          }
-        } else if (strcmp(action, "enable") == 0) {
-          char* ua_s = strtok_r(nullptr, " ", &saveptr);
-          if (ua_s) {
-            lazyBegin();
-            uint8_t addr = atoi(ua_s);
-            CMRInet::RemoteNodeHandle* n = host.node(addr);
-            if (n) n->setEnabled(true);
-            Serial.print("{\"event\":\"node_enable\",\"ua\":"); Serial.print(addr); Serial.println("}");
-          }
-        } else if (strcmp(action, "disable") == 0) {
-          char* ua_s = strtok_r(nullptr, " ", &saveptr);
-          if (ua_s) {
-            lazyBegin();
-            uint8_t addr = atoi(ua_s);
-            CMRInet::RemoteNodeHandle* n = host.node(addr);
-            if (n) n->setEnabled(false);
-            Serial.print("{\"event\":\"node_disable\",\"ua\":"); Serial.print(addr); Serial.println("}");
-          }
-        }
-      }
-      handled = true;
+      // The node verbs live in the shared shell now. Design v1.2 D5 made
+      // add/delete/geometry engine operations, and the shell is where
+      // both tracer images get them identically (issue #21) -- this
+      // sketch's private copy could only ever drift from the desktop's.
+      //
+      // It also fixes two things the private copy got wrong: it refused
+      // `node add` after begin() with a "locked" error that D5 retired,
+      // and `node enable|disable` on an unknown UA printed success while
+      // doing nothing.
+      //
+      // All this sketch still owns is the deferred begin(): a node verb
+      // means the operator wants traffic, so the engine must be running
+      // before the shell acts on it.
+      lazyBegin();
+      handled = false;  // fall through to the shell
     } else if (strncmp(verb, "display ", 8) == 0) {
       // #64: Allow the harness to inject custom annotations on the OLED
       if (oledOk) {

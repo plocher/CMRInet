@@ -27,9 +27,29 @@
 // every image alike, so scenario diffs never special-case the clock;
 // the epoch line itself carries the absolute anchor where one exists
 // (wall clock on the desktop, boot milliseconds on the Xiao).
+//
+// ---- Two rules this file exists to keep straight ----
+//
+// 1. THE SHELL HOLDS NO NODE. It resolves host.node(ua) at the point of
+//    use. Caching a RemoteNodeHandle is exactly the pattern Design v1.2
+//    D5 deprecates: the storage survives a delete, but the slot may be
+//    reused by a different logical device, so a cached handle silently
+//    starts describing somebody else. Every verb therefore names its
+//    target UA, and a UA with no live node is a *reported* error rather
+//    than a silent no-op — a verb that misreports its own failure is the
+//    #82 shape, and after runtime delete "not found" is an ordinary
+//    outcome, not an exceptional one.
+//
+// 2. TELEMETRY SPEAKS THE UA, NEVER THE WIRE BYTE. Per the spec the UA
+//    is the semantic address 0..127; the wire payload carries
+//    UA + ord('A'). The wire byte is an encoding detail of the transport
+//    and no reader should see or key on it. This file used to emit both
+//    ("address":30,"ua":95), which is backwards and useless. See #90 for
+//    the consumers still speaking the old vocabulary.
 
 #pragma once
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,18 +88,30 @@ inline const char* eventName(CMRIHostEventType type) {
   return "unknown";
 }
 
-/// The command-and-control shell one tracer main() wraps: it owns
-/// the telemetry line format, the seq counter, the quiesced flag, and
-/// the verb vocabulary (quiesce | resume | status | setbit <n> <0|1>
-/// | writeoutputs <hex> | forcetx | quit). It registers both D7
-/// listeners — onEvent for exchange/health events and onTrace for
-/// per-packet TX/RX visibility (I, T, P, R with MT and body) — so the
-/// bench sees the full I/T exchange, not just its counters.
+/// The command-and-control shell one tracer main() wraps: it owns the
+/// telemetry line format, the seq counter, and the verb vocabulary. It
+/// registers both D7 listeners — onEvent for exchange/health events and
+/// onTrace for per-packet TX/RX visibility (I, T, P, R with MT and body)
+/// — so the bench sees the full I/T exchange, not just its counters.
 ///
-/// Lifecycle mirrors the library's two-phase rule: bind() during the
-/// configuration phase (it registers the D7 listeners, which
-/// host.begin() locks), then setNow()/handleVerb()/emitLine() at
-/// runtime. Nothing here allocates or blocks.
+/// Verb vocabulary. Every verb acting on a node names its UA:
+///
+///   status                          host counters plus the node roster
+///   status <ua>                     one node's image, health, counters
+///   quiesce <ua> | resume <ua>      out of / back into the rotation
+///   forcetx <ua>                    re-send a full T with no change
+///   setbit <ua> <bit> <0|1>         one output bit
+///   writeoutputs <ua> <hex>         whole output image
+///   node add <ua> <in> <out>        runtime add (Design v1.2 D5)
+///   node delete <ua>                runtime delete
+///   node geometry <ua> <in> <out>   runtime geometry change
+///   node enable <ua>                alias of resume (bench probes)
+///   node disable <ua>               alias of quiesce (bench probes)
+///   quit                            the main owns its own exit
+///
+/// Lifecycle: bind() may run before or after host.begin(), since
+/// listener registration is no longer locked at begin() (#86). Nothing
+/// here allocates or blocks.
 class TracerShell {
  public:
   /// Writes one completed telemetry line (no trailing newline) to the
@@ -87,27 +119,28 @@ class TracerShell {
   /// as its stream requires.
   using LineWriter = void (*)(void* context, const char* line);
 
-  /// Callback to append additional JSON fields when emitLineAt_ fires.
-  using StatusExtender = void (*)(void* context, char* buffer, size_t remaining_capacity);
+  /// Callback appending extra JSON fields to a roster-bearing line.
+  using StatusExtender = void (*)(void* context, char* buffer,
+                                  size_t remaining_capacity);
 
   /// What handleVerb() asks of the surrounding main loop.
   enum class VerbResult : uint8_t {
     kEmpty,    ///< blank input; nothing happened
-    kHandled,  ///< verb consumed (including the unknown-verb error line)
+    kHandled,  ///< verb consumed (including any error line)
     kQuit,     ///< end the loop; the main emits "final" on its way out
   };
 
-  /// Wire the shell to a configured-but-not-begun host. Registers
-  /// both D7 listeners (onEvent and onTrace), so it MUST run before
-  /// host.begin() locks the configuration. `image` and `version`
-  /// identify the wrapping main on identity lines (`epoch` and
-  /// `status`); both strings must outlive the shell.
+  /// Wire the shell to a host. `image` and `version` identify the
+  /// wrapping main on identity lines (`epoch` and `status`); both
+  /// strings must outlive the shell.
+  ///
+  /// Takes no node: the shell resolves host.node(ua) at the point of use
+  /// (Design v1.2 D5).
   void bind(CMRIHost& host, SerialCMRITransport& transport,
-            RemoteNodeHandle& node, const char* image, const char* version,
+            const char* image, const char* version,
             LineWriter writeLine, void* writeContext) {
     host_ = &host;
     transport_ = &transport;
-    node_ = &node;
     image_ = image;
     version_ = version;
     writeLine_ = writeLine;
@@ -116,44 +149,43 @@ class TracerShell {
     host.onTrace(&TracerShell::onHostTrace_, this);
   }
 
-  /// Register an optional callback that can append additional JSON fields (e.g. ",\"generators\":{...}") 
-  /// to the end of any line emitted.
+  /// Register an optional callback that appends further JSON fields
+  /// (e.g. `,"generators":{...}`) to a roster-bearing line.
   void setStatusExtender(StatusExtender extender, void* context = nullptr) {
     statusExtender_ = extender;
     statusExtenderContext_ = context;
   }
 
-  /// Refresh the shell's clock. Call once per loop iteration, with
-  /// the same monotonic value handed to host.tick(), before verbs are
+  /// Refresh the shell's clock. Call once per loop iteration, with the
+  /// same monotonic value handed to host.tick(), before verbs are
   /// dispatched.
   void setNow(uint32_t nowMs) { nowMs_ = nowMs; }
 
-  /// Manually emit a trace record into the telemetry stream (e.g. for replaying
-  /// a captured ring buffer). Defers to the same formatter used by the listener.
+  /// Manually emit a trace record (e.g. replaying a captured ring).
   void emitPacket(bool transmit, const CMRIPacket& packet) {
     emitTrace_(transmit, packet);
   }
 
   /// Emit the epoch marker: ts restarts at 0 here, so a runner seeing
   /// this line knows every cumulative counter restarted with it. The
-  /// anchor pair carries the image's absolute time reference (e.g.
-  /// "wallClock" on the desktop, "bootMs" on the Xiao).
+  /// anchor pair carries the image's absolute time reference.
   void emitEpoch(const char* anchorKey, const char* anchorValue) {
     epochMs_ = nowMs_;
-    emitLineAt_(nowMs_, "epoch", anchorKey, anchorValue, true);
+    emitHostLine_(nowMs_, "epoch", kNoUa, anchorKey, anchorValue,
+                  /*identity=*/true, /*config=*/true, /*roster=*/true);
   }
 
-  /// Emit one telemetry line at the shell's current clock. `event`
-  /// names why the line exists; extraKey/extraValue append one
-  /// event-specific string field.
+  /// Emit one host-scope line at the shell's current clock.
   void emitLine(const char* event, const char* extraKey = nullptr,
                 const char* extraValue = nullptr) {
-    emitLineAt_(nowMs_, event, extraKey, extraValue);
+    const bool isStatus = (strcmp(event, "status") == 0);
+    emitHostLine_(nowMs_, event, kNoUa, extraKey, extraValue,
+                  /*identity=*/isStatus, /*config=*/false,
+                  /*roster=*/isStatus);
   }
 
-  /// Dispatch one C&C verb. Unknown verbs emit an error line and
-  /// count as handled; "quit" is not acted on here — the main owns
-  /// its own exit (and emits "final").
+  /// Dispatch one C&C verb. Unknown verbs emit an error line and count
+  /// as handled; "quit" is not acted on here — the main owns its exit.
   VerbResult handleVerb(const char* verb) {
     if (verb == nullptr || verb[0] == '\0') {
       return VerbResult::kEmpty;
@@ -165,272 +197,169 @@ class TracerShell {
       emitLine("status");
       return VerbResult::kHandled;
     }
-    if (strcmp(verb, "quiesce") == 0) {
-      node_->setEnabled(false);
-      quiesced_ = true;
-      emitLine("quiesce");
-      return VerbResult::kHandled;
+    if (strncmp(verb, "status ", 7) == 0) {
+      return withNode_(verb, verb + 7, &TracerShell::actStatus_);
     }
-    if (strcmp(verb, "resume") == 0) {
-      node_->setEnabled(true);
-      quiesced_ = false;
-      emitLine("resume");
-      return VerbResult::kHandled;
+    if (strncmp(verb, "quiesce ", 8) == 0) {
+      return withNode_(verb, verb + 8, &TracerShell::actQuiesce_);
     }
-    if (strcmp(verb, "forcetx") == 0) {
-      node_->forceTransmit();
-      emitLine("forcetx");
-      return VerbResult::kHandled;
+    if (strncmp(verb, "resume ", 7) == 0) {
+      return withNode_(verb, verb + 7, &TracerShell::actResume_);
+    }
+    if (strncmp(verb, "forcetx ", 8) == 0) {
+      return withNode_(verb, verb + 8, &TracerShell::actForcetx_);
     }
     if (strncmp(verb, "setbit ", 7) == 0) {
-      return handleSetbit_(verb + 7);
+      return withNode_(verb, verb + 7, &TracerShell::actSetbit_);
     }
     if (strncmp(verb, "writeoutputs ", 13) == 0) {
-      return handleWriteoutputs_(verb + 13);
+      return withNode_(verb, verb + 13, &TracerShell::actWriteoutputs_);
+    }
+    if (strncmp(verb, "node ", 5) == 0) {
+      return handleNode_(verb, verb + 5);
     }
     emitLine("error", "unknownVerb", verb);
     return VerbResult::kHandled;
   }
 
-  /// True while polling is suspended by the quiesce verb.
-  bool quiesced() const { return quiesced_; }
-
   /// When enabled, emit only backoff-change host events; suppress all
-  /// other event lines. Useful for preserving diagnostic trace density.
+  /// other event lines. Preserves diagnostic trace density.
   void setBackoffTraceOnly(bool enabled) { backoffTraceOnly_ = enabled; }
 
  private:
-  // Inputs hex + outputs hex (2 chars per byte each) plus ~400 chars of
-  // fixed fields and counters and one extra field. Truncation is
-  // guarded, not expected.
+  /// Sentinel for "this line is not about one node".
+  static constexpr int kNoUa = -1;
+
+  /// One roster entry: ua, geometry, state, enabled.
+  static constexpr size_t kRosterEntryBytes = 80;
+
+  // Whichever line is longest bounds the buffer. A node line carries
+  // both image hex strings; a host line carries the roster. No line
+  // carries both, so this is generous rather than tight.
   static constexpr size_t kLineCapacity =
       2 * CMRINET_HOST_MAX_INPUT_BYTES +
-      2 * CMRINET_HOST_MAX_OUTPUT_BYTES + 640;
+      2 * CMRINET_HOST_MAX_OUTPUT_BYTES + 640 +
+      CMRINET_HOST_MAX_NODES * kRosterEntryBytes;
 
-  /// CMRIHost event listener: one telemetry line per engine event,
-  /// stamped with the event's own tick time.
-  static void onHostEvent_(void* context, const CMRIHostEvent& event) {
-    TracerShell& self = *static_cast<TracerShell*>(context);
-    if (event.type == CMRIHostEventType::kPollBackoffChanged) {
-      self.emitBackoffTrace_(event);
-      return;
-    }
-    if (self.backoffTraceOnly_) {
-      return;
-    }
-    if (event.type == CMRIHostEventType::kNodeStateChanged) {
-      self.emitLineAt_(event.nowMs, eventName(event.type), "previousState",
-                       stateName(event.previousState));
-      return;
-    }
-    self.emitLineAt_(event.nowMs, eventName(event.type));
-  }
+  /// A verb action, run once its UA has resolved to a live node.
+  /// `args` points just past the UA.
+  using NodeAction = VerbResult (TracerShell::*)(const char* verb,
+                                                 const char* args,
+                                                 RemoteNodeHandle& node);
 
-  /// CMRIHost trace listener: one telemetry line per packet the host
-  /// hands to the transport (transmit == true: I, T, P) or the transport
-  /// hands up (transmit == false: R, and any unsolicited frame). Fires
-  /// inside host.tick() at the shell's current clock, so I/T visibility
-  /// lands in the stream beside the counters.
-  static void onHostTrace_(void* context, bool transmit,
-                           const CMRIPacket& packet) {
-    TracerShell& self = *static_cast<TracerShell*>(context);
-    self.emitTrace_(transmit, packet);
-  }
+  // ------------------------------------------------ verb plumbing
 
-  void emitTrace_(bool transmit, const CMRIPacket& packet) {
-    char bodyHex[2 * kMaxBody + 1] = "";
-    const size_t len = packet.length;
-    for (size_t i = 0; i < len; ++i) {
-      snprintf(&bodyHex[2 * i], 3, "%02X", packet.body[i]);
+  /// Parse a decimal field, skipping leading spaces.
+  static bool parseUint_(const char*& p, unsigned long& out) {
+    while (*p == ' ') {
+      ++p;
     }
-    char mtBuf[2] = {static_cast<char>(packet.mt), '\0'};
-    int written = snprintf(
-        line_, sizeof(line_),
-        "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
-        "\"address\":%u,\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
-        ++seq_, nowMs_ - epochMs_, node_->address(),
-        node_->ua(), transmit ? "tx" : "rx", mtBuf, bodyHex);
-    if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
-      written = static_cast<int>(sizeof(line_)) - 1;
-    }
-    snprintf(line_ + written, sizeof(line_) - written, "}");
-    writeLine_(writeContext_, line_);
-  }
-
-  void emitBackoffTrace_(const CMRIHostEvent& event) {
-    if (event.node == nullptr) {
-      return;
-    }
-    const char* deadlineAction = "none";
-    if (event.pollBackoffReason == PollBackoffChangeReason::kAccept ||
-        event.pollBackoffReason == PollBackoffChangeReason::kGeometryMismatch) {
-      deadlineAction = "disarm";
-    } else if (event.pollBackoffReason == PollBackoffChangeReason::kInitial ||
-               event.pollBackoffReason == PollBackoffChangeReason::kMiss) {
-      deadlineAction = "arm";
-    }
-    int written = snprintf(
-        line_, sizeof(line_),
-        "{\"seq\":%u,\"ts\":%u,\"event\":\"diag_backoff_trace\",\"role\":\"host\","
-        "\"address\":%u,\"ua\":%u,"
-        "\"old_backoff_ms\":%lu,\"new_backoff_ms\":%lu,\"reason\":\"%s\","
-        "\"deadline_action\":\"%s\",\"now_ms\":%lu}",
-        ++seq_, event.nowMs - epochMs_, event.node->address(),
-        event.node->ua(),
-        static_cast<unsigned long>(event.previousPollBackoffMs),
-        static_cast<unsigned long>(event.newPollBackoffMs),
-        pollBackoffChangeReasonString(event.pollBackoffReason),
-        deadlineAction,
-        static_cast<unsigned long>(event.nowMs));
-    if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
-      line_[sizeof(line_) - 1] = '\0';
-    }
-    writeLine_(writeContext_, line_);
-  }
-
-  void emitLineAt_(uint32_t nowMs, const char* event,
-                   const char* extraKey = nullptr,
-                   const char* extraValue = nullptr,
-                   bool emitConfig = false) {
-    const bool includeIdentity =
-        emitConfig || (strcmp(event, "status") == 0);
-    char inputsHex[2 * RemoteNodeHandle::kMaxInputBytes + 1] = "";
-    const size_t inputLength = node_->inputLength();
-    for (size_t i = 0; i < inputLength; ++i) {
-      snprintf(&inputsHex[2 * i], 3, "%02X", node_->inputByte(i));
-    }
-    char outputsHex[2 * RemoteNodeHandle::kMaxOutputBytes + 1] = "";
-    const size_t outputLength = node_->outputLength();
-    for (size_t i = 0; i < outputLength; ++i) {
-      snprintf(&outputsHex[2 * i], 3, "%02X", node_->outputByte(i));
-    }
-
-    const CMRIHostStatistics& host = host_->statistics();
-    const RemoteNodeStatistics& node = node_->statistics();
-    const LinkStatistics& link = transport_->stats();
-    const CMRIFrameDecoder::Statistics& decoder =
-        transport_->decoderStatistics();
-
-    int written = 0;
-    if (includeIdentity) {
-      written = snprintf(
-          line_, sizeof(line_),
-          "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\","
-          "\"role\":\"host\",\"image\":\"%s\",\"version\":\"%s\","
-          "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
-          "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
-          "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
-          "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
-          "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
-          "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
-          "\"inputs\":\"%s\",\"outputs\":\"%s\"",
-          ++seq_, nowMs - epochMs_, event, image_, version_, node_->address(),
-          node_->ua(), stateName(node_->state()),
-          quiesced_ ? "true" : "false", host.pollsSent, host.pollSendRetries,
-          host.repliesAccepted, node.noReplies, host.repliesRejected,
-          host.unsolicitedPackets, node.exchanges, node.errors,
-          node.recoveries, node_->consecutiveMisses(), node.lastTurnaroundMs,
-          link.decodeErrors, decoder.slowGaps, decoder.maxGapMs, inputsHex,
-          outputsHex);
-    } else {
-      written = snprintf(
-          line_, sizeof(line_),
-          "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\","
-          "\"role\":\"host\","
-          "\"address\":%u,\"ua\":%u,\"state\":\"%s\",\"quiesced\":%s,"
-          "\"polls\":%u,\"pollRetries\":%u,\"replies\":%u,"
-          "\"misses\":%u,\"rejected\":%u,\"unsolicited\":%u,"
-          "\"exchanges\":%u,\"errors\":%u,\"recoveries\":%u,"
-          "\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u,"
-          "\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u,"
-          "\"inputs\":\"%s\",\"outputs\":\"%s\"",
-          ++seq_, nowMs - epochMs_, event, node_->address(), node_->ua(),
-          stateName(node_->state()), quiesced_ ? "true" : "false",
-          host.pollsSent, host.pollSendRetries, host.repliesAccepted,
-          node.noReplies, host.repliesRejected, host.unsolicitedPackets,
-          node.exchanges, node.errors, node.recoveries, node_->consecutiveMisses(),
-          node.lastTurnaroundMs, link.decodeErrors, decoder.slowGaps,
-          decoder.maxGapMs, inputsHex, outputsHex);
-    }
-    if (written < 0 || written >= static_cast<int>(sizeof(line_))) {
-      written = static_cast<int>(sizeof(line_)) - 1;
-    }
-    if (extraKey != nullptr && extraValue != nullptr) {
-      const int extra =
-          snprintf(line_ + written, sizeof(line_) - written,
-                   ",\"%s\":\"%s\"", extraKey, extraValue);
-      if (extra > 0) {
-        written += extra;
-        if (written >= static_cast<int>(sizeof(line_))) {
-          written = static_cast<int>(sizeof(line_)) - 1;
-        }
-      }
-    }
-    if (emitConfig) {
-      // The epoch line carries the gap-observability band as config (not
-      // signal): the three thresholds every counter below was collected
-      // against. A reader interprets slowGaps/maxGapMs against these.
-      const int cfg =
-          snprintf(line_ + written, sizeof(line_) - written,
-                   ",\"slowGapLoMs\":%u,\"slowGapHiMs\":%u,"
-                   "\"interByteTimeoutMs\":%u",
-                   transport_->slowGapLoMs(), transport_->slowGapHiMs(),
-                   transport_->interByteTimeoutMs());
-      if (cfg > 0) {
-        written += cfg;
-        if (written >= static_cast<int>(sizeof(line_))) {
-          written = static_cast<int>(sizeof(line_)) - 1;
-        }
-      }
-    }
-    
-    if (statusExtender_ != nullptr && (strcmp(event, "status") == 0)) {
-      size_t capacity = sizeof(line_) - written - 1; // reserve 1 for '}'
-      if (capacity > 0) {
-         char extBuf[256] = {0};
-         statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
-         int ext_len = snprintf(line_ + written, capacity, "%s", extBuf);
-         if (ext_len > 0) written += ext_len;
-      }
-    }
-
-    snprintf(line_ + written, sizeof(line_) - written, "}");
-    writeLine_(writeContext_, line_);
-  }
-
-  /// Parse "setbit <bit> <0|1>" (the text after "setbit ").
-  VerbResult handleSetbit_(const char* args) {
     char* end = nullptr;
-    const unsigned long bit = strtoul(args, &end, 10);
-    if (end == args) {
-      emitLine("error", "badVerb", "setbit: missing bit index");
+    const unsigned long value = strtoul(p, &end, 10);
+    if (end == p) {
+      return false;
+    }
+    p = end;
+    out = value;
+    return true;
+  }
+
+  /// Resolve the leading UA argument, then run `action` against the live
+  /// node it names.
+  ///
+  /// A missing node reports and stops. This is the one place that policy
+  /// lives, so no individual verb can forget it: after runtime delete a
+  /// null lookup is an ordinary outcome, and a verb that quietly did
+  /// nothing would be lying about its own outcome.
+  VerbResult withNode_(const char* verb, const char* args,
+                       NodeAction action) {
+    unsigned long parsed = 0;
+    if (!parseUint_(args, parsed)) {
+      emitLine("error", "badVerb", verb);
       return VerbResult::kHandled;
     }
-    while (*end == ' ') ++end;
-    const char* vstart = end;
-    const unsigned long val = strtoul(vstart, &end, 10);
-    if (end == vstart) {
-      emitLine("error", "badVerb", "setbit: missing value");
+    if (parsed > 127u) {
+      emitLine("error", "uaOutOfRange", verb);
       return VerbResult::kHandled;
     }
-    if (val > 1u) {
-      emitLine("error", "badValue", "setbit: value must be 0 or 1");
+    RemoteNodeHandle* node = host_->node(static_cast<uint8_t>(parsed));
+    if (node == nullptr) {
+      emitLine("error", "noSuchNode", verb);
       return VerbResult::kHandled;
     }
-    if (bit >= node_->outputLength() * 8u) {
-      emitLine("error", "outOfRange", "setbit: bit beyond output image");
-      return VerbResult::kHandled;
-    }
-    node_->setOutputBit(static_cast<size_t>(bit), val != 0u);
-    emitLine("setbit");
+    return (this->*action)(verb, args, *node);
+  }
+
+  VerbResult actStatus_(const char*, const char*, RemoteNodeHandle& node) {
+    emitNodeLine_(nowMs_, "status", node, /*identity=*/true);
     return VerbResult::kHandled;
   }
 
-  /// Parse "writeoutputs <hex>" (the text after "writeoutputs ").
-  VerbResult handleWriteoutputs_(const char* hex) {
+  VerbResult actQuiesce_(const char*, const char*, RemoteNodeHandle& node) {
+    node.setEnabled(false);
+    emitNodeLine_(nowMs_, "quiesce", node);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult actResume_(const char*, const char*, RemoteNodeHandle& node) {
+    node.setEnabled(true);
+    emitNodeLine_(nowMs_, "resume", node);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult actForcetx_(const char*, const char*, RemoteNodeHandle& node) {
+    node.forceTransmit();
+    emitNodeLine_(nowMs_, "forcetx", node);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult actNodeEnable_(const char*, const char*, RemoteNodeHandle& node) {
+    node.setEnabled(true);
+    emitNodeLine_(nowMs_, "node_enable", node);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult actNodeDisable_(const char*, const char*, RemoteNodeHandle& node) {
+    node.setEnabled(false);
+    emitNodeLine_(nowMs_, "node_disable", node);
+    return VerbResult::kHandled;
+  }
+
+  /// "setbit <ua> <bit> <0|1>"
+  VerbResult actSetbit_(const char*, const char* args,
+                        RemoteNodeHandle& node) {
+    unsigned long bit = 0;
+    if (!parseUint_(args, bit)) {
+      emitLine("error", "badVerb", "setbit: missing bit index");
+      return VerbResult::kHandled;
+    }
+    unsigned long value = 0;
+    if (!parseUint_(args, value)) {
+      emitLine("error", "badVerb", "setbit: missing value");
+      return VerbResult::kHandled;
+    }
+    if (value > 1u) {
+      emitLine("error", "badValue", "setbit: value must be 0 or 1");
+      return VerbResult::kHandled;
+    }
+    if (bit >= node.outputLength() * 8u) {
+      emitLine("error", "outOfRange", "setbit: bit beyond output image");
+      return VerbResult::kHandled;
+    }
+    node.setOutputBit(static_cast<size_t>(bit), value != 0u);
+    emitNodeLine_(nowMs_, "setbit", node);
+    return VerbResult::kHandled;
+  }
+
+  /// "writeoutputs <ua> <hex>"
+  VerbResult actWriteoutputs_(const char*, const char* args,
+                              RemoteNodeHandle& node) {
+    while (*args == ' ') {
+      ++args;
+    }
     uint8_t buf[RemoteNodeHandle::kMaxOutputBytes];
     size_t len = 0;
-    const char* p = hex;
+    const char* p = args;
     while (p[0] != '\0' && p[1] != '\0') {
       const int hi = hexVal_(p[0]);
       const int lo = hexVal_(p[1]);
@@ -449,12 +378,336 @@ class TracerShell {
       emitLine("error", "badHex", "writeoutputs: odd hex length");
       return VerbResult::kHandled;
     }
-    if (!node_->setOutputs(buf, len)) {
+    if (!node.setOutputs(buf, len)) {
       emitLine("error", "outOfRange", "writeoutputs: length beyond image");
       return VerbResult::kHandled;
     }
-    emitLine("writeoutputs");
+    emitNodeLine_(nowMs_, "writeoutputs", node);
     return VerbResult::kHandled;
+  }
+
+  /// The D5 mutation verbs. These exist so the runtime-mutation paths
+  /// can be driven against real wire timing: a mock transport cannot
+  /// reproduce an orphan across an actual TXEN drain, which is where the
+  /// interaction hazards live.
+  VerbResult handleNode_(const char* verb, const char* args) {
+    while (*args == ' ') {
+      ++args;
+    }
+    if (strncmp(args, "add ", 4) == 0) {
+      return handleNodeAdd_(args + 4);
+    }
+    if (strncmp(args, "delete ", 7) == 0) {
+      return handleNodeDelete_(args + 7);
+    }
+    if (strncmp(args, "geometry ", 9) == 0) {
+      return handleNodeGeometry_(args + 9);
+    }
+    if (strncmp(args, "enable ", 7) == 0) {
+      return withNode_(verb, args + 7, &TracerShell::actNodeEnable_);
+    }
+    if (strncmp(args, "disable ", 8) == 0) {
+      return withNode_(verb, args + 8, &TracerShell::actNodeDisable_);
+    }
+    emitLine("error", "unknownVerb", verb);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult handleNodeAdd_(const char* args) {
+    unsigned long ua = 0, in = 0, out = 0;
+    if (!parseUint_(args, ua) || !parseUint_(args, in) ||
+        !parseUint_(args, out) || ua > 127u) {
+      emitLine("error", "badVerb", "node add: want <ua> <in> <out>");
+      return VerbResult::kHandled;
+    }
+    const CMRIHost::ConfigStatus status = host_->addRemoteNode(
+        static_cast<uint8_t>(ua), static_cast<uint16_t>(in),
+        static_cast<uint16_t>(out));
+    if (status != CMRIHost::ConfigStatus::kOk) {
+      emitLine("error", "addFailed", configStatusString(status));
+      return VerbResult::kHandled;
+    }
+    emitNodeLine_(nowMs_, "node_add", *host_->node(static_cast<uint8_t>(ua)));
+    return VerbResult::kHandled;
+  }
+
+  VerbResult handleNodeDelete_(const char* args) {
+    unsigned long ua = 0;
+    if (!parseUint_(args, ua) || ua > 127u) {
+      emitLine("error", "badVerb", "node delete: want <ua>");
+      return VerbResult::kHandled;
+    }
+    const CMRIHost::ConfigStatus status =
+        host_->deleteRemoteNode(static_cast<uint8_t>(ua));
+    if (status != CMRIHost::ConfigStatus::kOk) {
+      emitLine("error", "deleteFailed", configStatusString(status));
+      return VerbResult::kHandled;
+    }
+    // Host scope, necessarily: there is no node left to attribute this
+    // to, which is the point of the verb. The line names the departed UA
+    // and carries the roster, so a reader sees both the event and the
+    // membership it produced.
+    emitHostLine_(nowMs_, "node_delete", static_cast<int>(ua), nullptr,
+                  nullptr, /*identity=*/false, /*config=*/false,
+                  /*roster=*/true);
+    return VerbResult::kHandled;
+  }
+
+  VerbResult handleNodeGeometry_(const char* args) {
+    unsigned long ua = 0, in = 0, out = 0;
+    if (!parseUint_(args, ua) || !parseUint_(args, in) ||
+        !parseUint_(args, out) || ua > 127u) {
+      emitLine("error", "badVerb", "node geometry: want <ua> <in> <out>");
+      return VerbResult::kHandled;
+    }
+    const CMRIHost::ConfigStatus status = host_->setRemoteNodeGeometry(
+        static_cast<uint8_t>(ua), static_cast<uint16_t>(in),
+        static_cast<uint16_t>(out));
+    if (status != CMRIHost::ConfigStatus::kOk) {
+      emitLine("error", "geometryFailed", configStatusString(status));
+      return VerbResult::kHandled;
+    }
+    emitNodeLine_(nowMs_, "node_geometry",
+                  *host_->node(static_cast<uint8_t>(ua)));
+    return VerbResult::kHandled;
+  }
+
+  // ------------------------------------------------ listeners
+
+  /// One line per engine event, stamped with the event's own tick time
+  /// and attributed to the event's own node — not to whatever node the
+  /// shell happened to be bound to, which is how every line on a
+  /// multi-node bench used to claim the same UA.
+  static void onHostEvent_(void* context, const CMRIHostEvent& event) {
+    TracerShell& self = *static_cast<TracerShell*>(context);
+    if (event.type == CMRIHostEventType::kPollBackoffChanged) {
+      self.emitBackoffTrace_(event);
+      return;
+    }
+    if (self.backoffTraceOnly_ || event.node == nullptr) {
+      return;
+    }
+    if (event.type == CMRIHostEventType::kNodeStateChanged) {
+      self.emitNodeLine_(event.nowMs, eventName(event.type), *event.node,
+                         /*identity=*/false, "previousState",
+                         stateName(event.previousState));
+      return;
+    }
+    self.emitNodeLine_(event.nowMs, eventName(event.type), *event.node);
+  }
+
+  static void onHostTrace_(void* context, bool transmit,
+                           const CMRIPacket& packet) {
+    TracerShell& self = *static_cast<TracerShell*>(context);
+    self.emitTrace_(transmit, packet);
+  }
+
+  /// The packet's own semantic UA, decoded back from the wire byte. A
+  /// frame whose address byte sits below the offset is not carrying a UA
+  /// at all, so report the raw byte rather than wrapping it into a
+  /// plausible-looking small number.
+  static unsigned uaOf_(const CMRIPacket& packet) {
+    return (packet.ua >= kUaOffset)
+               ? static_cast<unsigned>(packet.ua - kUaOffset)
+               : static_cast<unsigned>(packet.ua);
+  }
+
+  void emitTrace_(bool transmit, const CMRIPacket& packet) {
+    char bodyHex[2 * kMaxBody + 1] = "";
+    const size_t len = packet.length;
+    for (size_t i = 0; i < len; ++i) {
+      snprintf(&bodyHex[2 * i], 3, "%02X", packet.body[i]);
+    }
+    const char mtBuf[2] = {static_cast<char>(packet.mt), '\0'};
+    int written = appendf_(
+        0,
+        "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
+        "\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
+        ++seq_, nowMs_ - epochMs_, uaOf_(packet), transmit ? "tx" : "rx",
+        mtBuf, bodyHex);
+    finish_(written);
+  }
+
+  void emitBackoffTrace_(const CMRIHostEvent& event) {
+    if (event.node == nullptr) {
+      return;
+    }
+    const char* deadlineAction = "none";
+    if (event.pollBackoffReason == PollBackoffChangeReason::kAccept ||
+        event.pollBackoffReason == PollBackoffChangeReason::kGeometryMismatch) {
+      deadlineAction = "disarm";
+    } else if (event.pollBackoffReason == PollBackoffChangeReason::kInitial ||
+               event.pollBackoffReason == PollBackoffChangeReason::kMiss) {
+      deadlineAction = "arm";
+    }
+    int written = appendf_(
+        0,
+        "{\"seq\":%u,\"ts\":%u,\"event\":\"diag_backoff_trace\","
+        "\"role\":\"host\",\"ua\":%u,"
+        "\"old_backoff_ms\":%lu,\"new_backoff_ms\":%lu,\"reason\":\"%s\","
+        "\"deadline_action\":\"%s\",\"now_ms\":%lu",
+        ++seq_, event.nowMs - epochMs_, event.node->address(),
+        static_cast<unsigned long>(event.previousPollBackoffMs),
+        static_cast<unsigned long>(event.newPollBackoffMs),
+        pollBackoffChangeReasonString(event.pollBackoffReason),
+        deadlineAction, static_cast<unsigned long>(event.nowMs));
+    finish_(written);
+  }
+
+  // ------------------------------------------------ line emission
+  //
+  // Two scopes, because the fields have two different owners. Host scope
+  // carries what CMRIHost, the transport, and the decoder own; node
+  // scope carries what a RemoteNodeHandle owns. Mixing them into one
+  // flat line was only possible while the shell pretended there was
+  // exactly one node.
+
+  void emitHostLine_(uint32_t nowMs, const char* event, int ua,
+                     const char* extraKey, const char* extraValue,
+                     bool identity, bool config, bool roster) {
+    const CMRIHostStatistics& host = host_->statistics();
+    const LinkStatistics& link = transport_->stats();
+    const CMRIFrameDecoder::Statistics& decoder =
+        transport_->decoderStatistics();
+
+    int written = appendf_(
+        0, "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
+        ++seq_, nowMs - epochMs_, event);
+    if (identity) {
+      written = appendf_(written, ",\"image\":\"%s\",\"version\":\"%s\"",
+                         image_, version_);
+    }
+    if (ua != kNoUa) {
+      // Named, but no longer present: the distinction a reader needs
+      // after a delete.
+      written = appendf_(written, ",\"ua\":%d,\"present\":false", ua);
+    }
+    written = appendf_(
+        written,
+        ",\"nodes\":%u,\"polls\":%u,\"pollRetries\":%u,\"replies\":%u"
+        ",\"rejected\":%u,\"unsolicited\":%u,\"orphaned\":%u"
+        ",\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u",
+        static_cast<unsigned>(host_->nodeCount()), host.pollsSent,
+        host.pollSendRetries, host.repliesAccepted, host.repliesRejected,
+        host.unsolicitedPackets, host.orphanedExchanges, link.decodeErrors,
+        decoder.slowGaps, decoder.maxGapMs);
+    if (config) {
+      // The gap-observability band is config, not signal: the thresholds
+      // every counter above was collected against.
+      written = appendf_(written,
+                         ",\"slowGapLoMs\":%u,\"slowGapHiMs\":%u,"
+                         "\"interByteTimeoutMs\":%u",
+                         transport_->slowGapLoMs(), transport_->slowGapHiMs(),
+                         transport_->interByteTimeoutMs());
+    }
+    if (extraKey != nullptr && extraValue != nullptr) {
+      written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
+    }
+    if (roster) {
+      written = appendRoster_(written);
+      if (statusExtender_ != nullptr) {
+        char extBuf[256] = {0};
+        statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
+        written = appendf_(written, "%s", extBuf);
+      }
+    }
+    finish_(written);
+  }
+
+  void emitNodeLine_(uint32_t nowMs, const char* event,
+                     const RemoteNodeHandle& node, bool identity = false,
+                     const char* extraKey = nullptr,
+                     const char* extraValue = nullptr) {
+    char inputsHex[2 * RemoteNodeHandle::kMaxInputBytes + 1] = "";
+    const size_t inputLength = node.inputLength();
+    for (size_t i = 0; i < inputLength; ++i) {
+      snprintf(&inputsHex[2 * i], 3, "%02X", node.inputByte(i));
+    }
+    char outputsHex[2 * RemoteNodeHandle::kMaxOutputBytes + 1] = "";
+    const size_t outputLength = node.outputLength();
+    for (size_t i = 0; i < outputLength; ++i) {
+      snprintf(&outputsHex[2 * i], 3, "%02X", node.outputByte(i));
+    }
+    const RemoteNodeStatistics& stats = node.statistics();
+
+    int written = appendf_(
+        0, "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
+        ++seq_, nowMs - epochMs_, event);
+    if (identity) {
+      written = appendf_(written, ",\"image\":\"%s\",\"version\":\"%s\"",
+                         image_, version_);
+    }
+    written = appendf_(
+        written,
+        ",\"ua\":%u,\"present\":true,\"state\":\"%s\",\"enabled\":%s"
+        ",\"in\":%u,\"out\":%u"
+        ",\"exchanges\":%u,\"misses\":%u,\"errors\":%u,\"recoveries\":%u"
+        ",\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u"
+        ",\"inputs\":\"%s\",\"outputs\":\"%s\"",
+        node.address(), stateName(node.state()),
+        node.enabled() ? "true" : "false",
+        static_cast<unsigned>(inputLength),
+        static_cast<unsigned>(outputLength), stats.exchanges, stats.noReplies,
+        stats.errors, stats.recoveries, node.consecutiveMisses(),
+        stats.lastTurnaroundMs, inputsHex, outputsHex);
+    if (extraKey != nullptr && extraValue != nullptr) {
+      written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
+    }
+    finish_(written);
+  }
+
+  /// The live node table, keyed by UA. Until #91 lands per-mutation
+  /// events, this roster is the only evidence in the stream that
+  /// membership changed at all.
+  int appendRoster_(int written) {
+    written = appendf_(written, ",\"roster\":[");
+    bool first = true;
+    for (unsigned ua = 0; ua <= 127u; ++ua) {
+      const RemoteNodeHandle* node = host_->node(static_cast<uint8_t>(ua));
+      if (node == nullptr) {
+        continue;
+      }
+      written = appendf_(
+          written,
+          "%s{\"ua\":%u,\"in\":%u,\"out\":%u,\"state\":\"%s\",\"enabled\":%s}",
+          first ? "" : ",", node->address(),
+          static_cast<unsigned>(node->inputLength()),
+          static_cast<unsigned>(node->outputLength()),
+          stateName(node->state()), node->enabled() ? "true" : "false");
+      first = false;
+    }
+    return appendf_(written, "]");
+  }
+
+  // ------------------------------------------------ buffer plumbing
+
+  /// Append a formatted fragment, clamping to the buffer. Truncation is
+  /// guarded, not expected: kLineCapacity is sized for the worst case.
+  int appendf_(int written, const char* format, ...)
+      __attribute__((format(printf, 3, 4))) {
+    const int limit = static_cast<int>(sizeof(line_)) - 1;
+    if (written < 0 || written >= limit) {
+      return limit;
+    }
+    va_list args;
+    va_start(args, format);
+    const int added = vsnprintf(line_ + written, sizeof(line_) - written,
+                                format, args);
+    va_end(args);
+    if (added < 0) {
+      return written;
+    }
+    written += added;
+    return (written > limit) ? limit : written;
+  }
+
+  /// Close the object and hand the line to the writer.
+  void finish_(int written) {
+    if (written < 0) {
+      written = 0;
+    }
+    snprintf(line_ + written, sizeof(line_) - written, "}");
+    writeLine_(writeContext_, line_);
   }
 
   /// Hex digit value, or -1 for a non-hex character.
@@ -467,7 +720,6 @@ class TracerShell {
 
   CMRIHost* host_ = nullptr;
   SerialCMRITransport* transport_ = nullptr;
-  RemoteNodeHandle* node_ = nullptr;
   const char* image_ = "";
   const char* version_ = "";
   LineWriter writeLine_ = nullptr;
@@ -478,7 +730,6 @@ class TracerShell {
   uint32_t nowMs_ = 0;    ///< the main loop's injected clock
   uint32_t epochMs_ = 0;  ///< clock value at the epoch line; ts base
   uint32_t seq_ = 0;      ///< monotonic line sequence number
-  bool quiesced_ = false; ///< bus handed off; polling suspended
   bool backoffTraceOnly_ = false;
   char line_[kLineCapacity] = {0};
 };
