@@ -1,10 +1,24 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.2 (bump when any decision or contract in this document
-changes; `// VALIDATION:` tags in code cite this version — see
-`docs/agents/validation-comments.md`).
+Version: 1.3 (bump when any decision or contract in this document
+changes). A `// VALIDATION:` tag cites the version in which *that
+clause* last changed, not the current document version. Tags are
+therefore re-stamped per clause, as the clause changes and the
+implementing code follows — never wholesale, because a tag naming a
+version the code does not yet satisfy asserts something false. See
+`docs/agents/validation-comments.md`.
 Change log:
+- v1.3 (2026-08-25): D14 refinement (issue #80). Detection and
+  attribution are separated: layer says where a fault was observed,
+  attribution is a verdict about what it means, and the two do not
+  always collapse. Records the (Host assumption, Node assumption,
+  observation) tuple as the derivation behind attribution, with an
+  admission test for statically classifiable faults; establishes
+  determinism as the discriminator for framing facts; and rules link
+  integrity outside the conformance domain. Attribution stays
+  two-valued — no "environment" or "indeterminate" value. No behaviour
+  change, so only D14's own tags move to v1.3.
 - v1.2 (2026-08-24): declared-vs-observed node geometry (issue #80).
   D1 gains the `RemoteHost*` perspective mirror; D2's health claim is
   superseded by D16; D5 is rewritten as a lifecycle contract with its
@@ -436,6 +450,65 @@ combinations cannot be constructed and call sites do not chain field
 tests. The vocabulary is role-neutral and carries no poll terms, so
 both roles share it: the polled engine's `ReplyRejectReason` maps into
 it rather than being promoted to it.
+
+**Detection and attribution are different layers** (v1.3). Layer says
+where a fault was *observed*; attribution is a *verdict* about what it
+means. For most faults the two collapse, because the fault's name
+already encodes the verdict. Where they do not collapse, that is a
+property of the fault, not a gap in the taxonomy.
+
+Attribution is derived, not asserted. A fault is conceptually a tuple
+of (Host assumption, Node assumption, observation):
+- assumptions differ → **disagreement**
+- assumptions agree and the observation contradicts them → **defect**
+
+The tuple produces the attributions above rather than stipulating them.
+Geometry mismatch *means* the assumptions differed. An unexpected
+message type *means* they agreed and the content violated them. An
+unexpected address means the Node believes it holds a different address
+— and the residual ambiguity (another Node answering out of turn) is
+not ambiguity about the fault but about *whose* assumption set is being
+compared, which the Host cannot always know.
+
+Admission test for a new fault: it may be classified statically if and
+only if its name already encodes the assumption comparison. "Geometry
+mismatch" and "unexpected type" do. "Truncated" does not.
+
+**A framing fact is not yet a conformance fault.** A malformed frame is
+a faithful observation — the frame really was malformed — but it carries
+no causation, and at the framing rung a Node that stopped mid-frame is
+indistinguishable from a frame the wire corrupted. Attribution needs
+history, so it belongs one rung up: framing answers yes/no, analysis
+calls the shot.
+
+Determinism is what makes that analysis sound. Fielded implementations
+are deterministic products of a repeatable code path, not arbitrary
+packet sources, so:
+- malformed on every occurrence of a stimulus → a deterministic code
+  path → **defect**;
+- malformed only on particular content (bodies containing 2/3/16, the
+  DLE-escape trap) → a content-dependent code path → **defect**;
+- the Host's abort limit below the Node's legal dH/dL pacing (D13) →
+  the assumptions differ → **disagreement**, and a configuration check
+  rather than a statistical one;
+- malformed sporadically with no stimulus correlation → cannot be a
+  deterministic code path, therefore not a firmware defect.
+
+That last case is **not an unattributable conformance fault**. It is a
+link-integrity finding — cabling, termination, grounding — which has a
+real owner and an existing home in `LinkStatistics` and
+`CMRIFrameDecoder::Statistics`. Conformance attribution therefore stays
+two-valued: there is deliberately no "environment" or "indeterminate"
+attribution, because either would import another domain's verdict into
+this one and read as "not my problem".
+
+Consequence worth stating, because it keeps the classifier honest: when
+analysis promotes a framing fact into a *named* conformance fault, it
+has already excluded the disagreement and link-integrity readings, so
+the remaining verdict is a defect by construction. Named framing faults
+are therefore statically classifiable, and the admission test above is
+satisfied at the moment the name is created. The framing rung stays
+empty until an analysis layer exists to populate it.
 
 ### D15. Three state substrates, and an invariant
 Per-node state divides into three kinds, and conflating them is what

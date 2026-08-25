@@ -6,8 +6,8 @@
 // classifying it fails here rather than silently reading as kNone at a
 // call site.
 //
-// VALIDATION: Design v1.2 D14: faults carry a layer and an attribution,
-// derived rather than stored.
+// VALIDATION: Design v1.3 D14: faults carry a layer and an attribution,
+// derived rather than stored. Attribution is two-valued by design.
 
 #include <string.h>
 
@@ -145,10 +145,14 @@ static void test_layer_and_attribution_names_are_present(void) {
   }
 }
 
-// kFraming is defined but deliberately has no members yet: framing
-// faults resist the two-value attribution. This test records that as an
-// intentional state rather than an oversight -- when framing faults are
-// classified, this test is the one that must be updated.
+// kFraming is defined but deliberately has no members yet. Not because
+// framing faults resist attribution, but because attribution is not a
+// framing-layer question: a malformed frame is a faithful fact that
+// carries no causation, and separating a mid-frame stop from wire
+// corruption needs history. This test records that as an intentional
+// state rather than an oversight -- when an analysis layer starts
+// promoting framing facts to named faults, this test is the one that
+// must be updated.
 static void test_framing_layer_has_no_members_yet(void) {
   for (size_t i = 0; i < kFaultCount; ++i) {
     TEST_ASSERT_NOT_EQUAL_MESSAGE(
