@@ -118,16 +118,10 @@ void updateDisplayIncremental() {
   }
 }
 
-/// Two-letter state tag for the OLED line.
-const char* stateTag(CMRInet::RemoteNodeState s) {
-  switch (s) {
-    case CMRInet::RemoteNodeState::kOnline:        return "ON ";
-    case CMRInet::RemoteNodeState::kStale:         return "OLD";
-    case CMRInet::RemoteNodeState::kOffline:       return "OFF";
-    case CMRInet::RemoteNodeState::kUninitialized: return "---";
-  }
-  return "??";
-}
+// The OLED state tag comes from CMRInet::remoteNodeStateTag(), beside
+// the enum in RemoteNodeHandle.h -- one rendering, inside the library's
+// -Werror=switch gate, instead of a copy per sketch that rots the next
+// time the enum grows (#85, #93).
 
 // Build-time knobs, overridable from a CLI build — e.g. the wrong-UA
 // negative test:
@@ -732,7 +726,8 @@ void drawHostStatus() {
   display.setCursor(60, 4);
   display.print(header);
 
-  const char* tag = (node != nullptr) ? stateTag(node->state()) : "---";
+  const char* tag =
+      (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr)
       ? node->statistics().lastTurnaroundMs : 0;
   char row[24];

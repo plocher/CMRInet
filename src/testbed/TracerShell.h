@@ -63,16 +63,14 @@ namespace CMRInet {
 namespace testbed {
 
 /// Telemetry spelling of a node health state.
+///
+/// Delegates to the library rendering rather than keeping a second
+/// switch. Three copies of this mapping existed on one commit and two
+/// of them silently rendered "??" for kMisconfigured and kDegraded; the
+/// point of the shared helper is that there is now exactly one, sitting
+/// inside -Werror=switch (#85, #93).
 inline const char* stateName(RemoteNodeState state) {
-  switch (state) {
-    case RemoteNodeState::kUninitialized: return "UNINITIALIZED";
-    case RemoteNodeState::kOnline: return "ONLINE";
-    case RemoteNodeState::kStale: return "STALE";
-    case RemoteNodeState::kOffline: return "OFFLINE";
-    case RemoteNodeState::kMisconfigured: return "MISCONFIGURED";
-    case RemoteNodeState::kDegraded: return "DEGRADED";
-  }
-  return "UNKNOWN";
+  return remoteNodeStateString(state);
 }
 
 /// Telemetry spelling of a host engine event.
@@ -234,11 +232,13 @@ class TracerShell {
   static constexpr size_t kRosterEntryBytes = 80;
 
   // Whichever line is longest bounds the buffer. A node line carries
-  // both image hex strings; a host line carries the roster. No line
-  // carries both, so this is generous rather than tight.
+  // both image hex strings plus the health block (three axis names,
+  // observed geometry, and the last-fault detail, ~200 bytes); a host
+  // line carries the roster. No line carries both, so this is generous
+  // rather than tight.
   static constexpr size_t kLineCapacity =
       2 * CMRINET_HOST_MAX_INPUT_BYTES +
-      2 * CMRINET_HOST_MAX_OUTPUT_BYTES + 640 +
+      2 * CMRINET_HOST_MAX_OUTPUT_BYTES + 896 +
       CMRINET_HOST_MAX_NODES * kRosterEntryBytes;
 
   /// A verb action, run once its UA has resolved to a live node.
@@ -630,6 +630,20 @@ class TracerShell {
     }
     const RemoteNodeStatistics& stats = node.statistics();
 
+    // Observed geometry renders as JSON null when nothing has been
+    // demonstrated yet. Its absence is meaningful, and 0 is a legal
+    // geometry, so a magic number here would be misread as a byte count
+    // (D14 L1).
+    char observedIn[12];
+    if (node.observedInputBytes() ==
+        RemoteNodeHandle::kGeometryNeverObserved) {
+      snprintf(observedIn, sizeof(observedIn), "null");
+    } else {
+      snprintf(observedIn, sizeof(observedIn), "%u",
+               static_cast<unsigned>(node.observedInputBytes()));
+    }
+    const ConformanceFaultRecord& fault = node.lastConformanceFault();
+
     int written = appendf_(
         0, "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
         ++seq_, nowMs - epochMs_, event);
@@ -650,6 +664,38 @@ class TracerShell {
         static_cast<unsigned>(outputLength), stats.exchanges, stats.noReplies,
         stats.errors, stats.recoveries, node.consecutiveMisses(),
         stats.lastTurnaroundMs, inputsHex, outputsHex);
+
+    // The three stored axes, not just the scalar projection. `state` is
+    // lossy by construction -- it answers "what is the single worst
+    // thing about this node" -- so a reader that only ever saw the
+    // projection could not tell DEGRADED-because-geometry from any
+    // other fault, which is half of why #80 stayed invisible for so
+    // long.
+    // VALIDATION: Design v1.3 D16: liveness, image validity, and
+    // conformance are separately stored axes; the scalar state is a
+    // derived projection over them.
+    written = appendf_(
+        written,
+        ",\"liveness\":\"%s\",\"imageState\":\"%s\",\"conformance\":\"%s\""
+        ",\"observedIn\":%s",
+        remoteNodeLivenessString(node.liveness()),
+        remoteNodeImageStateString(node.imageState()),
+        remoteNodeConformanceString(node.conformance()), observedIn);
+
+    // Last-fault detail. Layer and attribution are rendered from the
+    // classifiers rather than stored, so an analyzer gets the verdict
+    // ("go fix configuration" vs "go fix firmware") without duplicating
+    // the taxonomy (D14).
+    written = appendf_(
+        written,
+        ",\"fault\":{\"name\":\"%s\",\"layer\":\"%s\",\"attribution\":\"%s\""
+        ",\"expected\":%u,\"observed\":%u,\"atMs\":%lu}",
+        conformanceFaultString(fault.fault),
+        conformanceLayerString(layerOf(fault.fault)),
+        faultAttributionString(attributionOf(fault.fault)),
+        static_cast<unsigned>(fault.expected),
+        static_cast<unsigned>(fault.observed),
+        static_cast<unsigned long>(fault.atMs));
     if (extraKey != nullptr && extraValue != nullptr) {
       written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
     }
