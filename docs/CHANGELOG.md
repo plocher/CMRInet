@@ -48,6 +48,20 @@ High-level changes, newest first.
     delete-while-in-flight asserting no attribution anywhere including
     onto the slot's new occupant, slot reuse proving a fresh node is not
     ONLINE before its first reply, and fill-to-capacity -> delete -> add.
+- `onEvent()` / `onTrace()` are now legal at any time (issue #86): they
+  previously refused registration after `begin()`, **silently**. That was
+  coherent only while `begin()` locked the entire configuration; once D5
+  unlocked the node table it left listener registration as the sole
+  mutator that could fail without reporting anything, which is precisely
+  the failure surface D5 forbids. Unlocking dissolves the problem rather
+  than inventing a status for it, and is strictly widening — registering
+  during configuration still works, so no caller changes. Swapping a
+  listener between ticks is safe: the engine reads the pointer only
+  inside `tick()`, and listeners already may not call back into the
+  engine. `test_listener_registration_locked_after_begin` is replaced by
+  `test_listener_registration_is_legal_at_runtime`, which proves a
+  listener attached to a running engine receives events and that clearing
+  it at runtime stops them.
 
 ### Changed
 - Per-node state model split by substrate (issue #84, Design v1.3 D15/D16):

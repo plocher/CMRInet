@@ -788,19 +788,44 @@ static void test_trace_listener_sees_init_and_transmit(void) {
   TEST_ASSERT_EQUAL_HEX8('T', log.lastTxMt);  // last TX before P is T
 }
 
-static void test_listener_registration_locked_after_begin(void) {
+// Registration is legal at any time. It used to be refused after
+// begin(), silently, which was coherent only while begin() locked the
+// whole configuration -- and once D5 unlocked the node table it left
+// registration as the sole mutator that failed without saying so.
+// Unlocking it dissolves the problem rather than inventing a status for
+// it, and is strictly widening: registering before begin() still works.
+static void test_listener_registration_is_legal_at_runtime(void) {
   Rig rig;
+  rig.host.begin();
+  uint32_t base = primeToPoll(rig);
+
+  // Attach only after the engine is already running.
   ListenerLog log;
-  uint32_t base = primeToPoll(rig);  // begin() called inside primeToPoll
-  rig.host.onEvent(recordEvent, &log);  // ignored: configuration locked
+  rig.host.onEvent(recordEvent, &log);
   rig.host.onTrace(recordTrace, &log);
+
   rig.transport.onSendReplyPacket(
       5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
-  runUntil(rig.host, base, base + 2);
+  runUntil(rig.host, base, base + 20);
+
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
-  TEST_ASSERT_EQUAL_INT(0, log.accepted);
-  TEST_ASSERT_EQUAL_INT(0, log.txTraces);
-  TEST_ASSERT_EQUAL_INT(0, log.rxTraces);
+  TEST_ASSERT_TRUE_MESSAGE(log.accepted >= 1,
+                           "a listener registered at runtime saw no events");
+  TEST_ASSERT_TRUE_MESSAGE(log.txTraces >= 1,
+                           "a trace listener registered at runtime saw no TX");
+  TEST_ASSERT_TRUE_MESSAGE(log.rxTraces >= 1,
+                           "a trace listener registered at runtime saw no RX");
+
+  // And clearing at runtime works the same way.
+  rig.host.onEvent(nullptr);
+  rig.host.onTrace(nullptr);
+  const int acceptedAfterClear = log.accepted;
+  const int tracesAfterClear = log.txTraces;
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, base + 21, base + 60);
+  TEST_ASSERT_EQUAL_INT(acceptedAfterClear, log.accepted);
+  TEST_ASSERT_EQUAL_INT(tracesAfterClear, log.txTraces);
 }
 
 static void test_null_listeners_are_harmless(void) {
@@ -1535,7 +1560,7 @@ int main(void) {
   RUN_TEST(test_event_listener_sees_rejected_reply);
   RUN_TEST(test_trace_listener_sees_both_directions);
   RUN_TEST(test_trace_listener_sees_init_and_transmit);
-  RUN_TEST(test_listener_registration_locked_after_begin);
+  RUN_TEST(test_listener_registration_is_legal_at_runtime);
   RUN_TEST(test_null_listeners_are_harmless);
   RUN_TEST(test_add_remote_node_validation);
   RUN_TEST(test_rejected_add_does_not_poison_later_adds);

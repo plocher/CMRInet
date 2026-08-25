@@ -358,25 +358,32 @@ class CMRIHost {
                                      uint16_t inputBytes,
                                      uint16_t outputBytes);
 
-  /// Register the optional event listener (nullptr to clear). Part of
-  /// the configuration phase: calls after begin() are ignored.
-  // VALIDATION: Design v1.2 D5: begin() is the config->running
-  // transition; listener registration closes at that point.
+  /// Register the optional event listener (nullptr to clear). Legal at
+  /// any time, before or after begin().
+  ///
+  /// This used to be refused after begin(), silently, back when begin()
+  /// locked the whole configuration. D5 retired that doctrine for the
+  /// node table, and keeping the listener half of it would have left
+  /// registration as the one mutator that fails without saying so --
+  /// exactly the failure surface D5 forbids. There is nothing to report
+  /// now: the call always succeeds, so it returns void honestly rather
+  /// than by omission.
+  ///
+  /// Safe to swap between ticks: the engine reads the pointer only
+  /// inside tick(), and listeners are forbidden from calling back into
+  /// the engine, so there is no reentrancy to protect against.
+  // VALIDATION: Design v1.2 D5: begin() marks the config->running
+  // transition and locks nothing.
+  // VALIDATION: Design v1.1 D7: observability is listener registration;
+  // a null listener costs one branch.
   void onEvent(CMRIHostEventListener listener, void* context = nullptr) {
-    if (began_) {
-      return;
-    }
     eventListener_ = listener;
     eventContext_ = context;
   }
 
   /// Register the optional TX/RX packet trace listener (nullptr to
-  /// clear). Part of the configuration phase: calls after begin() are
-  /// ignored.
+  /// clear). Legal at any time; see onEvent() above.
   void onTrace(CMRIHostTraceListener listener, void* context = nullptr) {
-    if (began_) {
-      return;
-    }
     traceListener_ = listener;
     traceContext_ = context;
   }
