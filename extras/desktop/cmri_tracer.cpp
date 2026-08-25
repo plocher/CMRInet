@@ -88,9 +88,14 @@ void usage(const char* argv0) {
           "          [--slow-gap-lo-ms N] [--slow-gap-hi-ms N]\n"
           "          [--conformance-strict]\n"
           "          [--exchanges N] [--duration-s N]\n"
-          "verbs on stdin: quiesce | resume | status |\n"
-          "                 setbit <n> <0|1> | writeoutputs <hex> |\n"
-          "                 forcetx | quit\n",
+          "verbs on stdin (every node verb names its UA):\n"
+          "  status | status <ua>\n"
+          "  quiesce <ua> | resume <ua> | forcetx <ua>\n"
+          "  setbit <ua> <bit> <0|1> | writeoutputs <ua> <hex>\n"
+          "  node add <ua> <in> <out> | node delete <ua>\n"
+          "  node geometry <ua> <in> <out>\n"
+          "  node enable <ua> | node disable <ua>\n"
+          "  quit\n",
           argv0);
 }
 
@@ -247,11 +252,8 @@ int main(int argc, char** argv) {
             CMRInet::configStatusString(configStatus));
     return 2;
   }
-  CMRInet::RemoteNodeHandle* node = host.node(opt.address);
-
   CMRInet::testbed::TracerShell engine;
-  engine.bind(host, transport, *node, kImage, kVersion,
-              writeStdoutLine, nullptr);
+  engine.bind(host, transport, kImage, kVersion, writeStdoutLine, nullptr);
 
   host.begin();
   if (!port.isOpen()) {
@@ -281,6 +283,14 @@ int main(int argc, char** argv) {
       }
     }
 
+    // Resolved every pass rather than cached: `node delete <ua>` is a
+    // verb now, so the handle can legitimately go away underneath us
+    // (Design v1.2 D5). A deleted node ends the run -- there is nothing
+    // left to count exchanges against.
+    const CMRInet::RemoteNodeHandle* node = host.node(opt.address);
+    if (node == nullptr) {
+      break;
+    }
     const CMRInet::RemoteNodeStatistics& s = node->statistics();
     if (opt.exchanges != 0 &&
         s.exchanges + s.noReplies + s.errors >= opt.exchanges) {

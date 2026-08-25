@@ -79,23 +79,31 @@ class FakePort : public CMRISerialPort {
 
 // ------------------------------------------------------------------- rig
 
-/// One shell + host + transport + node, capturing every telemetry line.
+/// One shell + host + transport, capturing every telemetry line.
+///
+/// The rig holds no node either: `node()` resolves it, so a test that
+/// deletes UA 5 cannot accidentally keep asserting through a stale
+/// handle (Design v1.2 D5).
 struct TracerRig {
   FakePort port;
   SerialCMRITransport transport;
   CMRIHost host;
-  RemoteNodeHandle* node = nullptr;
   TracerShell shell;
   std::vector<std::string> lines;
 
   explicit TracerRig(uint16_t inBytes = 2, uint16_t outBytes = 3)
       : transport(port), host(transport, fastConfig()) {
     host.addRemoteNode(5, inBytes, outBytes);
-    node = host.node(5);
-    TEST_ASSERT_NOT_NULL_MESSAGE(node, "addRemoteNode failed in rig");
-    shell.bind(host, transport, *node, "test", "0.0", &TracerRig::writeLine_,
-              this);
+    TEST_ASSERT_NOT_NULL_MESSAGE(host.node(5), "addRemoteNode failed in rig");
+    shell.bind(host, transport, "test", "0.0", &TracerRig::writeLine_, this);
     host.begin();
+  }
+
+  /// The rig's node, at the point of use. Asserts it is still there.
+  RemoteNodeHandle* node() {
+    RemoteNodeHandle* n = host.node(5);
+    TEST_ASSERT_NOT_NULL_MESSAGE(n, "node 5 is gone");
+    return n;
   }
 
   /// Tick one millisecond: refresh the shell clock, then drive the host.
@@ -180,7 +188,7 @@ static void test_trace_emits_tx_init_with_C_body(void) {
 static void test_trace_emits_tx_transmit_with_output_image(void) {
   TracerRig rig;
   const uint8_t image[] = {0x01, 0x02, 0xA0};
-  TEST_ASSERT_TRUE(rig.node->setOutputs(image, 3));
+  TEST_ASSERT_TRUE(rig.node()->setOutputs(image, 3));
   rig.run(0, 3);  // I@0; the wait->idle step costs a tick, so T sends @3
   const std::string* line =
       findContaining(rig.lines, "\"mt\":\"T\",\"body\":\"0102A0\"");
@@ -261,8 +269,8 @@ static void test_event_line_omits_image_and_version(void) {
 static void test_verb_setbit_mutates_output_and_marks_dirty(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("setbit 0 1"));
-  TEST_ASSERT_TRUE(rig.node->outputBit(0));
+                    rig.verb("setbit 5 0 1"));
+  TEST_ASSERT_TRUE(rig.node()->outputBit(0));
   rig.run(0, 3);  // I at 0, T (dirty) at 2
   const std::string* line =
       findContaining(rig.lines, "\"mt\":\"T\",\"body\":\"");
@@ -276,8 +284,8 @@ static void test_verb_setbit_mutates_output_and_marks_dirty(void) {
 static void test_verb_setbit_bad_value_emits_error(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("setbit 0 2"));
-  TEST_ASSERT_FALSE(rig.node->outputBit(0));
+                    rig.verb("setbit 5 0 2"));
+  TEST_ASSERT_FALSE(rig.node()->outputBit(0));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "bad value did not emit an error line");
 }
@@ -286,8 +294,8 @@ static void test_verb_setbit_bad_value_emits_error(void) {
 static void test_verb_setbit_out_of_range_emits_error(void) {
   TracerRig rig;  // outputBytes = 3 -> 24 bits
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("setbit 100 1"));
-  TEST_ASSERT_FALSE(rig.node->outputBit(100));
+                    rig.verb("setbit 5 100 1"));
+  TEST_ASSERT_FALSE(rig.node()->outputBit(100));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "out-of-range bit did not emit an error line");
 }
@@ -299,10 +307,10 @@ static void test_verb_setbit_out_of_range_emits_error(void) {
 static void test_verb_writeoutputs_mutates_image(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("writeoutputs 0102A0"));
-  TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->outputByte(0));
-  TEST_ASSERT_EQUAL_HEX8(0x02, rig.node->outputByte(1));
-  TEST_ASSERT_EQUAL_HEX8(0xA0, rig.node->outputByte(2));
+                    rig.verb("writeoutputs 5 0102A0"));
+  TEST_ASSERT_EQUAL_HEX8(0x01, rig.node()->outputByte(0));
+  TEST_ASSERT_EQUAL_HEX8(0x02, rig.node()->outputByte(1));
+  TEST_ASSERT_EQUAL_HEX8(0xA0, rig.node()->outputByte(2));
   rig.run(0, 3);
   const std::string* line =
       findContaining(rig.lines, "\"mt\":\"T\",\"body\":\"0102A0\"");
@@ -314,8 +322,8 @@ static void test_verb_writeoutputs_mutates_image(void) {
 static void test_verb_writeoutputs_bad_hex_emits_error(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("writeoutputs 0G12"));
-  TEST_ASSERT_EQUAL_HEX8(0x00, rig.node->outputByte(0));
+                    rig.verb("writeoutputs 5 0G12"));
+  TEST_ASSERT_EQUAL_HEX8(0x00, rig.node()->outputByte(0));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "bad hex did not emit an error line");
 }
@@ -324,7 +332,7 @@ static void test_verb_writeoutputs_bad_hex_emits_error(void) {
 static void test_verb_writeoutputs_odd_length_emits_error(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("writeoutputs 010"));
+                    rig.verb("writeoutputs 5 010"));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "odd hex length did not emit an error line");
 }
@@ -338,7 +346,7 @@ static void test_verb_forcetx_remarks_dirty(void) {
   rig.run(0, 5);  // I, T (empty image), P outstanding; dirty cleared
   TEST_ASSERT_EQUAL_INT(1, countContaining(rig.lines, "\"mt\":\"T\""));
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("forcetx"));
+                    rig.verb("forcetx 5"));
   rig.tick(6);  // P gate expires (miss) -> next slot sends the forced T
   TEST_ASSERT_EQUAL_INT_MESSAGE(
       2, countContaining(rig.lines, "\"mt\":\"T\""),
@@ -347,19 +355,169 @@ static void test_verb_forcetx_remarks_dirty(void) {
 
 // ----------------------------------------------- telemetry outputs hex field
 
-// The main telemetry line carries the output image as hex alongside the
+// A per-node status line carries the output image as hex alongside the
 // inputs, so the bench sees what the Host is commanding.
-static void test_telemetry_line_carries_outputs_hex(void) {
+static void test_node_status_line_carries_outputs_hex(void) {
   TracerRig rig;
-  rig.verb("setbit 0 1");
-  rig.verb("status");
+  rig.verb("setbit 5 0 1");
+  rig.verb("status 5");
   const std::string& line = rig.lines.back();
   TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"event\":\"status\""),
                            "status did not emit a status line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"ua\":5"),
+                           "node status line missing its UA");
   TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"outputs\":\"010000\""),
                            "status line missing/incorrect outputs hex");
   TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"inputs\":\"0000\""),
                            "status line missing/incorrect inputs hex");
+}
+
+// The two status scopes carry different fields, because the fields have
+// different owners. Host scope has no "the" node to report an image for;
+// bare `status` used to answer for whatever node happened to be bound at
+// startup, which is only meaningful with exactly one node.
+static void test_host_status_reports_the_table_not_one_node(void) {
+  TracerRig rig;
+  rig.verb("status");
+  const std::string& line = rig.lines.back();
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"nodes\":1"),
+                           "host status did not report the live node count");
+  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"orphaned\":0"),
+                           "host status did not surface orphanedExchanges");
+  TEST_ASSERT_FALSE_MESSAGE(contains(line, "\"inputs\":"),
+                            "host status leaked a per-node image");
+  // The roster is what makes membership legible, and it speaks the UA.
+  TEST_ASSERT_TRUE_MESSAGE(
+      contains(line, "\"roster\":[{\"ua\":5,"),
+      "host status roster missing or not keyed by the UA");
+}
+
+// The wire byte never leaves the wire. UA 5 rides as 70 on the medium;
+// no reader should ever see 70.
+static void test_telemetry_speaks_the_ua_not_the_wire_byte(void) {
+  TracerRig rig;
+  rig.tick(0);  // emits the I trace
+  const std::string* line = findContaining(rig.lines, "\"event\":\"trace\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(line, "no trace line emitted");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"ua\":5,"),
+                           "trace line does not report the semantic UA");
+  char wire[16];
+  snprintf(wire, sizeof(wire), "\"ua\":%u", 5u + kUaOffset);
+  TEST_ASSERT_FALSE_MESSAGE(contains(*line, wire),
+                            "trace line leaked the wire byte as the UA");
+  TEST_ASSERT_FALSE_MESSAGE(contains(*line, "\"address\":"),
+                            "trace line still carries the retired address key");
+}
+
+// --------------------------------------------- runtime mutation verbs (D5)
+
+// A verb naming a UA with no live node must say so. After runtime delete
+// this is an ordinary outcome, and a verb that silently did nothing would
+// misreport its own failure -- the #82 shape.
+static void test_verb_on_unknown_ua_reports_no_such_node(void) {
+  TracerRig rig;
+  const char* verbs[] = {"status 9", "quiesce 9", "resume 9", "forcetx 9",
+                         "setbit 9 0 1", "writeoutputs 9 01",
+                         "node enable 9", "node disable 9"};
+  for (const char* v : verbs) {
+    rig.lines.clear();
+    TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled, rig.verb(v));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, static_cast<int>(rig.lines.size()), v);
+    TEST_ASSERT_TRUE_MESSAGE(
+        contains(rig.lines.back(), "\"noSuchNode\""), v);
+  }
+}
+
+// node add / node delete move the table at runtime, and the roster is
+// the evidence.
+static void test_node_add_and_delete_verbs_move_the_roster(void) {
+  TracerRig rig;
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+                    rig.verb("node add 9 1 2"));
+  TEST_ASSERT_NOT_NULL(rig.host.node(9));
+  TEST_ASSERT_TRUE_MESSAGE(
+      contains(rig.lines.back(), "\"event\":\"node_add\""),
+      "node add did not report itself");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"ua\":9"),
+                           "node add did not name the UA");
+
+  rig.verb("status");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"nodes\":2"),
+                           "roster did not grow");
+
+  // Adding the same address again is a reported rejection, not a no-op.
+  rig.lines.clear();
+  rig.verb("node add 9 1 2");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"addFailed\""),
+                           "duplicate add did not report a failure");
+
+  rig.lines.clear();
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+                    rig.verb("node delete 9"));
+  TEST_ASSERT_NULL(rig.host.node(9));
+  const std::string& gone = rig.lines.back();
+  TEST_ASSERT_TRUE_MESSAGE(contains(gone, "\"event\":\"node_delete\""),
+                           "node delete did not report itself");
+  // Named but absent: the distinction a reader needs after a delete.
+  TEST_ASSERT_TRUE_MESSAGE(contains(gone, "\"ua\":9"),
+                           "node delete did not name the departed UA");
+  TEST_ASSERT_TRUE_MESSAGE(contains(gone, "\"present\":false"),
+                           "node delete did not mark the UA absent");
+  TEST_ASSERT_TRUE_MESSAGE(contains(gone, "\"nodes\":1"),
+                           "roster did not shrink");
+
+  // Deleting it twice is a reported failure.
+  rig.lines.clear();
+  rig.verb("node delete 9");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"deleteFailed\""),
+                           "a second delete did not report a failure");
+}
+
+// node geometry re-announces NI/NO, which is the whole reason it forces
+// a re-init.
+static void test_node_geometry_verb_reannounces_ni_no(void) {
+  TracerRig rig;
+  rig.run(0, 6);  // I, T, P for the original 2/3 geometry
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+                    rig.verb("node geometry 5 4 1"));
+  TEST_ASSERT_EQUAL_size_t(4, rig.node()->inputLength());
+  TEST_ASSERT_EQUAL_size_t(1, rig.node()->outputLength());
+
+  rig.lines.clear();
+  rig.run(7, 20);
+  // The new I body carries NI=04 NO=01 in the CPNODE 'C' dialect.
+  const std::string* line =
+      findContaining(rig.lines, "\"body\":\"43000000000401FFFFFFFFFFFF\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(
+      line, "geometry change did not re-announce the new NI/NO in an I");
+}
+
+// A mutation under live traffic orphans the outstanding exchange, and the
+// host-scope counter is where a bench operator can see it happened. A
+// nonzero value is the signal that mutation is happening mid-traffic --
+// precisely when the subtle failures occur.
+static void test_host_status_surfaces_an_orphaned_exchange(void) {
+  TracerRig rig;
+  // Tick until the P is actually on the wire rather than assuming which
+  // tick sends it: the schedule's step count is an implementation
+  // detail, and guessing it is how this test first went green for the
+  // wrong reason.
+  bool polled = false;
+  for (uint32_t t = 0; t <= 50 && !polled; ++t) {
+    rig.tick(t);
+    polled = (findContaining(rig.lines, "\"mt\":\"P\"") != nullptr);
+  }
+  TEST_ASSERT_TRUE_MESSAGE(polled, "node 5 was never polled");
+
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+                    rig.verb("node delete 5"));
+  rig.verb("status");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"orphaned\":1"),
+                           "an orphaned exchange was invisible in status");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"nodes\":0"),
+                           "the table should now be empty");
+  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"roster\":[]"),
+                           "an empty table should render an empty roster");
 }
 
 // Identity metadata stays available on status lines for tooling that
@@ -420,7 +578,13 @@ int main(void) {
   RUN_TEST(test_verb_writeoutputs_bad_hex_emits_error);
   RUN_TEST(test_verb_writeoutputs_odd_length_emits_error);
   RUN_TEST(test_verb_forcetx_remarks_dirty);
-  RUN_TEST(test_telemetry_line_carries_outputs_hex);
+  RUN_TEST(test_node_status_line_carries_outputs_hex);
+  RUN_TEST(test_host_status_reports_the_table_not_one_node);
+  RUN_TEST(test_telemetry_speaks_the_ua_not_the_wire_byte);
+  RUN_TEST(test_verb_on_unknown_ua_reports_no_such_node);
+  RUN_TEST(test_node_add_and_delete_verbs_move_the_roster);
+  RUN_TEST(test_node_geometry_verb_reannounces_ni_no);
+  RUN_TEST(test_host_status_surfaces_an_orphaned_exchange);
   RUN_TEST(test_status_line_includes_image_and_version);
   RUN_TEST(test_epoch_line_includes_image_and_version);
   RUN_TEST(test_unknown_verb_emits_error);
