@@ -139,8 +139,10 @@ enum class PollBackoffChangeReason : uint8_t {
 };
 
 /// One engine event. `node` is the node of the exchange or state
-/// change; it outlives the callback (nodes are never deallocated).
-/// `previousState`/`newState` are meaningful only for
+/// change. The storage outlives the callback -- slots are never
+/// deallocated -- but a listener must not retain the pointer past the
+/// call: the node it names can be deleted, and its slot reused by a
+/// different device. `previousState`/`newState` are meaningful only for
 /// kNodeStateChanged.
 struct CMRIHostEvent {
   CMRIHostEventType type = CMRIHostEventType::kReplyAccepted;
@@ -180,22 +182,32 @@ struct CMRIHostStatistics {
   uint32_t repliesAccepted = 0;    ///< R packets committed to a node image
   uint32_t repliesRejected = 0;    ///< packets discarded while a poll was outstanding
   uint32_t unsolicitedPackets = 0; ///< packets received with no poll outstanding
+
+  /// Exchanges whose node was mutated away mid-flight. The frame
+  /// completed, any reply was discarded, and nothing was attributed to
+  /// any node -- so the packet ledger would otherwise lose the frame
+  /// silently. Host-wide by construction: an orphan has no node to
+  /// charge it to.
+  // VALIDATION: Design v1.2 D5: a mutation of the outstanding
+  // exchange's node orphans that exchange rather than aborting a send
+  // already on the wire (D13).
+  uint32_t orphanedExchanges = 0;
 };
 
 /// The polled-strategy Host engine.
 ///
 /// Lifecycle: construct with a transport, add nodes, then begin().
-/// After begin(), the engine allocates nothing.
+/// begin() moves the engine from configuration to running; it does not
+/// lock the node table. After begin(), the engine allocates nothing.
 // VALIDATION: Design v1.2 D7: the embedded profile allocates only
 // during setup and never frees.
 // VALIDATION: Design v1.2 D8: table *capacity* is the compile-time knob
-// CMRINET_HOST_MAX_NODES. Every add is checked against it, so the
-// invariant is nodeCount_ <= kMaxNodes, not a frozen membership list.
-// VALIDATION: Design v1.1 D5: table *membership* is still frozen at
-// begin(). Runtime add/delete/geometry-change per Design v1.2 D5 is not
-// implemented yet, so this tag deliberately still cites v1.1. The two
-// are independent: once delete lands, deleting from a full table frees
-// a slot and a subsequent add must succeed.
+// CMRINET_HOST_MAX_NODES.
+// VALIDATION: Design v1.2 D5: table *membership* is mutable at runtime
+// within that ceiling -- add, delete, and geometry change are all legal
+// after begin(). Capacity and membership are independent: an add
+// searches for a free slot, so deleting from a full table frees one and
+// the next add succeeds.
 ///
 /// Runtime: call tick(nowMs) from loop(). The engine advances only
 /// inside tick() and never blocks, sleeps, or busy-waits.
@@ -242,10 +254,10 @@ class CMRIHost {
   /// verb-based C&C shell (Design v1.2 D5).
   enum class ConfigStatus : uint8_t {
     kOk,
-    kAlreadyBegun,        ///< the time for config changes has ended
-    kTooManyNodes,        ///< the node table is full (CMRINET_HOST_MAX_NODES)
+    kTooManyNodes,        ///< every slot is occupied (CMRINET_HOST_MAX_NODES)
     kAddressOutOfRange,   ///< address > 127
-    kAddressInUse,        ///< address already added by an earlier call
+    kAddressInUse,        ///< a live node already holds that address
+    kNoSuchNode,          ///< no live node holds that address
     kInputBytesTooLarge,  ///< inputBytes > RemoteNodeHandle::kMaxInputBytes
     kOutputBytesTooLarge, ///< outputBytes > RemoteNodeHandle::kMaxOutputBytes
   };
@@ -259,10 +271,20 @@ class CMRIHost {
   /// another.
   ///
   /// `address` is the node address (0..127). The wire UA is
-  /// address + 65. A call is rejected when it comes after begin(),
-  /// when the node table is full, when the address is out of range
-  /// or already added, or when config.inputBytes exceeds
+  /// address + 65. Legal before and after begin(). A call is rejected
+  /// when no slot is free, when the address is out of range or already
+  /// held by a live node, or when config.inputBytes exceeds
   /// RemoteNodeHandle::kMaxInputBytes.
+  ///
+  /// The add takes the first free slot -- a cleaned tombstone, or a
+  /// slot never used. Capacity is therefore slot availability, not a
+  /// high-water count, so deleting from a full table frees a slot and
+  /// the next add succeeds.
+  ///
+  /// A reused slot starts pristine across all three substrates,
+  /// statistics included: delete ended the previous subject, and the
+  /// new occupant is a different logical device whose counters begin at
+  /// zero. Nothing was reset mid-life, so monotonicity is intact.
   ///
   /// Callers registering several nodes decide for themselves how to
   /// treat a partial failure; the engine holds no opinion and no
@@ -271,6 +293,9 @@ class CMRIHost {
   // flags addresses above 64, which the cpNode family cannot use.
   // VALIDATION: Design v1.2 D5: every mutator reports its own outcome
   // immediately; no sticky, chain-poisoning status.
+  // VALIDATION: Design v1.2 D5: slot reuse resets all three substrates
+  // (D15) -- freshness especially, or a newly added node reports data
+  // it never sent.
   ConfigStatus addRemoteNode(uint8_t address,
                              const RemoteNodeConfig& config,
                              const RemoteNodePolicy& policy);
@@ -286,6 +311,52 @@ class CMRIHost {
   ConfigStatus addRemoteNode(uint8_t address,
                              uint16_t inputBytes,
                              uint16_t outputBytes);
+
+  /// Delete the node at `address`. Returns kNoSuchNode when no live node
+  /// holds it. Legal before and after begin().
+  ///
+  /// The slot is tombstoned and cleaned, never compacted: no surviving
+  /// handle relocates. Cleaning at delete rather than at reuse is what
+  /// makes address() a working self-check -- a handle cached across the
+  /// delete reports 0, not the address it used to serve.
+  ///
+  /// Deleting the node of the outstanding exchange is legal. If the
+  /// packet has not yet been accepted by the transport the exchange is
+  /// cancelled outright, because nothing is on the wire to protect. Once
+  /// accepted it cannot be aborted, so the exchange is orphaned instead:
+  /// the frame completes, any reply is discarded, and no counter and no
+  /// event is attributed to any node.
+  // VALIDATION: Design v1.2 D5: delete tombstones the slot; a later add
+  // may reuse a cleaned tombstone. Never compaction, so handles never
+  // relocate.
+  // VALIDATION: Design v1.2 D5: address is identity, so changing a
+  // node's address is delete + add, never an in-place mutation.
+  ConfigStatus deleteRemoteNode(uint8_t address);
+
+  /// Change the declared geometry of the node at `address`, in place.
+  /// Returns kNoSuchNode when no live node holds it, or the same byte-
+  /// ceiling rejections addRemoteNode() applies.
+  ///
+  /// Identity is preserved -- same address, same wire UA, same
+  /// statistics -- because this is the same logical device with its IO
+  /// cards rearranged. The cached input image is invalidated and a
+  /// re-init is forced (I, then a full T), because the NI/NO announced
+  /// in the I body has changed. The output image is cleared: bit
+  /// positions under the old geometry mean nothing under the new one.
+  ///
+  /// Conformance degrades to unknown, since prior evidence was gathered
+  /// against a geometry that no longer applies (D16: conformance is
+  /// current evidence, not latched).
+  ///
+  /// Mutating the node of the outstanding exchange follows the same
+  /// cancel-or-orphan rule as deleteRemoteNode(): the in-flight I
+  /// announced the geometry we just replaced.
+  // VALIDATION: Design v1.2 D5: geometry change is in place, identity
+  // preserved; it invalidates the cached input image and forces a
+  // re-init because the NI/NO announced in the I body has changed.
+  ConfigStatus setRemoteNodeGeometry(uint8_t address,
+                                     uint16_t inputBytes,
+                                     uint16_t outputBytes);
 
   /// Register the optional event listener (nullptr to clear). Part of
   /// the configuration phase: calls after begin() are ignored.
@@ -329,12 +400,20 @@ class CMRIHost {
   /// Cumulative host-wide counters.
   const CMRIHostStatistics& statistics() const { return statistics_; }
 
-  /// Nodes added so far.
+  /// Live nodes in the table. Tombstoned slots do not count, so this
+  /// falls when a node is deleted and the invariant
+  /// nodeCount() <= kMaxNodes always holds.
   size_t nodeCount() const { return nodeCount_; }
 
-  /// Look up a registered node by address. Returns nullptr when no
-  /// node was registered at that address. Valid before and after
-  /// begin(); the handle stays valid for the life of the program.
+  /// Look up a live node by address. Returns nullptr when no live node
+  /// holds that address. Valid before and after begin().
+  ///
+  /// This is the canonical access path and is cheap enough to call at
+  /// the point of use. A handle stays valid until that node is deleted;
+  /// caching one across a mutation is not a supported pattern, and
+  /// address() is the self-check for code that does it anyway.
+  // VALIDATION: Design v1.2 D5: host.node(addr) is the canonical access
+  // path; a handle is valid until that node is deleted.
   RemoteNodeHandle* node(uint8_t address);
 
  private:
@@ -353,6 +432,23 @@ class CMRIHost {
     kPoll,     ///< P — media access, R reply expected
     kTransmit, ///< T — full output image, no reply expected (interop E8)
   };
+
+  /// Find the slot holding a live node at `address`. Occupancy is
+  /// checked first: a cleaned tombstone has address_ == 0, which is a
+  /// perfectly valid address for some other node.
+  bool findSlot_(uint8_t address, size_t& slot) const;
+
+  /// Return a slot to pristine state across all three substrates (D15).
+  /// Assignment from a default-constructed handle is deliberate: it is
+  /// structurally exhaustive, so a substrate added later cannot be
+  /// forgotten here the way a hand-written field list would forget it.
+  void resetSlot_(size_t slot);
+
+  /// Detach the outstanding exchange from `slot` when a mutation makes
+  /// that slot's identity a lie. Cancels outright when the packet has
+  /// not reached the transport; orphans it when the bytes are already
+  /// committed to the wire (D13 forbids truncating those).
+  void detachExchangeFrom_(size_t slot);
 
   void drainReceive_(uint32_t nowMs);
   void runSchedule_(uint32_t nowMs);
@@ -385,6 +481,17 @@ class CMRIHost {
 
   RemoteNodeHandle nodes_[kMaxNodes];
   RemoteNodePolicy policies_[kMaxNodes];
+
+  // Slot occupancy. The table is not a dense prefix: delete tombstones a
+  // slot in place so handles never relocate, which means every scan must
+  // consult this rather than stopping at nodeCount_. Occupancy lives
+  // here and not on the handle because it describes the engine's slot,
+  // not the product-facing node -- and because resetSlot_() wipes the
+  // handle wholesale.
+  bool occupied_[kMaxNodes] = {false};
+
+  /// Live nodes, not a high-water mark. Bookkeeping only: no scan is
+  /// bounded by it, or a tombstone below the bound would be skipped.
   size_t nodeCount_ = 0;
 
   CMRIHostEventListener eventListener_ = nullptr;
@@ -395,8 +502,22 @@ class CMRIHost {
   bool began_ = false;
   Phase phase_ = Phase::kIdle;
   OutboundKind outboundKind_ = OutboundKind::kPoll;
-  size_t cursor_ = 0;       ///< round-robin position: next node to consider
-  size_t polledIndex_ = 0;  ///< node of the outstanding exchange
+  size_t cursor_ = 0;       ///< round-robin position: next slot to consider
+  size_t polledIndex_ = 0;  ///< slot of the outstanding exchange
+
+  // The outstanding exchange lost its node to a mutation. polledIndex_
+  // is stale from that moment -- the slot may be a tombstone, or may
+  // already hold a different logical device -- so this mark, not the
+  // index, is what says whether the exchange still has an owner.
+  //
+  // It lives on the engine rather than the handle deliberately: a mark
+  // stored on the handle would be inherited by the next occupant of a
+  // reused slot. Cleared by finishExchange_().
+  //
+  // While set, the exchange attributes nothing: no node counter, and no
+  // event either. emitEvent_() takes a const RemoteNodeHandle&, so an
+  // event fired here would name whatever now occupies the slot.
+  bool exchangeOrphaned_ = false;
   CMRIPacket outbound_;     ///< the packet in flight (I, P, or T)
   Deadline paceGate_;       ///< time gate between exchanges
   Deadline waitGate_;       ///< post-send wait: reply gate / settle / gap

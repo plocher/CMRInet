@@ -14,26 +14,86 @@ namespace CMRInet {
 CMRIHost::CMRIHost(CMRITransport& transport, const CMRIHostConfig& config)
     : transport_(transport), config_(config) {}
 
+/// Find the slot holding a live node at `address`.
+///
+/// Occupancy is tested before the address, and that order matters: a
+/// cleaned tombstone holds address_ == 0, and 0 is a legal node address.
+/// Testing the address first would hand out tombstones to node(0).
+bool CMRIHost::findSlot_(uint8_t address, size_t& slot) const {
+  for (size_t i = 0; i < kMaxNodes; ++i) {
+    if (occupied_[i] && nodes_[i].address_ == address) {
+      slot = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Return a slot to pristine state across all three substrates (D15).
+///
+/// Whole-object assignment rather than a field-by-field checklist: every
+/// member of RemoteNodeHandle carries a default initializer, so this
+/// clears control, belief, and observation at once and cannot fall out
+/// of date when a substrate gains a field. The policy is reset too, so a
+/// reused slot inherits no per-node override from its predecessor.
+// VALIDATION: Design v1.2 D5: slot reuse resets all three substrates
+// (D15). Freshness in particular must be cleared, or a newly added node
+// reports data it never sent.
+// VALIDATION: Design v1.3 D15: the substrate split gives slot reuse a
+// checklist rather than a hunt.
+void CMRIHost::resetSlot_(size_t slot) {
+  nodes_[slot] = RemoteNodeHandle();
+  policies_[slot] = RemoteNodePolicy();
+}
+
+/// Detach the outstanding exchange when a mutation invalidates the
+/// identity of the slot it names.
+///
+/// Two cases, and the difference is whether bytes have reached the wire:
+/// - kSendOutbound: the packet was built but the transport has not
+///   accepted it. Nothing is on the wire, so cancel it outright rather
+///   than orphan it -- transmitting an I to a node the operator just
+///   deleted would be pointless traffic, and could re-initialize a node
+///   that was removed on purpose.
+/// - kAwaitSendComplete / kAwaitWait: the transport owns the bytes and
+///   TXEN is asserted. Truncating would violate the transmit-drain
+///   doctrine, so the frame completes and the exchange is orphaned.
+// VALIDATION: Design v1.2 D5: mutating the node of the outstanding
+// exchange is legal; the send cannot be aborted, so the exchange is
+// orphaned -- the frame completes, any reply is discarded, and nothing
+// is attributed to any node.
+// VALIDATION: Design v1.1 D13: a send already on the wire drains; the
+// engine never truncates it.
+void CMRIHost::detachExchangeFrom_(size_t slot) {
+  if (phase_ == Phase::kIdle || polledIndex_ != slot ||
+      exchangeOrphaned_) {
+    return;
+  }
+  if (phase_ == Phase::kSendOutbound) {
+    // Not yet handed to the transport: drop it and let the schedule
+    // pick a fresh node next tick.
+    waitGate_.disarm();
+    phase_ = Phase::kIdle;
+    return;
+  }
+  exchangeOrphaned_ = true;
+  ++statistics_.orphanedExchanges;
+}
+
 // Each rejection returns its own reason and leaves no residue: the next
 // call is judged on its own merits. Callers adding several nodes decide
 // how to treat a partial failure.
 // VALIDATION: Design v1.2 D5: mutators report their own outcome; no
 // sticky, chain-poisoning status.
+// VALIDATION: Design v1.2 D5: add is legal before and after begin();
+// begin() does not lock the node table.
 CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
     uint8_t address, const RemoteNodeConfig& config,
     const RemoteNodePolicy& policy) {
-  // The node table is not yet mutable at runtime; that arrives with the
-  // rest of Design v1.2 D5.
-  if (began_) {
-    return ConfigStatus::kAlreadyBegun;
-  }
   // Validation at intake: reject, never remap.
   // VALIDATION: Interop v1.1 E9: Nodes must reject, not remap,
   // out-of-range addresses. The same rule applies to the Host's own
   // configuration.
-  if (nodeCount_ >= kMaxNodes) {
-    return ConfigStatus::kTooManyNodes;
-  }
   if (address > 127u) {
     return ConfigStatus::kAddressOutOfRange;
   }
@@ -43,18 +103,114 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   if (config.outputBytes > RemoteNodeHandle::kMaxOutputBytes) {
     return ConfigStatus::kOutputBytesTooLarge;
   }
-  for (size_t i = 0; i < nodeCount_; ++i) {
-    if (nodes_[i].address_ == address) {
-      return ConfigStatus::kAddressInUse;
+
+  // Capacity is slot availability, not a count comparison. A count
+  // that only ever rose would refuse an add while cleaned tombstones
+  // sat free -- exactly the case D5 says must succeed.
+  // VALIDATION: Design v1.2 D8: the invariant is nodeCount_ <=
+  // kMaxNodes, checked per add.
+  size_t free = kMaxNodes;
+  for (size_t i = 0; i < kMaxNodes; ++i) {
+    if (occupied_[i]) {
+      if (nodes_[i].address_ == address) {
+        return ConfigStatus::kAddressInUse;
+      }
+    } else if (free == kMaxNodes) {
+      free = i;  // first free slot; keep scanning for a duplicate
     }
   }
+  if (free == kMaxNodes) {
+    return ConfigStatus::kTooManyNodes;
+  }
 
-  RemoteNodeHandle& node = nodes_[nodeCount_];
+  // A tombstone was cleaned at delete, but reset again rather than
+  // trusting that: the invariant this add depends on is "the slot is
+  // pristine", and asserting it here is cheaper than reasoning about
+  // every path that could have left it otherwise.
+  resetSlot_(free);
+  RemoteNodeHandle& node = nodes_[free];
   node.address_ = address;
   node.ua_ = static_cast<uint8_t>(address + kUaOffset);
   node.config_ = config;
-  policies_[nodeCount_] = policy;
+  policies_[free] = policy;
+  occupied_[free] = true;
   ++nodeCount_;
+  return ConfigStatus::kOk;
+}
+
+CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
+  size_t slot = 0;
+  if (!findSlot_(address, slot)) {
+    return ConfigStatus::kNoSuchNode;
+  }
+
+  // Order matters: detach while the slot still names this node, so the
+  // orphan decision is made against the identity being removed.
+  detachExchangeFrom_(slot);
+
+  // Tombstone in place. No compaction, so every surviving handle keeps
+  // its address. Cleaning now rather than at reuse is what makes a
+  // stale handle detectable: address() reads 0 instead of continuing to
+  // report the node it used to serve.
+  occupied_[slot] = false;
+  resetSlot_(slot);
+  --nodeCount_;
+  return ConfigStatus::kOk;
+}
+
+CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
+                                                       uint16_t inputBytes,
+                                                       uint16_t outputBytes) {
+  if (inputBytes > RemoteNodeHandle::kMaxInputBytes) {
+    return ConfigStatus::kInputBytesTooLarge;
+  }
+  if (outputBytes > RemoteNodeHandle::kMaxOutputBytes) {
+    return ConfigStatus::kOutputBytesTooLarge;
+  }
+  size_t slot = 0;
+  if (!findSlot_(address, slot)) {
+    return ConfigStatus::kNoSuchNode;
+  }
+
+  // The in-flight I announced the geometry being replaced, and a reply
+  // sized for the old image would be scored against the new one -- a
+  // geometry-mismatch error charged to a node that did nothing wrong.
+  detachExchangeFrom_(slot);
+
+  RemoteNodeHandle& node = nodes_[slot];
+  node.config_.inputBytes = inputBytes;
+  node.config_.outputBytes = outputBytes;
+
+  // Belief: the cached image described the old shape, so it is not
+  // merely stale, it is meaningless. Reporting kNone is honest;
+  // retaining bytes under a new geometry would not be.
+  memset(node.inputs_, 0, sizeof(node.inputs_));
+  node.hasInputImage_ = false;
+  node.freshness_.clear();
+  memset(node.outputs_, 0, sizeof(node.outputs_));
+
+  // imageState_ is a *stored* axis (D16), normally recomputed in
+  // updateNodeStates_. Set it here too, or the handle contradicts itself
+  // between this call and the next tick -- and reading a handle straight
+  // after mutating it is the obvious thing for a sketch to do.
+  node.imageState_ = RemoteNodeImageState::kNone;
+
+  // Control: owe this node a fresh session. I re-announces NI/NO, and
+  // the full T that follows carries the cleared output image.
+  // VALIDATION: Interop v1.1 2.3.1: send I before the first P, and a
+  // full T immediately after every I.
+  node.needsInit_ = true;
+  node.outputsDirty_ = true;
+  node.reinitArmed_ = false;
+
+  // Content evaluation: whatever we believed about this node's
+  // conformance was measured against a geometry that no longer applies.
+  // VALIDATION: Design v1.3 D16: conformance is current evidence, not
+  // latched.
+  node.conformance_ = RemoteNodeConformance::kUnknown;
+
+  // Observation is untouched: same address, same logical device, so the
+  // counters keep running.
   return ConfigStatus::kOk;
 }
 
@@ -73,12 +229,8 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t address,
 }
 
 RemoteNodeHandle* CMRIHost::node(uint8_t address) {
-  for (size_t i = 0; i < nodeCount_; ++i) {
-    if (nodes_[i].address_ == address) {
-      return &nodes_[i];
-    }
-  }
-  return nullptr;
+  size_t slot = 0;
+  return findSlot_(address, slot) ? &nodes_[slot] : nullptr;
 }
 
 void CMRIHost::begin() {
@@ -93,8 +245,10 @@ void CMRIHost::tick(uint32_t nowMs) {
     return;
   }
   transport_.tick(nowMs);
-  for (size_t i = 0; i < nodeCount_; ++i) {
-    nodes_[i].freshness_.poll(nowMs);
+  for (size_t i = 0; i < kMaxNodes; ++i) {
+    if (occupied_[i]) {
+      nodes_[i].freshness_.poll(nowMs);
+    }
   }
   drainReceive_(nowMs);
   runSchedule_(nowMs);
@@ -120,6 +274,17 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     if (phase_ != Phase::kAwaitWait ||
         outboundKind_ != OutboundKind::kPoll) {
       ++statistics_.unsolicitedPackets;
+      continue;
+    }
+    if (exchangeOrphaned_) {
+      // The poll was solicited, but its node was mutated away while the
+      // reply was in flight. Counting it as unsolicited would misreport
+      // the bus, and matching it against polledIndex_ would score a
+      // tombstone or the slot's new occupant. Discard it: the frame is
+      // already visible on the trace, and orphanedExchanges records the
+      // loss at host scope where it honestly belongs.
+      // VALIDATION: Design v1.2 D5: any reply to an orphaned exchange is
+      // discarded and nothing is attributed to any node.
       continue;
     }
     RemoteNodeHandle& node = nodes_[polledIndex_];
@@ -206,10 +371,14 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
 }
 
 /// Close the outstanding exchange and arm the pacing gate.
+///
+/// Clearing the orphan mark here is what bounds its lifetime to exactly
+/// one exchange: every path out of an exchange funnels through this.
 void CMRIHost::finishExchange_(uint32_t nowMs) {
   waitGate_.disarm();
   paceGate_.armIn(nowMs, config_.pollPacingMs);
   phase_ = Phase::kIdle;
+  exchangeOrphaned_ = false;
 }
 
 /// Advance the exchange schedule. Later steps run in the same tick when an
@@ -284,12 +453,16 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // I receives no reply (E8); the settle paces the immediate full T.
       // VALIDATION: Interop v1.1 2.3.7: ~500 ms settle after I.
       waitGate_.armIn(nowMs, config_.postInitSettleMs);
-      nodes_[polledIndex_].needsInit_ = false;
+      if (!exchangeOrphaned_) {
+        nodes_[polledIndex_].needsInit_ = false;
+      }
     } else {  // kTransmit
       // T receives no reply (E8); the gap paces the next outbound.
       // VALIDATION: Interop v1.1 2.3.7: ~2 ms after T.
       waitGate_.armIn(nowMs, config_.postTxGapMs);
-      nodes_[polledIndex_].lastTxMs_ = nowMs;
+      if (!exchangeOrphaned_) {
+        nodes_[polledIndex_].lastTxMs_ = nowMs;
+      }
     }
     phase_ = Phase::kAwaitWait;
     return;
@@ -297,6 +470,18 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
 
   if (phase_ == Phase::kAwaitWait) {
     if (!waitGate_.due(nowMs)) {
+      return;
+    }
+    if (exchangeOrphaned_) {
+      // The gate expired on an exchange with no owner. Every branch
+      // below either charges a node or sends it a follow-up frame, and
+      // both would name the wrong device. In particular the kInit branch
+      // would transmit a full T built from a tombstone -- or worse, from
+      // whatever now occupies the slot.
+      // VALIDATION: Design v1.2 D5: an orphaned exchange attributes
+      // nothing to any node; the miss is not charged and no event is
+      // emitted.
+      finishExchange_(nowMs);
       return;
     }
     if (outboundKind_ == OutboundKind::kPoll) {
@@ -366,9 +551,19 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
 ///
 /// Skips a node still serving its poll-retry backoff (map issue #41)
 /// so the scheduler never resets another node's wall-clock deadline early.
+///
+/// The rotation walks slots, not live nodes, and the cursor is modulo
+/// kMaxNodes. Modular arithmetic over nodeCount_ would be wrong the
+/// moment a tombstone exists: the table is no longer a dense prefix, so
+/// a live node above the count would never be reached.
+// VALIDATION: Design v1.2 D5: delete tombstones a slot; the cursor must
+// skip tombstones rather than assume a compacted table.
 bool CMRIHost::selectNextNode_(uint32_t nowMs) {
-  for (size_t step = 0; step < nodeCount_; ++step) {
-    const size_t candidate = (cursor_ + step) % nodeCount_;
+  for (size_t step = 0; step < kMaxNodes; ++step) {
+    const size_t candidate = (cursor_ + step) % kMaxNodes;
+    if (!occupied_[candidate]) {
+      continue;
+    }
     RemoteNodeHandle& node = nodes_[candidate];
     if (!node.config_.enabled) {
       continue;
@@ -377,7 +572,7 @@ bool CMRIHost::selectNextNode_(uint32_t nowMs) {
       continue;  // still backed off; try the next enabled node first
     }
     polledIndex_ = candidate;
-    cursor_ = (candidate + 1) % nodeCount_;
+    cursor_ = (candidate + 1) % kMaxNodes;
     return true;
   }
   // Every enabled node is currently backed off (or none is enabled).
@@ -447,9 +642,15 @@ void CMRIHost::invalidateNodeInputs_(RemoteNodeHandle& node) {
   node.freshness_.clear();
 }
 
-/// Recompute every node's health axes from control and belief state.
+/// Recompute every live node's health axes from control and belief
+/// state. Tombstones are skipped: a cleaned slot has no health to
+/// report, and recomputing one would emit a state-change event for a
+/// node that no longer exists.
 void CMRIHost::updateNodeStates_(uint32_t nowMs) {
-  for (size_t i = 0; i < nodeCount_; ++i) {
+  for (size_t i = 0; i < kMaxNodes; ++i) {
+    if (!occupied_[i]) {
+      continue;
+    }
     RemoteNodeHandle& node = nodes_[i];
     const RemoteNodeState previous = node.state();
     if (node.consecutiveMisses_ > config_.missThreshold) {
@@ -537,10 +738,10 @@ void CMRIHost::emitTrace_(bool transmit, const CMRIPacket& packet) {
 const char* configStatusString(CMRIHost::ConfigStatus status) {
   switch (status) {
     case CMRIHost::ConfigStatus::kOk:                 return "ok";
-    case CMRIHost::ConfigStatus::kAlreadyBegun:        return "configuration already begun";
     case CMRIHost::ConfigStatus::kTooManyNodes:       return "too many nodes";
     case CMRIHost::ConfigStatus::kAddressOutOfRange:  return "address out of range";
     case CMRIHost::ConfigStatus::kAddressInUse:       return "address in use";
+    case CMRIHost::ConfigStatus::kNoSuchNode:         return "no such node";
     case CMRIHost::ConfigStatus::kInputBytesTooLarge: return "input bytes too large";
     case CMRIHost::ConfigStatus::kOutputBytesTooLarge:return "output bytes too large";
   }

@@ -17,6 +17,7 @@ using CMRInet::CMRIHost;
 using CMRInet::CMRIHostConfig;
 using CMRInet::CMRIHostEvent;
 using CMRInet::CMRIHostEventType;
+using CMRInet::CMRIHostStatistics;
 using CMRInet::CMRIPacket;
 using CMRInet::encodeFrame;
 using CMRInet::kUaOffset;
@@ -27,6 +28,7 @@ using CMRInet::RemoteNodeHandle;
 using CMRInet::RemoteNodeImageState;
 using CMRInet::RemoteNodeLiveness;
 using CMRInet::RemoteNodeState;
+using CMRInet::RemoteNodeStatistics;
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -847,11 +849,196 @@ static void test_add_remote_node_validation(void) {
   TEST_ASSERT_EQUAL(CS::kAddressInUse, h.addRemoteNode(5, ok));
   TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
 
-  // After begin() the table is not yet mutable; that arrives with the
-  // rest of D5.
+  // begin() is the config->running transition, not a table lock: the
+  // same add is judged on its merits before and after (Design v1.2 D5).
   h.begin();
-  TEST_ASSERT_EQUAL(CS::kAlreadyBegun, h.addRemoteNode(6, ok));
-  TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
+  TEST_ASSERT_EQUAL(CS::kOk, h.addRemoteNode(6, ok));
+  TEST_ASSERT_EQUAL_size_t(2, h.nodeCount());
+  TEST_ASSERT_NOT_NULL(h.node(6));
+
+  // The same validations still apply at runtime.
+  TEST_ASSERT_EQUAL(CS::kAddressInUse, h.addRemoteNode(6, ok));
+  TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.addRemoteNode(200, ok));
+
+  // Mutators name a live node; a missing one is its own status, not a
+  // silent no-op.
+  TEST_ASSERT_EQUAL(CS::kNoSuchNode, h.deleteRemoteNode(7));
+  TEST_ASSERT_EQUAL(CS::kNoSuchNode, h.setRemoteNodeGeometry(7, 1, 1));
+  TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge,
+                    h.setRemoteNodeGeometry(
+                        6, RemoteNodeHandle::kMaxInputBytes + 1, 0));
+  TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge,
+                    h.setRemoteNodeGeometry(
+                        6, 0, RemoteNodeHandle::kMaxOutputBytes + 1));
+  // A rejected geometry change leaves the node alone.
+  TEST_ASSERT_EQUAL_size_t(2, h.node(6)->inputLength());
+}
+
+// ------------------------------------------- runtime mutation (D5, #86)
+
+// A node added after begin() is a full participant: it gets the same
+// I -> full-T bootstrap as one added during configuration (interop
+// 2.3.1). Without this, runtime add would produce a node the engine
+// polls but never initializes.
+static void test_add_after_begin_bootstraps_the_new_node(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 2, 0));
+  host.begin();
+  runUntil(host, 0, 600);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }  // drain node 5's preamble
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(6, 1, 2));
+  TEST_ASSERT_EQUAL_size_t(2, host.nodeCount());
+  TEST_ASSERT_NOT_NULL(host.node(6));
+
+  bool sawInit = false;
+  bool sawTransmitAfterInit = false;
+  for (uint32_t t = 601; t <= 4000; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.ua != 6 + kUaOffset) {
+        continue;
+      }
+      if (sent.mt == 'I') {
+        sawInit = true;
+        TEST_ASSERT_EQUAL_HEX8(1, sent.body[5]);  // NI
+        TEST_ASSERT_EQUAL_HEX8(2, sent.body[6]);  // NO
+      } else if (sent.mt == 'T' && sawInit) {
+        sawTransmitAfterInit = true;
+        TEST_ASSERT_EQUAL_UINT16(2, sent.length);  // full output image
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(sawInit, "runtime-added node never received an I");
+  TEST_ASSERT_TRUE_MESSAGE(sawTransmitAfterInit,
+                           "runtime-added node never received its full T");
+}
+
+// Delete takes the node out of the rotation for good. The round-robin
+// cursor must step over the tombstone rather than treating the table as
+// a dense prefix.
+static void test_delete_removes_the_node_from_the_rotation(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.addRemoteNode(5, 0, 0);
+  host.addRemoteNode(6, 0, 0);
+  host.begin();
+  runUntil(host, 0, 2000);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.deleteRemoteNode(5));
+  TEST_ASSERT_EQUAL_size_t(1, host.nodeCount());
+  TEST_ASSERT_NULL(host.node(5));
+  TEST_ASSERT_NOT_NULL(host.node(6));
+  // Deleting it twice is not a silent success.
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kNoSuchNode,
+                    host.deleteRemoteNode(5));
+
+  bool addressedTheDeletedNode = false;
+  bool addressedTheSurvivor = false;
+  for (uint32_t t = 2001; t <= 9000; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.ua == 5 + kUaOffset) {
+        addressedTheDeletedNode = true;
+      } else if (sent.ua == 6 + kUaOffset) {
+        addressedTheSurvivor = true;
+      }
+    }
+  }
+  TEST_ASSERT_FALSE_MESSAGE(addressedTheDeletedNode,
+                            "a deleted node was still addressed on the wire");
+  TEST_ASSERT_TRUE_MESSAGE(addressedTheSurvivor,
+                           "the surviving node fell out of the rotation");
+}
+
+// The subtle one. Deleting the node of the outstanding exchange is
+// legal, and the send cannot be aborted -- so the exchange is orphaned:
+// the frame completes, a late reply is discarded, and NOTHING is
+// attributed anywhere. Not a node counter, not a host reply counter,
+// and not an event either: emitEvent_ takes a handle, so an event fired
+// here would name a tombstone or the slot's next occupant.
+static void test_delete_while_in_flight_attributes_nothing(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.addRemoteNode(5, 2, 0);
+  host.addRemoteNode(6, 2, 0);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+  host.begin();
+  // Node 6 sits out, so every event in the measured window can only
+  // have come from the orphaned exchange.
+  host.node(6)->setEnabled(false);
+
+  CMRIPacket sent;
+  uint32_t t = 0;
+  bool polled = false;
+  for (; t <= 5000 && !polled; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+        polled = true;
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(polled, "node 5 was never polled");
+
+  const CMRIHostStatistics before = host.statistics();
+  const int timeoutsBefore = log.timeouts;
+  const int acceptedBefore = log.accepted;
+  const int rejectedBefore = log.rejected;
+
+  // Delete with the poll outstanding.
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.deleteRemoteNode(5));
+  TEST_ASSERT_EQUAL_UINT32(before.orphanedExchanges + 1,
+                           host.statistics().orphanedExchanges);
+
+  // Hand the freed slot straight to a different logical device. This is
+  // the hazard in its sharpest form: without an explicit orphan mark the
+  // late reply below is matched by slot index and pollutes THIS node's
+  // counters -- a node that has never been on the wire.
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(7, 2, 0));
+  RemoteNodeHandle* newcomer = host.node(7);
+  TEST_ASSERT_NOT_NULL(newcomer);
+  newcomer->setEnabled(false);  // keep it off the wire in this window
+
+  // The deleted node answers after it is gone. Then let the gate expire.
+  transport.injectPacketAt(makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+                           t);
+  runUntil(host, t, t + 600);
+
+  // The slot's new occupant is untouched, and is certainly not ONLINE
+  // off the back of somebody else's reply.
+  TEST_ASSERT_EQUAL_UINT32(0, newcomer->statistics().exchanges);
+  TEST_ASSERT_EQUAL_UINT32(0, newcomer->statistics().noReplies);
+  TEST_ASSERT_EQUAL_UINT32(0, newcomer->statistics().errors);
+  TEST_ASSERT_EQUAL_UINT32(0, newcomer->consecutiveMisses());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, newcomer->state());
+  TEST_ASSERT_EQUAL_UINT32(Age::kNeverMarked, newcomer->inputAgeMs(t + 600));
+
+  // The bystander is untouched too.
+  const RemoteNodeStatistics& survivor = host.node(6)->statistics();
+  TEST_ASSERT_EQUAL_UINT32(0, survivor.exchanges);
+  TEST_ASSERT_EQUAL_UINT32(0, survivor.noReplies);
+  TEST_ASSERT_EQUAL_UINT32(0, survivor.errors);
+
+  // No host reply counter moved either: the late reply was neither
+  // accepted, nor rejected, nor miscounted as unsolicited.
+  const CMRIHostStatistics& after = host.statistics();
+  TEST_ASSERT_EQUAL_UINT32(before.repliesAccepted, after.repliesAccepted);
+  TEST_ASSERT_EQUAL_UINT32(before.repliesRejected, after.repliesRejected);
+  TEST_ASSERT_EQUAL_UINT32(before.unsolicitedPackets, after.unsolicitedPackets);
+
+  // And no event named anybody.
+  TEST_ASSERT_EQUAL_INT_MESSAGE(timeoutsBefore, log.timeouts,
+                                "orphaned exchange charged a miss");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(acceptedBefore, log.accepted,
+                                "orphaned exchange accepted a reply");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(rejectedBefore, log.rejected,
+                                "orphaned exchange rejected a reply");
 }
 
 // Regression for the batch error model retired in Design v1.2 D5. The
@@ -897,6 +1084,223 @@ static void test_node_table_capacity_is_enforced(void) {
       CMRIHost::ConfigStatus::kTooManyNodes,
       host.addRemoteNode(static_cast<uint8_t>(CMRIHost::kMaxNodes), config));
   TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
+}
+
+// Capacity and membership are independent (Design v1.2 D5). Capacity is
+// slot availability, so deleting from a full table frees a slot and the
+// very add that just overflowed must now succeed. A high-water count
+// would refuse it forever.
+static void test_delete_frees_a_slot_in_a_full_table(void) {
+  using CS = CMRIHost::ConfigStatus;
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  RemoteNodeConfig config;
+  for (size_t i = 0; i < CMRIHost::kMaxNodes; ++i) {
+    TEST_ASSERT_EQUAL(CS::kOk,
+                      host.addRemoteNode(static_cast<uint8_t>(i), config));
+  }
+  const uint8_t overflow = static_cast<uint8_t>(CMRIHost::kMaxNodes);
+  TEST_ASSERT_EQUAL(CS::kTooManyNodes, host.addRemoteNode(overflow, config));
+
+  TEST_ASSERT_EQUAL(CS::kOk, host.deleteRemoteNode(0));
+  TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes - 1, host.nodeCount());
+
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(overflow, config));
+  TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
+  TEST_ASSERT_NOT_NULL(host.node(overflow));
+
+  // Address 0 is the trap here: a cleaned tombstone holds address_ == 0,
+  // and 0 is a perfectly legal node address. A lookup that tested the
+  // address before occupancy would hand this tombstone back.
+  TEST_ASSERT_NULL_MESSAGE(host.node(0),
+                           "a cleaned tombstone answered to address 0");
+}
+
+// Slot reuse must produce a genuinely new subject. The hazard is quiet:
+// inherited freshness makes a node that has never answered look ONLINE
+// with data it never sent.
+static void test_reused_slot_is_a_new_subject(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.addRemoteNode(5, 2, 0);
+  host.begin();
+  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+                              makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+                              0, MockCMRITransport::kRepeatForever);
+  runUntil(host, 0, 1000);
+
+  RemoteNodeHandle* before = host.node(5);
+  TEST_ASSERT_NOT_NULL(before);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, before->state());
+  TEST_ASSERT_TRUE(before->statistics().exchanges > 0);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.deleteRemoteNode(5));
+
+  // A handle cached across the delete must be detectable as stale.
+  // address() is that self-check, and it works only because the slot is
+  // cleaned at delete rather than at reuse.
+  TEST_ASSERT_NOT_EQUAL_MESSAGE(5, before->address(),
+                                "a deleted node still answered to its address");
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 2, 0));
+  RemoteNodeHandle* fresh = host.node(5);
+  TEST_ASSERT_NOT_NULL(fresh);
+  TEST_ASSERT_EQUAL_PTR_MESSAGE(before, fresh,
+                                "the cleaned tombstone was not reused");
+
+  // Belief: no image at all, so not ONLINE before its first reply.
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, fresh->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, fresh->state());
+  TEST_ASSERT_EQUAL_UINT32(Age::kNeverMarked, fresh->inputAgeMs(1000));
+  TEST_ASSERT_FALSE(fresh->inputsUsable());
+  TEST_ASSERT_EQUAL_HEX8(0, fresh->inputByte(0));
+
+  // Observation: a new subject counts from zero. Nothing was reset
+  // mid-life -- delete ended the previous subject -- so monotonicity is
+  // intact.
+  TEST_ASSERT_EQUAL_UINT32(0, fresh->statistics().exchanges);
+  TEST_ASSERT_EQUAL_UINT32(0, fresh->statistics().noReplies);
+  TEST_ASSERT_EQUAL_UINT32(0, fresh->statistics().errors);
+  TEST_ASSERT_EQUAL_UINT32(0, fresh->consecutiveMisses());
+
+  // And it stays not-ONLINE until it actually answers.
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, host.node(5)->state());
+}
+
+// Geometry change is in place and identity-preserving: same address,
+// same counters, same handle. What it must invalidate is the cached
+// image, because the NI/NO announced in the I body just changed.
+static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.addRemoteNode(5, 2, 1);
+  host.begin();
+  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+                              makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+                              0, MockCMRITransport::kRepeatForever);
+  runUntil(host, 0, 1000);
+
+  RemoteNodeHandle* node = host.node(5);
+  TEST_ASSERT_NOT_NULL(node);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+  node->setOutputBit(0, true);
+  TEST_ASSERT_TRUE(node->outputBit(0));
+  const uint32_t exchangesBefore = node->statistics().exchanges;
+  TEST_ASSERT_TRUE(exchangesBefore > 0);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.setRemoteNodeGeometry(5, 4, 3));
+
+  // Identity preserved: same handle, same address, same running totals.
+  // This is the same logical device with its IO cards rearranged, so its
+  // observation substrate keeps counting.
+  TEST_ASSERT_EQUAL_PTR(node, host.node(5));
+  TEST_ASSERT_EQUAL_UINT8(5, node->address());
+  TEST_ASSERT_EQUAL_UINT32(exchangesBefore, node->statistics().exchanges);
+
+  // Belief cleared: the cached bytes described the old shape.
+  TEST_ASSERT_EQUAL_size_t(4, node->inputLength());
+  TEST_ASSERT_EQUAL_size_t(3, node->outputLength());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, node->state());
+  TEST_ASSERT_EQUAL_UINT32(Age::kNeverMarked, node->inputAgeMs(1000));
+  TEST_ASSERT_FALSE(node->inputsUsable());
+  TEST_ASSERT_FALSE_MESSAGE(node->outputBit(0),
+                            "an output bit survived a geometry change");
+
+  // The re-init ladder runs, and the new I announces the new NI/NO.
+  bool sawInit = false;
+  bool sawFullTransmit = false;
+  for (uint32_t t = 1001; t <= 3000; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.ua != 5 + kUaOffset) {
+        continue;
+      }
+      if (sent.mt == 'I') {
+        sawInit = true;
+        TEST_ASSERT_EQUAL_HEX8(4, sent.body[5]);  // NI
+        TEST_ASSERT_EQUAL_HEX8(3, sent.body[6]);  // NO
+      } else if (sent.mt == 'T' && sawInit) {
+        sawFullTransmit = true;
+        TEST_ASSERT_EQUAL_UINT16(3, sent.length);
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(sawInit, "geometry change did not force a re-init");
+  TEST_ASSERT_TRUE_MESSAGE(sawFullTransmit,
+                           "no full T followed the re-init");
+}
+
+// The whole lifecycle in one pass, in the order a layout actually
+// evolves: a section is built, taken out of service, rewired,
+// recommissioned, retired, and its address handed to a new device.
+static void test_full_mutation_lifecycle(void) {
+  using CS = CMRIHost::ConfigStatus;
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.addRemoteNode(9, 1, 1);  // a bystander that must survive it all
+  host.begin();
+  runUntil(host, 0, 700);
+
+  // add
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(5, 2, 2));
+  RemoteNodeHandle* node = host.node(5);
+  TEST_ASSERT_NOT_NULL(node);
+  TEST_ASSERT_TRUE(node->enabled());
+  TEST_ASSERT_EQUAL_size_t(2, host.nodeCount());
+
+  // disable
+  node->setEnabled(false);
+  TEST_ASSERT_FALSE(node->enabled());
+
+  // geometry change while out of service
+  TEST_ASSERT_EQUAL(CS::kOk, host.setRemoteNodeGeometry(5, 5, 4));
+  TEST_ASSERT_EQUAL_size_t(5, node->inputLength());
+  TEST_ASSERT_EQUAL_size_t(4, node->outputLength());
+  // Disable is control state and geometry change does not touch it.
+  TEST_ASSERT_FALSE_MESSAGE(node->enabled(),
+                            "geometry change re-enabled a disabled node");
+
+  // enable, and let it take its turn on the wire
+  node->setEnabled(true);
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) { }
+  bool addressed = false;
+  for (uint32_t t = 701; t <= 3000 && !addressed; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.ua == 5 + kUaOffset) {
+        addressed = true;
+      }
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(addressed, "a re-enabled node was never addressed");
+
+  // disable, then delete
+  node->setEnabled(false);
+  TEST_ASSERT_EQUAL(CS::kOk, host.deleteRemoteNode(5));
+  TEST_ASSERT_NULL(host.node(5));
+  TEST_ASSERT_EQUAL_size_t(1, host.nodeCount());
+
+  // add again: the address is reusable, and the new device inherits
+  // nothing -- not the geometry, not the disable, not the counters.
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(5, 1, 1));
+  RemoteNodeHandle* reborn = host.node(5);
+  TEST_ASSERT_NOT_NULL(reborn);
+  TEST_ASSERT_EQUAL_size_t(1, reborn->inputLength());
+  TEST_ASSERT_EQUAL_size_t(1, reborn->outputLength());
+  TEST_ASSERT_TRUE_MESSAGE(reborn->enabled(),
+                           "a reused slot inherited the previous disable");
+  TEST_ASSERT_EQUAL_UINT32(0, reborn->statistics().exchanges);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, reborn->state());
+
+  // The bystander was never disturbed by any of it.
+  TEST_ASSERT_NOT_NULL(host.node(9));
+  TEST_ASSERT_EQUAL_UINT8(9, host.node(9)->address());
+  TEST_ASSERT_EQUAL_size_t(2, host.nodeCount());
 }
 
 // --------------------------------------------------- anti-starvation (#41)
@@ -1136,6 +1540,13 @@ int main(void) {
   RUN_TEST(test_add_remote_node_validation);
   RUN_TEST(test_rejected_add_does_not_poison_later_adds);
   RUN_TEST(test_node_table_capacity_is_enforced);
+  RUN_TEST(test_add_after_begin_bootstraps_the_new_node);
+  RUN_TEST(test_delete_removes_the_node_from_the_rotation);
+  RUN_TEST(test_delete_while_in_flight_attributes_nothing);
+  RUN_TEST(test_delete_frees_a_slot_in_a_full_table);
+  RUN_TEST(test_reused_slot_is_a_new_subject);
+  RUN_TEST(test_geometry_change_invalidates_image_and_forces_reinit);
+  RUN_TEST(test_full_mutation_lifecycle);
   RUN_TEST(test_dirty_output_cannot_starve_poll_forever);
   RUN_TEST(test_anti_starvation_does_not_starve_transmit);
   RUN_TEST(test_poll_backoff_doubles_and_clears_on_reply);
