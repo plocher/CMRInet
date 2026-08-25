@@ -603,8 +603,11 @@ Stored axes, one per substrate (D15):
 
 `RemoteNodeState` is retained as the *derived* single-scalar projection
 for displays and simple consumers, extended with MISCONFIGURED
-(nonconforming with no valid image) and DEGRADED (committing data while
-faulting).
+(nonconforming with no valid image) and DEGRADED (nonconforming while
+still holding a valid one). DEGRADED does **not** mean the image may be
+acted on (v1.4): `inputsUsable()` is false for any nonconforming node,
+fresh image or not. Once the geometry disagrees, the meaning of the
+bytes already committed is in question.
 
 Conformance is **current, not latched**: it may only be asserted from
 current evidence, so loss of contact degrades it to unknown. A node
@@ -653,7 +656,25 @@ up.
 Two predicates answer the two questions consumers actually ask, so no
 call site re-derives them: `isHealthy()` (operator: live, fresh,
 conforming, breaker closed) and `inputsUsable()` (application: may I
-act on this image now). They diverge in both directions.
+act on this image now).
+
+Divergence is **one-directional** (v1.4, correcting "they diverge in
+both directions"). `isHealthy()` strictly implies `inputsUsable()`:
+healthy requires fresh, responsive implies not silent, and conforming
+implies not nonconforming. So healthy-and-unusable cannot occur, and
+only usable-and-unhealthy does. That is the intended relationship — the
+operator predicate is strictly stricter than the application one — but
+the earlier sentence claimed a symmetry the predicates cannot produce.
+
+Which axis produces the divergence is worth stating, because it is not
+the obvious one (v1.4). Conformance cannot: a real fault sets
+nonconforming, which fails *both* predicates, and the only
+conformance value that separates them is `kUnknown` — the unset case,
+which proves nothing. Divergence therefore comes from liveness:
+`kMissing` with a fresh image is usable but not healthy. The conformance
+*domain* will separate them once D17's breaker has a writer, since
+`isHealthy()` reads the breaker and `inputsUsable()` does not; that is
+the first case where the two disagree with every axis set.
 
 ### D17. Degraded nodes are a service class with a bounded budget
 A Host serves a layout that evolves organically: nodes are added
