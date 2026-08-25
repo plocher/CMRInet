@@ -22,7 +22,10 @@ using CMRInet::encodeFrame;
 using CMRInet::kUaOffset;
 using CMRInet::MockCMRITransport;
 using CMRInet::RemoteNodeConfig;
+using CMRInet::RemoteNodeConformance;
 using CMRInet::RemoteNodeHandle;
+using CMRInet::RemoteNodeImageState;
+using CMRInet::RemoteNodeLiveness;
 using CMRInet::RemoteNodeState;
 
 void setUp(void) {}
@@ -294,8 +297,25 @@ static void test_reply_commits_inputs_freshness_state_statistics(void) {
   TEST_ASSERT_FALSE(rig.node->inputBit(9));
   TEST_ASSERT_FALSE(rig.node->inputBit(999));
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  TEST_ASSERT_TRUE(rig.node->inputsUsable());
+  TEST_ASSERT_FALSE(rig.node->isHealthy());
   TEST_ASSERT_EQUAL_UINT32(1, rig.host.statistics().repliesAccepted);
   TEST_ASSERT_TRUE(rig.node->inputAgeMs(base + 2) <= 2);
+}
+
+static void test_initial_axes_and_predicates_before_first_reply(void) {
+  Rig rig;
+  uint32_t base = primeToPoll(rig);
+  runUntil(rig.host, base, base + 1);  // first poll sent; no reply yet
+  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, rig.node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  TEST_ASSERT_FALSE(rig.node->inputsUsable());
+  TEST_ASSERT_FALSE(rig.node->isHealthy());
 }
 
 static void test_turnaround_is_measured_from_send_complete(void) {
@@ -318,7 +338,8 @@ static void test_default_reply_gate_is_250ms(void) {
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().noReplies);
   rig.host.tick(base + 250);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
-  TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().consecutiveMisses);
+  TEST_ASSERT_EQUAL_UINT32(1, rig.node->consecutiveMisses());
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kMissing, rig.node->liveness());
 }
 
 static void test_policy_overrides_reply_gate(void) {
@@ -402,7 +423,7 @@ static void test_recovery_after_miss(void) {
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().recoveries);
-  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().consecutiveMisses);
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->consecutiveMisses());
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
 }
 
@@ -426,6 +447,7 @@ static void test_offline_after_miss_threshold_then_recovers(void) {
   }
   TEST_ASSERT_TRUE_MESSAGE(reachedSixMisses, "did not reach six misses in expected window");
   TEST_ASSERT_EQUAL_UINT32(6, rig.node->statistics().noReplies);
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kSilent, rig.node->liveness());
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
   // VALIDATION: Interop v1.1 2.3.10: keep polling a silent Node forever.
   bool recovered = false;
@@ -522,8 +544,11 @@ static void test_stale_when_inputs_outlive_threshold(void) {
   // I (t=0) -> settle -> T -> P -> reply; node 6 ONLINE.
   runUntil(rig.host, 0, 510);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, node->imageState());
   runUntil(rig.host, 511, 700);  // silence: the image ages past 100 ms
   TEST_ASSERT_EQUAL(RemoteNodeState::kStale, node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, node->imageState());
+  TEST_ASSERT_FALSE(node->inputsUsable());
 }
 
 static void test_output_only_node_gets_keepalive_poll(void) {
@@ -1033,6 +1058,7 @@ int main(void) {
   RUN_TEST(test_forceTransmit_marks_dirty_then_transmit);
   RUN_TEST(test_refresh_resends_transmit_on_interval);
   RUN_TEST(test_reply_commits_inputs_freshness_state_statistics);
+  RUN_TEST(test_initial_axes_and_predicates_before_first_reply);
   RUN_TEST(test_turnaround_is_measured_from_send_complete);
   RUN_TEST(test_default_reply_gate_is_250ms);
   RUN_TEST(test_policy_overrides_reply_gate);

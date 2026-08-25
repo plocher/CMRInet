@@ -6,7 +6,7 @@ bench-instrument emulator. The design frames the product as a layout
 I/O image service — sketches deal in I/O images, freshness, and node
 health; CMRInet polling is the first exchange strategy beneath that
 contract. See [docs/DESIGN.md](docs/DESIGN.md) for the layer model and
-decisions D1-D13.
+decisions D1-D17.
 
 Status: **Host engine, bench tracer, and sniffer are built; the
 front-door Host example (`examples/SimpleHost`) lands with this
@@ -39,8 +39,10 @@ Units ladder, from the sketch down to the wire:
 
 A sketch holds a `RemoteNodeHandle` per remote node. The handle exposes
 output writes, input reads, input age, health state, and statistics. It
-carries no poll vocabulary. `RemoteNodeState` is strategy-neutral:
-`UNINITIALIZED`, `ONLINE`, `STALE`, `OFFLINE`.
+carries no poll vocabulary. `RemoteNodeState` is strategy-neutral and
+derived from stored axes (liveness, image state, conformance):
+`UNINITIALIZED`, `ONLINE`, `STALE`, `OFFLINE`, `MISCONFIGURED`,
+`DEGRADED`.
 
 Names follow the spec: **Host** and **Node**, never master or slave.
 The naming grammar puts the head noun last. Qualifiers stack in front.
@@ -48,7 +50,7 @@ Innermost is what a thing speaks. Outermost is what it runs on. All
 public types live in `namespace CMRInet`.
 
 The full layer model, the seam contracts, and the reasoning behind each
-decision are in [docs/DESIGN.md](docs/DESIGN.md) (D1-D13). This section
+decision are in [docs/DESIGN.md](docs/DESIGN.md) (D1-D17). This section
 is a map. DESIGN is the spec.
 
 ## Getting started
