@@ -108,7 +108,13 @@ High-level changes, newest first.
   through a 2 KB stack buffer that silently truncated longer lines
   (issue #86). Harmless until the status line grew a roster; a truncated
   line is malformed JSON, which is worse for a runner than a slow one.
-  Also returns 2 KB of stack to `loop()`.
+  Also returns 2 KB of stack to `loop()`. The record terminator gets the
+  same room check and retry as the body, plus a reserved slice of the
+  time budget: the body only ever exhausts its budget by spinning on a
+  full buffer, so an unchecked terminator write would be dropped exactly
+  when it matters. Under `setTxTimeoutMs(0)` a dropped newline merges two
+  records and leaves the reader no boundary to resync on, which is worse
+  than the truncation this replaced.
 - Per-node state model split by substrate (issue #84, Design v1.3 D15/D16):
   control state, belief state, and observation state are now explicit in
   the Host path. `consecutiveMisses` moved out of `RemoteNodeStatistics`
