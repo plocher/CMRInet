@@ -34,8 +34,17 @@ bool CMRIHost::findSlot_(uint8_t address, size_t& slot) const {
 /// Whole-object assignment rather than a field-by-field checklist: every
 /// member of RemoteNodeHandle carries a default initializer, so this
 /// clears control, belief, and observation at once and cannot fall out
-/// of date when a substrate gains a field. The policy is reset too, so a
-/// reused slot inherits no per-node override from its predecessor.
+/// of date when a substrate gains a field. That matters because #85 and
+/// #87 both add substrate state, and a hand-written field list would rot
+/// silently at exactly the moment it mattered. The policy is reset too,
+/// so a reused slot inherits no per-node override from its predecessor.
+///
+/// PREMISE: this is exhaustive only while every member of
+/// RemoteNodeHandle is a copyable value type. If one ever becomes
+/// non-copyable, self-referential, or holds a pointer into its own
+/// storage, assignment stops clearing it correctly and stops doing so
+/// *quietly* -- no compiler error, just a slot that remembers its
+/// predecessor. Anything of that shape needs explicit handling here.
 // VALIDATION: Design v1.2 D5: slot reuse resets all three substrates
 // (D15). Freshness in particular must be cleared, or a newly added node
 // reports data it never sent.
