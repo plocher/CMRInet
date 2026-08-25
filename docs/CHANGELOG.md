@@ -14,8 +14,11 @@ High-level changes, newest first.
   and now includes `kMisconfigured` and `kDegraded`. `RemoteNodeHandle`
   now exposes `liveness()`, `imageState()`, `conformance()`,
   `consecutiveMisses()`, `isHealthy()`, and `inputsUsable()`. Existing
-  `updateNodeStates_` behavior for current paths is preserved through the
-  projection. Coverage added in `tests/test_host.cpp`; all test, example,
+  `updateNodeStates_` behavior is now pinned by explicit projection tests.
+  One reachable path is now explicit in tests: after prior good data, then
+  silent invalidation, then wrong-geometry return, projection reports
+  `kStale` (not `kUninitialized`) while preserving `kOffline` during the
+  silent phase. Coverage added in `tests/test_host.cpp`; all test, example,
   and desktop build gates pass. Conformance is intentionally inert in
   #84 (`kUnknown`), so `isHealthy()` cannot become true yet and
   `kMisconfigured`/`kDegraded` are not reachable in this ticket.
