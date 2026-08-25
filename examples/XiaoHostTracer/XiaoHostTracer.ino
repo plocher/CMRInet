@@ -266,11 +266,17 @@ void writeCdcLine(void* /*context*/, const char* line) {
     return;
   }
 
+  // One fixed time budget, split so the record boundary can never be
+  // starved by the body. The body cannot borrow the terminator's slice.
   constexpr uint32_t kMaxWaitMs = 250;
+  constexpr uint32_t kTerminatorWaitMs = 50;
+  constexpr uint32_t kBodyWaitMs = kMaxWaitMs - kTerminatorWaitMs;
+
   const size_t lineLen = strlen(line);
-  const uint32_t waitStart = millis();
+  const uint32_t bodyStart = millis();
   size_t written = 0;
-  while (Serial && written < lineLen && (millis() - waitStart) < kMaxWaitMs) {
+  while (Serial && written < lineLen &&
+         (millis() - bodyStart) < kBodyWaitMs) {
     const size_t room = Serial.availableForWrite();
     if (room == 0) {
       delay(1);
@@ -286,11 +292,32 @@ void writeCdcLine(void* /*context*/, const char* line) {
     }
     written += n;
   }
-  // Terminate even if the deadline cut the body short: a reader needs the
-  // record boundary more than it needs the last few bytes.
-  if (Serial) {
-    const uint8_t newline = '\n';
-    Serial.write(&newline, 1);
+
+  // The terminator gets the same room check, the same retry, and its
+  // return value inspected -- setTxTimeoutMs(0) makes a write
+  // discard-and-return when the buffer is full, so an unchecked write is
+  // a silent drop.
+  //
+  // It needs a *reserved* slice rather than the body's leftovers, because
+  // the only way the body exhausts its budget is by spinning on a full
+  // buffer. The one moment the terminator gets written is therefore the
+  // moment it is most likely to be dropped: the failure correlates
+  // exactly with the condition the terminator exists to survive.
+  //
+  // Losing it is worse than losing bytes. A truncated body is one bad
+  // record; a missing newline merges this record with the next and leaves
+  // the reader no boundary to resync on, corrupting everything after.
+  const uint8_t newline = '\n';
+  const uint32_t terminatorStart = millis();
+  while (Serial && (millis() - terminatorStart) < kTerminatorWaitMs) {
+    if (Serial.availableForWrite() == 0) {
+      delay(1);
+      continue;
+    }
+    if (Serial.write(&newline, 1) == 1) {
+      return;
+    }
+    delay(1);
   }
 }
 
