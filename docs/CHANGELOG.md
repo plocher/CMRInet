@@ -16,7 +16,11 @@ High-level changes, newest first.
   `consecutiveMisses()`, `isHealthy()`, and `inputsUsable()`. Existing
   `updateNodeStates_` behavior for current paths is preserved through the
   projection. Coverage added in `tests/test_host.cpp`; all test, example,
-  and desktop build gates pass.
+  and desktop build gates pass. Conformance is intentionally inert in
+  #84 (`kUnknown`), so `isHealthy()` cannot become true yet and
+  `kMisconfigured`/`kDegraded` are not reachable in this ticket.
+  Issue #85 owns conformance population, reachability proofs for those
+  projection states, and non-degenerate predicate divergence proofs.
 - Host configuration error model (issue #80, Design v1.2 D5, breaking):
   `addRemoteNode(...)` now returns its **own** `ConfigStatus` instead of
   `CMRIHost&`, and `begin()` returns `void` instead of a deferred status.

@@ -181,6 +181,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   if (node.config_.inputBytes != 0) {
     memcpy(node.inputs_, reply.body, node.config_.inputBytes);
   }
+  node.hasInputImage_ = true;
   node.freshness_.mark(nowMs);
   ++node.statistics_.exchanges;
   if (node.consecutiveMisses_ != 0) {
@@ -436,11 +437,11 @@ void CMRIHost::buildPollPacket_(size_t nodeIndex) {
   outbound_.mt = MessageType::kPoll;
 }
 
-/// Invalidate cached input state for a node (re-init ladder). Clears
-/// freshness only and keeps the last-good bytes: 0 is a valid consumer
-/// value, so zeroing the buffer would assert "all clear" (the QBASIC
-/// review's F15 hazard). The next state recomputation reports
-/// kUninitialized and inputAgeMs() reports kNeverMarked.
+/// Invalidate freshness for a node (re-init ladder) and keep the
+/// last-good bytes: 0 is a valid consumer value, so zeroing the buffer
+/// would assert "all clear" (the QBASIC review's F15 hazard). The next
+/// state recomputation reports a stale image verdict when the node had
+/// prior good data, and inputAgeMs() reports kNeverMarked.
 /// VALIDATION: Interop v1.1 2.3.10: invalidate cached input state.
 void CMRIHost::invalidateNodeInputs_(RemoteNodeHandle& node) {
   node.freshness_.clear();
@@ -459,8 +460,13 @@ void CMRIHost::updateNodeStates_(uint32_t nowMs) {
       node.liveness_ = RemoteNodeLiveness::kResponsive;
     }
 
-    if (!node.freshness_.marked()) {
+    if (!node.hasInputImage_) {
       node.imageState_ = RemoteNodeImageState::kNone;
+    } else if (!node.freshness_.marked()) {
+      // VALIDATION: Design v1.3 D16: liveness and image validity are
+      // independent axes. Silent liveness must not erase image-state
+      // information into kNone after prior good data existed.
+      node.imageState_ = RemoteNodeImageState::kStale;
     } else if (node.config_.stalenessMs != 0 &&
                node.freshness_.atLeast(nowMs, node.config_.stalenessMs)) {
       node.imageState_ = RemoteNodeImageState::kStale;
