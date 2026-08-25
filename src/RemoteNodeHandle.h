@@ -63,6 +63,33 @@ enum class RemoteNodeState : uint8_t {
   kOnline,         ///< the node answers and its inputs are fresh
   kStale,          ///< inputs are older than the staleness threshold
   kOffline,        ///< the node stopped answering (polling continues)
+  kMisconfigured,  ///< nonconforming with no usable image
+  kDegraded,       ///< image exists, but current faults are present
+};
+
+/// Stored liveness axis (control substrate).
+// VALIDATION: Design v1.3 D16: node health stores liveness separately
+// from image validity and conformance.
+enum class RemoteNodeLiveness : uint8_t {
+  kResponsive,  ///< no current miss run
+  kMissing,     ///< misses exist, but not yet beyond the silent threshold
+  kSilent,      ///< misses exceeded the silent threshold
+};
+
+/// Stored input-image axis (belief substrate).
+// VALIDATION: Design v1.3 D16: input validity is an independent stored axis.
+enum class RemoteNodeImageState : uint8_t {
+  kNone,   ///< no marked image exists
+  kFresh,  ///< image is present and inside staleness threshold
+  kStale,  ///< image is present but older than staleness threshold
+};
+
+/// Stored conformance axis (content-evaluation substrate).
+// VALIDATION: Design v1.3 D16: conformance is current evidence, not latched.
+enum class RemoteNodeConformance : uint8_t {
+  kUnknown,
+  kConforming,
+  kNonconforming,
 };
 
 /// Per-node configuration, independent of exchange discipline.
@@ -97,7 +124,6 @@ struct RemoteNodeStatistics {
   uint32_t recoveries = 0;        ///< exchanges that ended a no-reply run
   uint32_t errors = 0;            ///< malformed replies from this node
   uint32_t lastTurnaroundMs = 0;  ///< send-complete to reply-accepted, last exchange
-  uint32_t consecutiveMisses = 0; ///< current unbroken no-reply run
 };
 
 /// The per-node handle a Host sketch holds. It exposes input image
@@ -202,7 +228,34 @@ class RemoteNodeHandle {
   uint32_t inputAgeMs(uint32_t nowMs) const { return freshness_.ms(nowMs); }
 
   /// Node health as computed at the engine's most recent tick(nowMs).
-  RemoteNodeState state() const { return state_; }
+  RemoteNodeState state() const { return deriveState_(); }
+
+  /// Stored health axes.
+  RemoteNodeLiveness liveness() const { return liveness_; }
+  RemoteNodeImageState imageState() const { return imageState_; }
+  RemoteNodeConformance conformance() const { return conformance_; }
+
+  /// Current miss run length (control state).
+  uint32_t consecutiveMisses() const { return consecutiveMisses_; }
+
+  /// Operator predicate: true only when health is fully green.
+  // VALIDATION: Design v1.3 D16: operator and application predicates are
+  // separate; this predicate is stricter than input usability.
+  bool isHealthy() const {
+    return liveness_ == RemoteNodeLiveness::kResponsive &&
+           imageState_ == RemoteNodeImageState::kFresh &&
+           conformance_ == RemoteNodeConformance::kConforming &&
+           !conformanceBreakerOpen_;
+  }
+
+  /// Application predicate: true when this image can be acted on.
+  // VALIDATION: Design v1.3 D16: application usability is a separate
+  // question from operator-facing health.
+  bool inputsUsable() const {
+    return imageState_ == RemoteNodeImageState::kFresh &&
+           liveness_ != RemoteNodeLiveness::kSilent &&
+           conformance_ != RemoteNodeConformance::kNonconforming;
+  }
 
   /// Cumulative exchange statistics.
   const RemoteNodeStatistics& statistics() const { return statistics_; }
@@ -230,7 +283,11 @@ class RemoteNodeHandle {
 
   // Engine-only state below. The engine is the sole writer of these.
   RemoteNodeStatistics statistics_;
-  RemoteNodeState state_ = RemoteNodeState::kUninitialized;
+  RemoteNodeLiveness liveness_ = RemoteNodeLiveness::kResponsive;
+  RemoteNodeImageState imageState_ = RemoteNodeImageState::kNone;
+  RemoteNodeConformance conformance_ = RemoteNodeConformance::kUnknown;
+  bool conformanceBreakerOpen_ = false;
+  uint32_t consecutiveMisses_ = 0;
   Age freshness_;
   uint8_t inputs_[kMaxInputBytes] = {0};
   bool needsInit_ = true;       ///< engine owes this node an I (JMRI mustInit)
@@ -250,6 +307,25 @@ class RemoteNodeHandle {
   // maxPollBackoffMs; any accepted reply clears it immediately.
   Deadline pollBackoff_;
   uint32_t pollBackoffMs_ = 0;   ///< current backoff duration (0 = none yet)
+
+  RemoteNodeState deriveState_() const {
+    if (liveness_ == RemoteNodeLiveness::kSilent) {
+      return RemoteNodeState::kOffline;
+    }
+    if (imageState_ == RemoteNodeImageState::kNone) {
+      if (conformance_ == RemoteNodeConformance::kNonconforming) {
+        return RemoteNodeState::kMisconfigured;
+      }
+      return RemoteNodeState::kUninitialized;
+    }
+    if (imageState_ == RemoteNodeImageState::kStale) {
+      return RemoteNodeState::kStale;
+    }
+    if (conformance_ == RemoteNodeConformance::kNonconforming) {
+      return RemoteNodeState::kDegraded;
+    }
+    return RemoteNodeState::kOnline;
+  }
 };
 
 }  // namespace CMRInet
