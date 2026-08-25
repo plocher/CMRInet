@@ -192,16 +192,20 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
 
   // Belief: the cached image described the old shape, so it is not
   // merely stale, it is meaningless. Reporting kNone is honest;
-  // retaining bytes under a new geometry would not be.
+  // retaining bytes under a new geometry would not be. Clearing
+  // freshness is what makes the image invalid -- validity is derived
+  // from it (RemoteNodeHandle::hasValidImage_), not separately stored.
   memset(node.inputs_, 0, sizeof(node.inputs_));
-  node.hasInputImage_ = false;
   node.freshness_.clear();
   memset(node.outputs_, 0, sizeof(node.outputs_));
 
-  // imageState_ is a *stored* axis (D16), normally recomputed in
-  // updateNodeStates_. Set it here too, or the handle contradicts itself
-  // between this call and the next tick -- and reading a handle straight
-  // after mutating it is the obvious thing for a sketch to do.
+  // LOAD-BEARING, and it does not look it. imageState_ is a *stored*
+  // axis (D16) that updateNodeStates_ recomputes every tick, so this
+  // assignment reads redundant -- but the recomputation has not run
+  // yet. Without it the handle contradicts itself between this call
+  // returning and the next tick, and reading a handle straight after
+  // mutating it is the obvious thing for a sketch to do. Deleting this
+  // line reintroduces that window silently.
   node.imageState_ = RemoteNodeImageState::kNone;
 
   // Control: owe this node a fresh session. I re-announces NI/NO, and
@@ -219,7 +223,12 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   node.conformance_ = RemoteNodeConformance::kUnknown;
 
   // Observation is untouched: same address, same logical device, so the
-  // counters keep running.
+  // counters keep running -- and observedInputBytes_ in particular
+  // survives deliberately. What changed is the Host's *claim*, not the
+  // Node's physical card complement, so the last demonstrated length is
+  // still the best evidence available. Keeping it is what lets an
+  // operator correct a declaration and see observed and declared agree
+  // (D14: declared is a claim, observed is evidence).
   return ConfigStatus::kOk;
 }
 
@@ -300,6 +309,27 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     // Verify the reply is from the node we polled and that it is an R.
     // Each failure records its reason and the reply's actual bytes so a
     // conformance-checking listener can report what the remote node sent.
+    //
+    // Neither failure below moves the node's conformance axis, and that
+    // is deliberate. Both are packet-rung observations about traffic on
+    // the bus, not image-rung evidence about this node:
+    //
+    // - A reply carrying somebody else's UA is, definitionally,
+    //   somebody else's. Scoring it against the node we happened to be
+    //   polling would charge one device for another's behavior.
+    // - An MT mismatch looks attributable and is not. On 2-wire media
+    //   the Host sees its own frames (see this function's header), so
+    //   its own P echoes back with rx.ua == node.ua_ and mt == 'P' and
+    //   lands right here. Wiring that to the axis would park every node
+    //   on every 2-wire Host in DEGRADED permanently.
+    //
+    // So both stay at host scope on repliesRejected, matching where the
+    // per-node `errors` counter already draws the same line. The event
+    // still carries the classified fault, so nothing is hidden -- it is
+    // reported without being attributed.
+    // VALIDATION: Design v1.3 D14: only image-rung faults are evidence
+    // about a Node's conformance; packet-rung observations are named
+    // and reported without moving the stored verdict.
     if (rx.ua != node.ua_) {
       ++statistics_.repliesRejected;
       emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
@@ -324,6 +354,16 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
 void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   RemoteNodeHandle& node = nodes_[polledIndex_];
 
+  // L1 truth acquisition. The body length of a reply that carries this
+  // node's UA and an R type is the geometry the node just demonstrated,
+  // whatever it is. Recorded before the comparison below, so the
+  // evidence survives the path that throws the body away -- which is
+  // exactly the path where somebody needs it.
+  // VALIDATION: Design v1.3 D14: declared geometry is a claim and reply
+  // length is evidence (L1). L1 is the only rung covering a fielded
+  // Node that ignores I and so never sends the I-ack L2 would need.
+  node.observedInputBytes_ = static_cast<uint16_t>(reply.length);
+
   if (reply.length != node.config_.inputBytes) {
     // The node answered with the wrong geometry. The reply proves the
     // node is present, so the miss run ends, but the body is never
@@ -333,6 +373,19 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     ++node.statistics_.errors;
     ++statistics_.repliesRejected;
     node.consecutiveMisses_ = 0;
+
+    // Content evaluation: current, first-hand evidence that the Host's
+    // declared geometry and the Node's actual geometry disagree. The
+    // Node is doing exactly what it was built to do, so this is a
+    // disagreement to be fixed in configuration, not a defect -- see
+    // attributionOf(kImageGeometryMismatch).
+    // VALIDATION: Design v1.3 D16: the conformance axis is populated
+    // from current evidence and is not latched.
+    node.conformance_ = RemoteNodeConformance::kNonconforming;
+    node.lastFault_.fault = ConformanceFault::kImageGeometryMismatch;
+    node.lastFault_.expected = node.config_.inputBytes;
+    node.lastFault_.observed = static_cast<uint16_t>(reply.length);
+    node.lastFault_.atMs = nowMs;
     // The node answered at all, so it is not chronically offline; clear
     // any poll backoff the same as a clean accept (map issue #41).
     const uint32_t previousBackoffMs = node.pollBackoffMs_;
@@ -355,8 +408,17 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   if (node.config_.inputBytes != 0) {
     memcpy(node.inputs_, reply.body, node.config_.inputBytes);
   }
-  node.hasInputImage_ = true;
+  // Marking freshness is what makes the image valid: validity is
+  // derived from the mark rather than tracked alongside it, so there is
+  // no second flag here to forget.
   node.freshness_.mark(nowMs);
+
+  // Current positive evidence, and no more latched than the negative
+  // kind: the next mismatch takes it away again, and losing contact
+  // degrades it to kUnknown in updateNodeStates_ below.
+  // VALIDATION: Design v1.3 D16: conformance may only be asserted from
+  // current evidence.
+  node.conformance_ = RemoteNodeConformance::kConforming;
   ++node.statistics_.exchanges;
   if (node.consecutiveMisses_ != 0) {
     ++node.statistics_.recoveries;
@@ -670,13 +732,20 @@ void CMRIHost::updateNodeStates_(uint32_t nowMs) {
       node.liveness_ = RemoteNodeLiveness::kResponsive;
     }
 
-    if (!node.hasInputImage_) {
+    // The image axis answers "is the cached image valid, and if so how
+    // old" -- a belief-substrate question with two inputs and no
+    // history component. A node that never replied, one whose image
+    // re-init invalidation cleared (interop 2.3.10), and one whose
+    // geometry changed under it all report kNone, because in all three
+    // the cached image is equally unusable. "Has this node ever worked"
+    // is statistics_.exchanges, which is observation, where D15 puts
+    // history.
+    // VALIDATION: Design v1.3 D15: belief carries the current verdict
+    // only; history belongs to observation.
+    // VALIDATION: Design v1.3 D16: image validity is an independent
+    // stored axis, computed from belief rather than from liveness.
+    if (!node.hasValidImage_()) {
       node.imageState_ = RemoteNodeImageState::kNone;
-    } else if (!node.freshness_.marked()) {
-      // VALIDATION: Design v1.3 D16: liveness and image validity are
-      // independent axes. Silent liveness must not erase image-state
-      // information into kNone after prior good data existed.
-      node.imageState_ = RemoteNodeImageState::kStale;
     } else if (node.config_.stalenessMs != 0 &&
                node.freshness_.atLeast(nowMs, node.config_.stalenessMs)) {
       node.imageState_ = RemoteNodeImageState::kStale;
@@ -730,6 +799,15 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.replyLength = replyLength;
   event.replyUa = replyUa;
   event.replyMt = replyMt;
+  // Classification is derived here rather than passed in, so the fault
+  // and the reason cannot disagree at any call site.
+  event.fault = conformanceFaultFor(rejectReason);
+  // "Expected length" is only a comparison that was actually made at
+  // the image rung. Asking layerOf() instead of re-testing the reason
+  // keeps this from drifting if the mapping ever grows a rung (D14).
+  event.expectedLength = (layerOf(event.fault) == ConformanceLayer::kImage)
+                             ? node.config_.inputBytes
+                             : 0;
   event.pollBackoffReason = pollBackoffReason;
   event.previousPollBackoffMs = previousPollBackoffMs;
   event.newPollBackoffMs = newPollBackoffMs;
@@ -755,6 +833,20 @@ const char* configStatusString(CMRIHost::ConfigStatus status) {
     case CMRIHost::ConfigStatus::kOutputBytesTooLarge:return "output bytes too large";
   }
   return "unknown";
+}
+
+ConformanceFault conformanceFaultFor(ReplyRejectReason reason) {
+  switch (reason) {
+    case ReplyRejectReason::kNone:
+      return ConformanceFault::kNone;
+    case ReplyRejectReason::kUaMismatch:
+      return ConformanceFault::kPacketUnexpectedAddress;
+    case ReplyRejectReason::kMtMismatch:
+      return ConformanceFault::kPacketUnexpectedType;
+    case ReplyRejectReason::kGeometryMismatch:
+      return ConformanceFault::kImageGeometryMismatch;
+  }
+  return ConformanceFault::kNone;
 }
 
 const char* replyRejectReasonString(ReplyRejectReason reason) {
