@@ -122,12 +122,30 @@ enum class CMRIHostEventType : uint8_t {
 /// carries kReplyRejected; kNone otherwise. Lets a conformance-checking
 /// sketch print "expected N in, got M" or "polled UA x, got UA y"
 /// without reflashing the remote node.
+///
+/// This is the polled strategy's own local vocabulary. It maps *into*
+/// the role-neutral ConformanceFault taxonomy through
+/// conformanceFaultFor() below, and is not promoted to it: a push
+/// strategy has geometry disagreements but no notion of a rejected
+/// reply (Design v1.3 D14).
 enum class ReplyRejectReason : uint8_t {
   kNone,              ///< not a rejection event
   kUaMismatch,        ///< reply UA != the polled node's UA
   kMtMismatch,        ///< reply MT != 'R' (kReceiveData)
   kGeometryMismatch,  ///< reply length != configured inputBytes
 };
+
+/// Map a polled-strategy reject reason into the shared fault taxonomy.
+///
+/// Total and deterministic, which is why the event can carry the
+/// classified fault without the emitting call site passing one: the
+/// reason already determines it. Callers derive layer and attribution
+/// from the result with layerOf() and attributionOf() rather than
+/// reading stored fields (D14).
+// VALIDATION: Design v1.3 D14: the polled engine's ReplyRejectReason
+// maps into the role-neutral fault vocabulary rather than being
+// promoted to it.
+ConformanceFault conformanceFaultFor(ReplyRejectReason reason);
 
 /// Why pollBackoffMs_ changed for a node.
 enum class PollBackoffChangeReason : uint8_t {
@@ -155,6 +173,24 @@ struct CMRIHostEvent {
   uint16_t replyLength = 0;  ///< body byte count of the rejected reply
   uint8_t  replyUa = 0;      ///< UA byte of the rejected reply
   uint8_t  replyMt = 0;      ///< MT byte of the rejected reply
+
+  /// `rejectReason` classified into the shared taxonomy. Derived from
+  /// the reason, so it needs no separate argument at the emitting call
+  /// site and cannot disagree with it.
+  ///
+  /// Every reject reason maps, including the two that do not move the
+  /// node's stored conformance axis: a listener should see the full
+  /// classification of what arrived on the wire even when the Host
+  /// declines to attribute it to the polled node. Ask layerOf() and
+  /// attributionOf() for the axes; they are not stored here.
+  ConformanceFault fault = ConformanceFault::kNone;
+
+  /// The Host's assumption that `replyLength` contradicted -- the node's
+  /// declared input byte count. Populated only when `fault` is an
+  /// image-layer fault, where a length comparison is what was made;
+  /// zero otherwise, since "expected length" means nothing for a UA or
+  /// MT disagreement.
+  uint16_t expectedLength = 0;
   /// Backoff details. Meaningful only when type == kPollBackoffChanged.
   PollBackoffChangeReason pollBackoffReason = PollBackoffChangeReason::kNone;
   uint32_t previousPollBackoffMs = 0;

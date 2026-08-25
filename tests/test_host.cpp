@@ -13,14 +13,20 @@
 #include "unity.h"
 
 using CMRInet::Age;
+using CMRInet::attributionOf;
 using CMRInet::CMRIHost;
 using CMRInet::CMRIHostConfig;
 using CMRInet::CMRIHostEvent;
 using CMRInet::CMRIHostEventType;
 using CMRInet::CMRIHostStatistics;
 using CMRInet::CMRIPacket;
+using CMRInet::ConformanceFault;
+using CMRInet::ConformanceFaultRecord;
+using CMRInet::ConformanceLayer;
 using CMRInet::encodeFrame;
+using CMRInet::FaultAttribution;
 using CMRInet::kUaOffset;
+using CMRInet::layerOf;
 using CMRInet::MockCMRITransport;
 using CMRInet::RemoteNodeConfig;
 using CMRInet::RemoteNodeConformance;
@@ -108,13 +114,24 @@ struct ListenerLog {
   int rxTraces = 0;
   uint8_t lastTxMt = 0;
   uint8_t lastRxMt = 0;
+  /// Classification carried by the last kReplyRejected event. Recorded
+  /// separately from the node's stored axis so a test can show a fault
+  /// being *reported* without being *attributed*.
+  ConformanceFault lastFault = ConformanceFault::kNone;
+  uint16_t lastExpectedLength = 0;
+  uint16_t lastReplyLength = 0;
 };
 
 static void recordEvent(void* context, const CMRIHostEvent& event) {
   ListenerLog& log = *static_cast<ListenerLog*>(context);
   switch (event.type) {
     case CMRIHostEventType::kReplyAccepted: ++log.accepted; break;
-    case CMRIHostEventType::kReplyRejected: ++log.rejected; break;
+    case CMRIHostEventType::kReplyRejected:
+      ++log.rejected;
+      log.lastFault = event.fault;
+      log.lastExpectedLength = event.expectedLength;
+      log.lastReplyLength = event.replyLength;
+      break;
     case CMRIHostEventType::kReplyTimeout: ++log.timeouts; break;
     case CMRIHostEventType::kReinitScheduled: ++log.reinitScheduled; break;
     case CMRIHostEventType::kPollBackoffChanged: break;
@@ -301,9 +318,19 @@ static void test_reply_commits_inputs_freshness_state_statistics(void) {
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
   TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
   TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, rig.node->imageState());
-  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  // A reply of the declared length is current positive evidence, so the
+  // conformance axis leaves kUnknown for the first time (#85).
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming,
+                    rig.node->conformance());
   TEST_ASSERT_TRUE(rig.node->inputsUsable());
-  TEST_ASSERT_FALSE(rig.node->isHealthy());
+  // And that is what lets isHealthy() become true at all. While
+  // conformance was inert the predicate could never fire, which is why
+  // #84 staged this proof forward to #85.
+  TEST_ASSERT_TRUE(rig.node->isHealthy());
+  // L1: a geometry was demonstrated, and it agrees with the claim.
+  TEST_ASSERT_EQUAL_UINT16(2, rig.node->observedInputBytes());
+  TEST_ASSERT_EQUAL(ConformanceFault::kNone,
+                    rig.node->lastConformanceFault().fault);
   TEST_ASSERT_EQUAL_UINT32(1, rig.host.statistics().repliesAccepted);
   TEST_ASSERT_TRUE(rig.node->inputAgeMs(base + 2) <= 2);
 }
@@ -379,16 +406,40 @@ static void test_wrong_ua_reply_is_rejected(void) {
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
   TEST_ASSERT_TRUE(rig.host.statistics().repliesRejected >= 1);
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, rig.node->state());
+  // The conformance axis does not move. A reply carrying somebody
+  // else's UA is, definitionally, somebody else's -- charging it to the
+  // node we happened to be polling would be an attribution error, and
+  // nothing about *this* node's geometry was demonstrated either.
+  // VALIDATION: Design v1.3 D14: packet-rung observations are reported
+  // without moving the Node's stored conformance verdict.
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  TEST_ASSERT_EQUAL_UINT16(RemoteNodeHandle::kGeometryNeverObserved,
+                           rig.node->observedInputBytes());
+  TEST_ASSERT_EQUAL(ConformanceFault::kNone,
+                    rig.node->lastConformanceFault().fault);
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().errors);
 }
 
 static void test_wrong_mt_reply_is_rejected(void) {
   Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'E'));
   runUntil(rig.host, base, base + 250);
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
   TEST_ASSERT_TRUE(rig.host.statistics().repliesRejected >= 1);
+  // Reported but not attributed: the event names the fault and its
+  // rung, while the node's stored axis is untouched. See
+  // test_self_echoed_poll_does_not_make_the_node_nonconforming for why
+  // this branch in particular must not move the axis.
+  TEST_ASSERT_EQUAL(ConformanceFault::kPacketUnexpectedType, log.lastFault);
+  TEST_ASSERT_EQUAL(ConformanceLayer::kPacket, layerOf(log.lastFault));
+  // No length comparison was made, so there is no expected length.
+  TEST_ASSERT_EQUAL_UINT16(0, log.lastExpectedLength);
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().errors);
 }
 
 static void test_wrong_length_reply_counts_error_without_commit(void) {
@@ -402,23 +453,252 @@ static void test_wrong_length_reply_counts_error_without_commit(void) {
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().noReplies);
   TEST_ASSERT_EQUAL_HEX8(0x00, rig.node->inputByte(0));  // never committed
-  TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, rig.node->state());
+  // Was UNINITIALIZED until #85, which reads as "hasn't started yet" for
+  // a node that is in fact answering every poll with the wrong shape.
+  // The disagreement now has a name.
+  TEST_ASSERT_EQUAL(RemoteNodeState::kMisconfigured, rig.node->state());
 }
 
-static void test_wrong_geometry_after_silent_run_reports_stale(void) {
+// ------------------------------------------- conformance (D14 L1, D16)
+
+static void test_declared_geometry_disagreement_is_observed_and_reported(void) {
+  // The #80 bench failure reproduced end to end: a node declared NI=4
+  // against physically 3-byte hardware. Every reply is rejected and no
+  // data is ever committed. The Host used to report UNINITIALIZED,
+  // which names the wrong problem and is a large part of why this hid.
+  Rig rig(CMRIHostConfig(), CMRIHost::RemoteNodePolicy(), /*inputBytes=*/4);
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  uint32_t base = primeToPoll(rig);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+  runUntil(rig.host, base, base + 2);
+
+  // Detected and stored, not merely counted.
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kMisconfigured, rig.node->state());
+
+  // No data committed (interop 2.2.8), and the node is answering, so
+  // this is emphatically not a liveness problem -- the distinction the
+  // old UNINITIALIZED reading destroyed.
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
+  TEST_ASSERT_EQUAL_HEX8(0x00, rig.node->inputByte(0));
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, rig.node->imageState());
+
+  // Expected against actual, both durable on the handle: the detail an
+  // operator needs to fix the declaration without reflashing the node.
+  TEST_ASSERT_EQUAL_UINT16(3, rig.node->observedInputBytes());
+  const ConformanceFaultRecord& fault = rig.node->lastConformanceFault();
+  TEST_ASSERT_EQUAL(ConformanceFault::kImageGeometryMismatch, fault.fault);
+  TEST_ASSERT_EQUAL_UINT16(4, fault.expected);
+  TEST_ASSERT_EQUAL_UINT16(3, fault.observed);
+
+  // Classified, not just named. Image rung, and a disagreement rather
+  // than a defect -- so the remedy is a configuration change, and an
+  // operator sent to reflash firmware would be sent to the wrong place.
+  // VALIDATION: Design v1.3 D14: geometry mismatch is a disagreement;
+  // layer and attribution are derived from the fault, not stored.
+  TEST_ASSERT_EQUAL(ConformanceLayer::kImage, layerOf(fault.fault));
+  TEST_ASSERT_EQUAL(FaultAttribution::kDisagreement,
+                    attributionOf(fault.fault));
+
+  // The same detail reaches a listener live.
+  TEST_ASSERT_EQUAL(ConformanceFault::kImageGeometryMismatch, log.lastFault);
+  TEST_ASSERT_EQUAL_UINT16(4, log.lastExpectedLength);
+  TEST_ASSERT_EQUAL_UINT16(3, log.lastReplyLength);
+
+  TEST_ASSERT_FALSE(rig.node->isHealthy());
+  TEST_ASSERT_FALSE(rig.node->inputsUsable());
+}
+
+static void test_conformance_decays_to_unknown_when_contact_is_lost(void) {
+  // Conformance is current evidence, never latched. A node that has
+  // gone silent cannot be asserted nonconforming, because the Host
+  // cannot experience a misconfiguration it cannot reach -- which is
+  // also what makes OFFLINE and MISCONFIGURED mutually exclusive and
+  // removes any ordering question between them.
+  // VALIDATION: Design v1.3 D16: loss of contact degrades conformance
+  // to unknown; history survives in the observation substrate.
+  Rig rig(CMRIHostConfig(), CMRIHost::RemoteNodePolicy(), /*inputBytes=*/4);
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  uint32_t base = primeToPoll(rig);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+  runUntil(rig.host, base, base + 2);
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    rig.node->conformance());
+
+  // Now it stops answering entirely.
+  rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
+                                 MockCMRITransport::kRepeatForever);
+  bool silent = false;
+  for (uint32_t t = base + 3; t <= base + 25000 && !silent; ++t) {
+    rig.host.tick(t);
+    silent = rig.node->liveness() == RemoteNodeLiveness::kSilent;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(silent, "node did not reach silent liveness");
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
+
+  // History is not lost, it moved to where D15 keeps history.
+  TEST_ASSERT_EQUAL(ConformanceFault::kImageGeometryMismatch,
+                    rig.node->lastConformanceFault().fault);
+  TEST_ASSERT_EQUAL_UINT16(3, rig.node->observedInputBytes());
+  TEST_ASSERT_TRUE(rig.node->statistics().errors >= 1);
+}
+
+static void test_degraded_when_a_conforming_node_starts_faulting(void) {
+  // DEGRADED is the node that commits data while faulting. Reached by
+  // interleaving: a good reply, then a wrong-shaped one while the
+  // committed image is still fresh, then a good one again -- which also
+  // shows the axis is not latched in either direction.
+  Rig rig;  // 2 input bytes, stalenessMs 0, so a marked image stays fresh
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  uint32_t base = primeToPoll(rig);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+
+  uint32_t t = base;
+  bool committed = false;
+  for (; t <= base + 5000 && !committed; ++t) {
+    rig.host.tick(t);
+    committed = rig.node->statistics().exchanges >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(committed, "first good reply never committed");
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+  TEST_ASSERT_TRUE(rig.node->isHealthy());
+
+  bool faulted = false;
+  for (; t <= base + 5000 && !faulted; ++t) {
+    rig.host.tick(t);
+    faulted = rig.node->statistics().errors >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(faulted, "wrong-geometry reply never landed");
+  // Faulting, but the image it already committed is still fresh and the
+  // node is still answering: that is DEGRADED rather than MISCONFIGURED.
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kDegraded, rig.node->state());
+  // A nonconforming node's image must not be acted on even while fresh.
+  TEST_ASSERT_FALSE(rig.node->inputsUsable());
+  TEST_ASSERT_FALSE(rig.node->isHealthy());
+  // The last good bytes are still readable; the fault did not overwrite
+  // them with the wrong-shaped body.
+  TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));
+
+  bool recovered = false;
+  for (; t <= base + 5000 && !recovered; ++t) {
+    rig.host.tick(t);
+    recovered = rig.node->statistics().exchanges >= 2;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(recovered, "second good reply never committed");
+  // Current evidence, so a conforming reply takes the verdict back.
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+  TEST_ASSERT_TRUE(rig.node->isHealthy());
+  // The fault record is observation, so it survives the recovery.
+  TEST_ASSERT_EQUAL(ConformanceFault::kImageGeometryMismatch,
+                    rig.node->lastConformanceFault().fault);
+}
+
+static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
+  // The middle rung of D16's chronology, which the v1.3 projection made
+  // unreachable by folding every non-fresh image into MISCONFIGURED. A
+  // node that goes nonconforming while holding a valid image reaches
+  // STALE when that image ages out -- rejected replies stop refreshing
+  // freshness, and "your data is old" is the honest report for as long
+  // as the last good image is still valid.
+  // VALIDATION: Design v1.3 D16: a nonconforming node reaches STALE
+  // first; MISCONFIGURED needs invalidation to clear the image.
+  CMRIHostConfig config;
+  config.missThreshold = 1000;  // no invalidation inside this test
+  Rig rig(config, CMRIHost::RemoteNodePolicy(), 2, 0);
+  RemoteNodeConfig staleConfig;
+  staleConfig.inputBytes = 2;
+  staleConfig.stalenessMs = 100;
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    rig.host.addRemoteNode(6, staleConfig));
+  RemoteNodeHandle* node = rig.host.node(6);
+  TEST_ASSERT_NOT_NULL(node);
+  rig.node->setEnabled(false);  // only node 6 is polled
+  rig.host.begin();
+
+  const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
+  rig.transport.onSendReplyPacket(
+      6 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  runUntil(rig.host, 0, 510);  // I -> settle -> T -> P -> reply
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming, node->conformance());
+
+  // Wrong geometry arrives while the image is still inside its 100 ms
+  // staleness window.
+  rig.transport.onSendReplyPacket(
+      6 + kUaOffset, 'P', makePacket(6, 'R', threeBytes, sizeof(threeBytes)),
+      0, 1);
+  uint32_t t = 511;
+  bool faulted = false;
+  for (; t <= 590 && !faulted; ++t) {
+    rig.host.tick(t);
+    faulted = node->statistics().errors >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(
+      faulted, "geometry mismatch did not land inside the staleness window");
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kDegraded, node->state());
+
+  // Nothing refreshes it from here, so the image ages out. Still
+  // nonconforming, still answering -- and now STALE, not MISCONFIGURED.
+  runUntil(rig.host, t, 900);
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, node->imageState());
+  TEST_ASSERT_TRUE(node->liveness() != RemoteNodeLiveness::kSilent);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kStale, node->state());
+}
+
+static void test_wrong_geometry_after_invalidation_reports_misconfigured(void) {
+  // The last rung: re-init invalidation clears the image, so a
+  // nonconforming node with nothing valid left reports MISCONFIGURED.
+  //
+  // This assertion was pinned as STALE on #89, under inert conformance,
+  // and is deliberately reversed here. A test written before the
+  // deciding input existed cannot testify about what happens once it
+  // does -- and STALE would conceal a geometry disagreement behind
+  // "your data is old", the same concealment as UNINITIALIZED hiding
+  // the #80 node.
   Rig rig;  // node expects 2 input bytes
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   uint32_t base = primeToPoll(rig);
 
-  // Establish a committed image first, so this node has image history.
+  // Establish a committed image first, so invalidation has something to
+  // invalidate.
   rig.transport.onSendReplyPacket(
       5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
 
-  // Then force the node through a silent miss-run and have it return with
-  // wrong geometry. The mismatch reply must not commit data.
+  // Then a silent miss-run past the threshold (which fires the re-init
+  // ladder and invalidates the image), and a return with wrong
+  // geometry. The mismatch reply must not commit data.
   rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 6);
   rig.transport.onSendReplyPacket(
       5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
@@ -438,13 +718,127 @@ static void test_wrong_geometry_after_silent_run_reports_stale(void) {
       reachedGeometryReject,
       "did not reach geometry mismatch after silent miss-run");
 
-  // Pin the projection behavior: after image history exists, silent +
-  // invalidation + wrong-geometry return keeps the image axis verdict and
-  // projects STALE (not UNINITIALIZED).
+  // The reply ended the miss run, so liveness recovered -- this is not
+  // the OFFLINE branch. The image axis reads kNone because invalidation
+  // cleared it, which is what makes MISCONFIGURED reachable at all.
   TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
-  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, rig.node->imageState());
-  TEST_ASSERT_EQUAL(RemoteNodeState::kStale, rig.node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kMisconfigured, rig.node->state());
   TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(rejectAt));
+  // The bytes themselves are still there (F15): invalidation is about
+  // validity, not about erasing the buffer.
+  TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));
+}
+
+static void test_self_echoed_poll_does_not_make_the_node_nonconforming(void) {
+  // On 2-wire media the Host sees its own frames. Its own P comes back
+  // carrying the polled node's UA with mt 'P', landing in the
+  // MT-mismatch branch. If that branch moved the conformance axis,
+  // every node on every 2-wire Host would sit in DEGRADED permanently.
+  // VALIDATION: Interop v1.1 2.3.5: verify UA and MT and discard
+  // everything else -- including the Host's own echoed frames.
+  // VALIDATION: Design v1.3 D14: packet-rung observations are reported
+  // without being attributed to the polled Node.
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  uint32_t base = primeToPoll(rig);
+
+  // Establish a healthy, conforming node first, so the echo has a real
+  // verdict to damage rather than an unset one.
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  uint32_t t = base;
+  bool committed = false;
+  for (; t <= base + 5000 && !committed; ++t) {
+    rig.host.tick(t);
+    committed = rig.node->statistics().exchanges >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(committed, "setup reply never committed");
+  TEST_ASSERT_TRUE(rig.node->isHealthy());
+
+  // Now the Host's own poll echoes back at it: same UA, mt 'P'.
+  rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'P'), 0, 1);
+  const uint32_t rejectedBefore = rig.host.statistics().repliesRejected;
+  bool echoed = false;
+  for (; t <= base + 5000 && !echoed; ++t) {
+    rig.host.tick(t);
+    echoed = rig.host.statistics().repliesRejected > rejectedBefore;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(echoed, "self-echo was never rejected");
+
+  // Reported: the listener sees the fault, correctly classified.
+  TEST_ASSERT_EQUAL(ConformanceFault::kPacketUnexpectedType, log.lastFault);
+  TEST_ASSERT_EQUAL(ConformanceLayer::kPacket, layerOf(log.lastFault));
+  // Not attributed: the node keeps its verdict, its counters, and its
+  // health. This is the assertion that would fail if the MT branch were
+  // wired to the axis.
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().errors);
+  TEST_ASSERT_EQUAL(ConformanceFault::kNone,
+                    rig.node->lastConformanceFault().fault);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+  TEST_ASSERT_TRUE(rig.node->isHealthy());
+  // And the echo taught us nothing about geometry, so the L1 observation
+  // still reflects the last real reply.
+  TEST_ASSERT_EQUAL_UINT16(2, rig.node->observedInputBytes());
+}
+
+static void test_axes_and_predicates_diverge_at_missing_with_fresh_image(void) {
+  // Axis independence, and the non-degenerate divergence of the two
+  // predicates, in one scenario.
+  //
+  // This replaces #84's recorded criterion (kSilent with a surviving
+  // image verdict), which #85 makes unsatisfiable: silent past
+  // threshold means the ladder fired, which means invalidated, which
+  // means kNone. This pairing is better evidence anyway -- it needs no
+  // re-init ladder, and no liveness-derived implementation can produce
+  // it. See the amendment recorded on #84.
+  // VALIDATION: Design v1.3 D16: liveness, image validity, and
+  // conformance are independent axes; isHealthy() and inputsUsable()
+  // answer different questions and diverge in both directions.
+  Rig rig;
+  uint32_t base = primeToPoll(rig);
+  rig.transport.onSendReplyPacket(
+      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      1);
+  uint32_t t = base;
+  bool committed = false;
+  for (; t <= base + 5000 && !committed; ++t) {
+    rig.host.tick(t);
+    committed = rig.node->statistics().exchanges >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(committed, "setup reply never committed");
+
+  // Exactly one miss: enough for kMissing, well short of the threshold
+  // that would invalidate the image. Assert the instant it lands, before
+  // a second miss accumulates.
+  bool missed = false;
+  for (; t <= base + 5000 && !missed; ++t) {
+    rig.host.tick(t);
+    missed = rig.node->statistics().noReplies >= 1;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(missed, "no miss inside the expected window");
+
+  // Independence: liveness has moved off kResponsive while the image
+  // axis holds its own verdict, and the projection still reads ONLINE.
+  // A state derived from liveness could not produce this pairing.
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kMissing, rig.node->liveness());
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, rig.node->imageState());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming,
+                    rig.node->conformance());
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+
+  // Divergence, and non-degenerate: conformance is genuinely set, so
+  // the predicates disagree because they answer different questions,
+  // not because one input is missing. The application may act on this
+  // image; the operator should still be told the node is missing polls.
+  TEST_ASSERT_TRUE(rig.node->inputsUsable());
+  TEST_ASSERT_FALSE(rig.node->isHealthy());
 }
 
 // ------------------------------------------- miss, recovery, re-init, health
@@ -563,14 +957,28 @@ static void test_invalidation_keeps_last_good_bytes(void) {
   TEST_ASSERT_TRUE_MESSAGE(reachedSixMisses, "did not reach six misses for invalidation test");
   // Invalidation clears freshness but keeps the last-good bytes: 0 is a
   // valid consumer value, so zeroing would assert "all clear" (QBASIC F15).
+  // This is the whole point of the test and is unchanged -- the hazard is
+  // about the buffer, never about the validity verdict.
   TEST_ASSERT_EQUAL(Age::kNeverMarked, rig.node->inputAgeMs(sixMissesAt));
   TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));  // NOT zeroed
   TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->inputByte(1));
-  // Discriminating D16 assertion: liveness says SILENT, and image state
-  // keeps its own validity verdict (STALE) instead of collapsing to NONE.
+  // The image axis reads kNone, not kStale. Invalidation means "this
+  // image is no longer valid" (interop 2.3.10), and the axis is a
+  // validity claim rather than a history one -- "did this node ever
+  // work" is statistics().exchanges, in the observation substrate where
+  // D15 keeps history.
+  //
+  // This pairing used to carry the axis-independence proof, back when a
+  // latching hasInputImage_ kept the verdict at kStale. It cannot any
+  // more: silent past threshold implies the ladder fired implies
+  // invalidated. Independence moved to
+  // test_axes_and_predicates_diverge_at_missing_with_fresh_image, which
+  // proves it without depending on invalidation at all. Amendment
+  // recorded on #84.
   TEST_ASSERT_EQUAL(RemoteNodeLiveness::kSilent, rig.node->liveness());
-  TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, rig.node->imageState());
-  // Projection still maps this to OFFLINE because liveness dominates the
+  TEST_ASSERT_EQUAL(RemoteNodeImageState::kNone, rig.node->imageState());
+  TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
+  // Projection maps this to OFFLINE because liveness dominates the
   // scalar state.
   TEST_ASSERT_EQUAL(RemoteNodeState::kOffline, rig.node->state());
 }
@@ -1542,7 +1950,13 @@ int main(void) {
   RUN_TEST(test_wrong_ua_reply_is_rejected);
   RUN_TEST(test_wrong_mt_reply_is_rejected);
   RUN_TEST(test_wrong_length_reply_counts_error_without_commit);
-  RUN_TEST(test_wrong_geometry_after_silent_run_reports_stale);
+  RUN_TEST(test_declared_geometry_disagreement_is_observed_and_reported);
+  RUN_TEST(test_conformance_decays_to_unknown_when_contact_is_lost);
+  RUN_TEST(test_degraded_when_a_conforming_node_starts_faulting);
+  RUN_TEST(test_nonconforming_node_reaches_stale_before_misconfigured);
+  RUN_TEST(test_wrong_geometry_after_invalidation_reports_misconfigured);
+  RUN_TEST(test_self_echoed_poll_does_not_make_the_node_nonconforming);
+  RUN_TEST(test_axes_and_predicates_diverge_at_missing_with_fresh_image);
   RUN_TEST(test_recovery_after_miss);
   RUN_TEST(test_offline_after_miss_threshold_then_recovers);
   RUN_TEST(test_reinit_ladder_fires_after_miss_threshold);

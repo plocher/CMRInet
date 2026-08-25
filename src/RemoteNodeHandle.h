@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "CMRITime.h"
+#include "ConformanceFault.h"
 
 // Geometry knob: the per-node input image capacity in data bytes.
 //
@@ -66,6 +67,56 @@ enum class RemoteNodeState : uint8_t {
   kMisconfigured,  ///< nonconforming with no usable image
   kDegraded,       ///< image exists, but current faults are present
 };
+
+/// Telemetry and log spelling of a node health state.
+///
+/// Lives beside the enum, following configStatusString(),
+/// replyRejectReasonString(), and conformanceFaultString(): a
+/// human-readable rendering belongs with the vocabulary it renders, so
+/// adding an enumerator and forgetting its rendering is one edit to
+/// notice rather than three places to hunt.
+///
+/// Every desktop test TU compiles this header under -Wall -Wextra
+/// -Werror, so an unhandled enumerator fails the build here. That is
+/// precisely what did not happen when kMisconfigured and kDegraded were
+/// added: two sketch-local copies of this switch kept rendering "??" on
+/// the same commit, unreported, because arduino-cli passes no warning
+/// flags to a sketch (#85, #93).
+inline const char* remoteNodeStateString(RemoteNodeState state) {
+  switch (state) {
+    case RemoteNodeState::kUninitialized: return "UNINITIALIZED";
+    case RemoteNodeState::kOnline:        return "ONLINE";
+    case RemoteNodeState::kStale:         return "STALE";
+    case RemoteNodeState::kOffline:       return "OFFLINE";
+    case RemoteNodeState::kMisconfigured: return "MISCONFIGURED";
+    case RemoteNodeState::kDegraded:      return "DEGRADED";
+  }
+  return "UNKNOWN";
+}
+
+/// Fixed-width state tag for a character-cell display.
+///
+/// CONTRACT: exactly three characters, always, space-padded where the
+/// abbreviation is shorter. Callers align columns against that width --
+/// HostStatusPanel::nodeRowText() lays out "UAxx:TAG <lat> <n>err", and
+/// a two- or four-character tag shifts every field after it. A new
+/// enumerator must therefore pick a three-character abbreviation, not
+/// the shortest string that happens to read well.
+///
+/// Not derivable from remoteNodeStateString() by truncation:
+/// "MISCONFIGURED" and "OFFLINE" would both yield "OFF". Hence two
+/// renderings rather than one plus a formatter.
+inline const char* remoteNodeStateTag(RemoteNodeState state) {
+  switch (state) {
+    case RemoteNodeState::kUninitialized: return "---";
+    case RemoteNodeState::kOnline:        return "ON ";
+    case RemoteNodeState::kStale:         return "OLD";
+    case RemoteNodeState::kOffline:       return "OFF";
+    case RemoteNodeState::kMisconfigured: return "CFG";  // go check config
+    case RemoteNodeState::kDegraded:      return "DEG";
+  }
+  return "???";
+}
 
 /// Stored liveness axis (control substrate).
 // VALIDATION: Design v1.3 D16: node health stores liveness separately
@@ -131,6 +182,40 @@ struct RemoteNodeStatistics {
   uint32_t lastTurnaroundMs = 0;  ///< send-complete to reply-accepted, last exchange
 };
 
+/// The last conformance fault attributed to a node: what it was, what
+/// the Host expected, what the Node demonstrated, and when.
+///
+/// Observation substrate (D15): reporting only, never read back to gate
+/// behavior. Deliberately coarse -- one slot, overwritten each time. The
+/// event stream carries every fault as it happens, so an analyzer
+/// aggregates from there; this exists so a handle read long afterwards
+/// can still say what went wrong without having subscribed.
+///
+/// There is no companion fault *counter*. Only image-layer faults are
+/// attributable to a node, so one would duplicate
+/// RemoteNodeStatistics::errors exactly, and the packet-layer total is
+/// already derivable at the scope it belongs to: host repliesRejected
+/// minus the sum of per-node errors.
+///
+/// Layer and attribution are not stored. layerOf() and attributionOf()
+/// derive them from `fault`, which is what keeps an invalid
+/// (layer, attribution) pair unconstructible (D14).
+struct ConformanceFaultRecord {
+  ConformanceFault fault = ConformanceFault::kNone;
+
+  /// The Host's assumption at the time. For an image-layer geometry
+  /// fault, the declared input byte count.
+  uint16_t expected = 0;
+
+  /// What the Node actually demonstrated. For an image-layer geometry
+  /// fault, the reply body length.
+  uint16_t observed = 0;
+
+  /// Engine clock when the fault was observed. Meaningful only when
+  /// fault != kNone.
+  uint32_t atMs = 0;
+};
+
 /// The per-node handle a Host sketch holds. It exposes input image
 /// reads, freshness, health, and statistics.
 ///
@@ -150,6 +235,11 @@ class RemoteNodeHandle {
  public:
   static constexpr size_t kMaxInputBytes = CMRINET_HOST_MAX_INPUT_BYTES;
   static constexpr size_t kMaxOutputBytes = CMRINET_HOST_MAX_OUTPUT_BYTES;
+
+  /// observedInputBytes() before any reply has demonstrated a geometry.
+  /// An explicit named value rather than 0, because 0 is a legal
+  /// geometry -- the same reasoning that gives Age its kNeverMarked.
+  static constexpr uint16_t kGeometryNeverObserved = 0xFFFFu;
 
   RemoteNodeHandle() = default;
 
@@ -254,9 +344,6 @@ class RemoteNodeHandle {
   /// Operator predicate: true only when health is fully green.
   // VALIDATION: Design v1.3 D16: operator and application predicates are
   // separate; this predicate is stricter than input usability.
-  // Conformance staging note: in issue #84, conformance remains
-  // kUnknown, so this predicate cannot become true yet. Issue #85 owns
-  // the conformance-population path and the first true proof.
   bool isHealthy() const {
     return liveness_ == RemoteNodeLiveness::kResponsive &&
            imageState_ == RemoteNodeImageState::kFresh &&
@@ -271,6 +358,31 @@ class RemoteNodeHandle {
     return imageState_ == RemoteNodeImageState::kFresh &&
            liveness_ != RemoteNodeLiveness::kSilent &&
            conformance_ != RemoteNodeConformance::kNonconforming;
+  }
+
+  /// The input geometry this node has most recently *demonstrated*: the
+  /// body length of the last reply carrying this node's UA and an R
+  /// message type, whatever that length was (D14 L1).
+  ///
+  /// Evidence, as against config_.inputBytes, which is a claim. Declared
+  /// geometry flows outward in the I body and nothing returns, so this
+  /// is the only channel by which a Host learns it was wrong -- and the
+  /// only one that covers the fielded population, since a Node that
+  /// ignores I never sends the I-ack that L2 would need.
+  ///
+  /// Reads kGeometryNeverObserved before the first such reply.
+  ///
+  /// Input only. Output geometry is not observable from a reply and
+  /// stays unfalsifiable until L2 (D14). The asymmetry is real; the
+  /// accessor name states it rather than implying a symmetry.
+  // VALIDATION: Design v1.3 D14: reply length reveals actual NI (L1);
+  // input geometry is observable and output geometry is not.
+  uint16_t observedInputBytes() const { return observedInputBytes_; }
+
+  /// The last conformance fault attributed to this node. `fault` reads
+  /// kNone when there has never been one.
+  const ConformanceFaultRecord& lastConformanceFault() const {
+    return lastFault_;
   }
 
   /// Cumulative exchange statistics.
@@ -305,7 +417,12 @@ class RemoteNodeHandle {
   RemoteNodeConformance conformance_ = RemoteNodeConformance::kUnknown;
   bool conformanceBreakerOpen_ = false;
   uint32_t consecutiveMisses_ = 0;
-  bool hasInputImage_ = false;    ///< true after first accepted reply
+
+  /// Geometry this node has demonstrated, and the last fault charged to
+  /// it. Both are observation substrate.
+  uint16_t observedInputBytes_ = kGeometryNeverObserved;
+  ConformanceFaultRecord lastFault_;
+
   Age freshness_;
   uint8_t inputs_[kMaxInputBytes] = {0};
   bool needsInit_ = true;       ///< engine owes this node an I (JMRI mustInit)
@@ -326,6 +443,24 @@ class RemoteNodeHandle {
   Deadline pollBackoff_;
   uint32_t pollBackoffMs_ = 0;   ///< current backoff duration (0 = none yet)
 
+  /// Is the cached input image currently valid?
+  ///
+  /// Derived, not stored. Freshness is marked when a reply commits, and
+  /// cleared by re-init invalidation (interop 2.3.10) and by a geometry
+  /// change, so it already tracks validity exactly. A second field
+  /// tracking the same thing would be a standing synchronization
+  /// obligation with no independent content.
+  ///
+  /// This is a *validity* question, not a history one, and the
+  /// distinction is a D15 substrate boundary rather than a nicety. "Has
+  /// this node ever worked" is statistics_.exchanges > 0 -- observation,
+  /// where D15 puts history. Belief holds only the current verdict. The
+  /// field this replaced stored history in belief, which is what made
+  /// D16's chronology unimplementable.
+  // VALIDATION: Design v1.3 D15: belief holds the current verdict;
+  // history lives in observation.
+  bool hasValidImage_() const { return freshness_.marked(); }
+
   // VALIDATION: Design v1.3 D16: RemoteNodeState is a derived
   // projection over stored axes. This path maps the D16 extensions
   // MISCONFIGURED and DEGRADED.
@@ -334,11 +469,30 @@ class RemoteNodeHandle {
       return RemoteNodeState::kOffline;
     }
     if (conformance_ == RemoteNodeConformance::kNonconforming) {
-      // D16: nonconforming + valid image => DEGRADED.
-      // D16: nonconforming + no valid image => MISCONFIGURED.
-      return (imageState_ == RemoteNodeImageState::kFresh)
-                 ? RemoteNodeState::kDegraded
-                 : RemoteNodeState::kMisconfigured;
+      // D16's chronology, three ways rather than two.
+      //
+      // A nonconforming node holding a fresh image is DEGRADED: it is
+      // faulting while its data remains actionable. One whose image has
+      // merely aged out is STALE -- rejected replies stop refreshing
+      // freshness, and "your data is old" is the honest report while the
+      // last good image is still valid. Only an *invalid* image, never
+      // acquired or cleared by re-init invalidation, makes MISCONFIGURED
+      // the right answer.
+      //
+      // Folding the middle case into MISCONFIGURED made
+      // STALE-while-nonconforming unreachable and inverted D16's stated
+      // order. It survived only because conformance was inert, so this
+      // branch had never executed.
+      // VALIDATION: Design v1.3 D16: a nonconforming node reaches STALE
+      // first and MISCONFIGURED only once invalidation clears the image.
+      switch (imageState_) {
+        case RemoteNodeImageState::kFresh:
+          return RemoteNodeState::kDegraded;
+        case RemoteNodeImageState::kStale:
+          return RemoteNodeState::kStale;
+        case RemoteNodeImageState::kNone:
+          return RemoteNodeState::kMisconfigured;
+      }
     }
     if (imageState_ == RemoteNodeImageState::kNone) {
       return RemoteNodeState::kUninitialized;
