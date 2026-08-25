@@ -5,6 +5,18 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Changed
+- Per-node state model split by substrate (issue #84, Design v1.3 D15/D16):
+  control state, belief state, and observation state are now explicit in
+  the Host path. `consecutiveMisses` moved out of `RemoteNodeStatistics`
+  into control state, so observation counters stay monotonic reporting
+  data. `RemoteNodeState` is now derived from stored health axes
+  (`RemoteNodeLiveness`, `RemoteNodeImageState`, `RemoteNodeConformance`)
+  and now includes `kMisconfigured` and `kDegraded`. `RemoteNodeHandle`
+  now exposes `liveness()`, `imageState()`, `conformance()`,
+  `consecutiveMisses()`, `isHealthy()`, and `inputsUsable()`. Existing
+  `updateNodeStates_` behavior for current paths is preserved through the
+  projection. Coverage added in `tests/test_host.cpp`; all test, example,
+  and desktop build gates pass.
 - Host configuration error model (issue #80, Design v1.2 D5, breaking):
   `addRemoteNode(...)` now returns its **own** `ConfigStatus` instead of
   `CMRIHost&`, and `begin()` returns `void` instead of a deferred status.
