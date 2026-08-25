@@ -410,7 +410,7 @@ static void test_wrong_ua_reply_is_rejected(void) {
   // else's UA is, definitionally, somebody else's -- charging it to the
   // node we happened to be polling would be an attribution error, and
   // nothing about *this* node's geometry was demonstrated either.
-  // VALIDATION: Design v1.3 D14: packet-rung observations are reported
+  // VALIDATION: Design v1.4 D14: packet-rung observations are reported
   // without moving the Node's stored conformance verdict.
   TEST_ASSERT_EQUAL(RemoteNodeConformance::kUnknown, rig.node->conformance());
   TEST_ASSERT_EQUAL_UINT16(RemoteNodeHandle::kGeometryNeverObserved,
@@ -623,7 +623,7 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
   // STALE when that image ages out -- rejected replies stop refreshing
   // freshness, and "your data is old" is the honest report for as long
   // as the last good image is still valid.
-  // VALIDATION: Design v1.3 D16: a nonconforming node reaches STALE
+  // VALIDATION: Design v1.4 D16: a nonconforming node reaches STALE
   // first; MISCONFIGURED needs invalidation to clear the image.
   CMRIHostConfig config;
   config.missThreshold = 1000;  // no invalidation inside this test
@@ -739,7 +739,7 @@ static void test_self_echoed_poll_does_not_make_the_node_nonconforming(void) {
   // every node on every 2-wire Host would sit in DEGRADED permanently.
   // VALIDATION: Interop v1.1 2.3.5: verify UA and MT and discard
   // everything else -- including the Host's own echoed frames.
-  // VALIDATION: Design v1.3 D14: packet-rung observations are reported
+  // VALIDATION: Design v1.4 D14: packet-rung observations are reported
   // without being attributed to the polled Node.
   Rig rig;
   ListenerLog log;
@@ -798,9 +798,9 @@ static void test_axes_and_predicates_diverge_at_missing_with_fresh_image(void) {
   // means kNone. This pairing is better evidence anyway -- it needs no
   // re-init ladder, and no liveness-derived implementation can produce
   // it. See the amendment recorded on #84.
-  // VALIDATION: Design v1.3 D16: liveness, image validity, and
-  // conformance are independent axes; isHealthy() and inputsUsable()
-  // answer different questions and diverge in both directions.
+  // VALIDATION: Design v1.4 D16: silent liveness now implies an
+  // invalidated image, so axis independence is demonstrated at missing
+  // liveness with a fresh image instead.
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
