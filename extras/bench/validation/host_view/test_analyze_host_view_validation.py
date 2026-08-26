@@ -42,6 +42,7 @@ def test_online_nodes_pass() -> None:
     ]
     result = MODULE.analyze_manifest(_base_manifest(), lines)
     assert result.pass_validation
+    assert result.verdict == "PASS"
     assert result.failures == []
 
 
@@ -68,6 +69,7 @@ def test_geometry_mismatch_expectation_passes() -> None:
     ]
     result = MODULE.analyze_manifest(manifest, lines)
     assert result.pass_validation
+    assert result.verdict == "PASS_EXPECTED_FAULT"
     assert result.failures == []
 
 
@@ -96,4 +98,5 @@ def test_offline_expectation_passes_for_phantom_node() -> None:
     ]
     result = MODULE.analyze_manifest(manifest, lines)
     assert result.pass_validation
+    assert result.verdict == "PASS_EXPECTED_FAULT"
     assert result.failures == []

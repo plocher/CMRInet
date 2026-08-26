@@ -34,3 +34,8 @@ extras/bench/.venv/bin/python extras/bench/validation/host_view/analyze_host_vie
   - `online`: accepted exchanges, replies, healthy state, no geometry disagreement.
   - `geometry_mismatch`: mismatch fault/state evidence is present.
   - `offline`: no accepted exchanges/replies and offline/uninitialized state evidence.
+- Analyzer summaries include an explicit scenario-relative verdict:
+  - `PASS` for all-online success scenarios.
+  - `PASS_EXPECTED_FAULT` for scenarios that intentionally include expected faults (`geometry_mismatch` and/or `offline`) and satisfy those expectations.
+  - `FAIL` / `FAIL_EXPECTED_FAULT_SCENARIO` when expectations are not met.
+- Scope caveat: these host_view scenarios do **not** enable the generator-active load profile used for `#87` starvation acceptance. They validate Host-view topology/semantic-status behavior. `#87` acceptance still requires a generator-active run (for example the Issue47-style loaded scenario) when citing fairness/starvation evidence.

@@ -51,7 +51,10 @@ class ValidationResult:
     """Top-level analyzer output."""
 
     pass_validation: bool
+    verdict: str
     scenario: str
+    scenario_has_expected_faults: bool
+    expectations: dict[str, str]
     failures: list[str]
     nodes: dict[str, NodeEvidence]
 
@@ -283,6 +286,12 @@ def _validate_vocab(seen_uas: set[int], exp: NodeExpectation, failures: list[str
             f"UA{exp.ua}: capture appears wire-encoded (saw ua={wire_ua}); semantic UA required"
         )
 
+def _classify_verdict(pass_validation: bool, has_expected_faults: bool) -> str:
+    """Return explicit scenario-relative verdict text."""
+    if pass_validation:
+        return "PASS_EXPECTED_FAULT" if has_expected_faults else "PASS"
+    return "FAIL_EXPECTED_FAULT_SCENARIO" if has_expected_faults else "FAIL"
+
 
 def analyze_manifest(manifest: dict, lines: list[str]) -> ValidationResult:
     """Analyze one host-view scenario manifest + capture lines."""
@@ -291,11 +300,19 @@ def analyze_manifest(manifest: dict, lines: list[str]) -> ValidationResult:
     if not isinstance(expectations_doc, dict):
         return ValidationResult(
             pass_validation=False,
+            verdict="ERROR_INVALID_MANIFEST",
             scenario=scenario,
+            scenario_has_expected_faults=False,
+            expectations={},
             failures=["manifest missing node_expectations object"],
             nodes={},
         )
     expectations = _parse_expectations(expectations_doc)
+    expectation_map = {str(exp.ua): exp.expectation for exp in expectations}
+    has_expected_faults = any(
+        exp.expectation in (EXPECT_GEOMETRY_MISMATCH, EXPECT_OFFLINE)
+        for exp in expectations
+    )
     evidence, seen_uas = _extract_packet_evidence(lines, expectations)
 
     status_states, status_failures = _extract_node_state_map(manifest.get("status_snapshot"))
@@ -318,9 +335,13 @@ def analyze_manifest(manifest: dict, lines: list[str]) -> ValidationResult:
         else:
             failures.append(f"UA{exp.ua}: unsupported expectation '{exp.expectation}'")
 
+    pass_validation = len(failures) == 0
     return ValidationResult(
-        pass_validation=(len(failures) == 0),
+        pass_validation=pass_validation,
+        verdict=_classify_verdict(pass_validation, has_expected_faults),
         scenario=scenario,
+        scenario_has_expected_faults=has_expected_faults,
+        expectations=expectation_map,
         failures=failures,
         nodes={str(ua): node for ua, node in evidence.items()},
     )
@@ -350,7 +371,15 @@ def main() -> int:
         return 2
 
     result = analyze_manifest(manifest, lines)
-    print(f"Scenario: {result.scenario}")
+    print(
+        f"Scenario: {result.scenario} "
+        f"(has_expected_faults={result.scenario_has_expected_faults})"
+    )
+    print(f"Verdict: {result.verdict}")
+    if result.expectations:
+        print("Expectations:")
+        for key in sorted(result.expectations.keys(), key=lambda value: int(value)):
+            print(f"  UA{key}: {result.expectations[key]}")
     for key in sorted(result.nodes.keys(), key=lambda value: int(value)):
         node = result.nodes[key]
         print(
@@ -360,9 +389,9 @@ def main() -> int:
             f"fault={node.last_fault_name}"
         )
     if result.pass_validation:
-        print("PASS: scenario expectations satisfied")
+        print(f"{result.verdict}: scenario expectations satisfied")
     else:
-        print("FAIL:")
+        print(f"{result.verdict}:")
         for failure in result.failures:
             print(f"  - {failure}")
 
