@@ -19,7 +19,12 @@ High-level changes, newest first.
   body-budget exhaustion with the reserved terminator slice. The sketch
   keeps only a `XiaoCdcConsole` adapter bound to `Serial`, `millis`,
   and `delay`. The desktop tracer is unchanged: its `puts` and `fflush`
-  writer has no bounded buffer and no full-buffer problem.
+  writer has no bounded buffer and no full-buffer problem. On-bench
+  validation: `extras/bench/validation/cdc_line/gather_cdc_backpressure.py`
+  slow-reads the live CDC trace stream to fill the USB ring, then checks
+  no records merged (the #86 signature) and that `final` lands; under a
+  227x backlog it recorded 1810 valid records, 0 merges, `final` landed.
+  See [docs/cdc-line-writer-bench-findings.md](docs/cdc-line-writer-bench-findings.md).
 - Sketch warning gate for the examples (issue #93): `make sketch-lint`
   compiles every example sketch under `-Wall -Wextra -Werror -Wswitch`,
   compile-only, with warnings bound to our code only. The ESP32 core
