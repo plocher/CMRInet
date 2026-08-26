@@ -44,6 +44,7 @@
 #include "CMRIHost.h"
 #include "SerialCMRITransport.h"
 #include "testbed/TracerShell.h"
+#include "testbed/CdcLineWriter.h"  // #99: shared, testable CDC line writer
 
 #include "Esp32UartCMRISerialPort.h"
 
@@ -278,73 +279,23 @@ void lazyBegin() {
 }
 // --------------------------------------------------------------------------
 
-/// Stream one telemetry line to the CDC console, then terminate it.
-///
-/// Writes straight from the caller's buffer. The previous version copied
-/// into a 2 KB stack array and silently truncated anything longer, which
-/// was invisible until the shell's status line grew a full node roster --
-/// and a truncated line is malformed JSON, which is worse for a runner
-/// than a slow one. Dropping the copy also returns 2 KB of stack to
-/// loop().
-void writeCdcLine(void* /*context*/, const char* line) {
-  if (!Serial || line == nullptr) {
-    return;
+/// The CDC console seam for writeCdcLine (#99): binds the shared
+/// src/testbed/CdcLineWriter.h logic to this sketch's Serial, millis,
+/// and delay. The chunked write, the room check, and the reserved
+/// terminator budget live in the header, under the desktop -Werror gate
+/// and tests/test_cdc_line.cpp. The sketch keeps only this adapter.
+class XiaoCdcConsole : public CMRInet::testbed::CdcConsole {
+ public:
+  bool open() const override { return static_cast<bool>(Serial); }
+  size_t availableForWrite() override { return Serial.availableForWrite(); }
+  size_t write(const uint8_t* data, size_t n) override {
+    return Serial.write(data, n);
   }
+  uint32_t nowMs() override { return millis(); }
+  void yieldMs() override { delay(1); }
+};
 
-  // One fixed time budget, split so the record boundary can never be
-  // starved by the body. The body cannot borrow the terminator's slice.
-  constexpr uint32_t kMaxWaitMs = 250;
-  constexpr uint32_t kTerminatorWaitMs = 50;
-  constexpr uint32_t kBodyWaitMs = kMaxWaitMs - kTerminatorWaitMs;
-
-  const size_t lineLen = strlen(line);
-  const uint32_t bodyStart = millis();
-  size_t written = 0;
-  while (Serial && written < lineLen &&
-         (millis() - bodyStart) < kBodyWaitMs) {
-    const size_t room = Serial.availableForWrite();
-    if (room == 0) {
-      delay(1);
-      continue;
-    }
-    const size_t remaining = lineLen - written;
-    const size_t chunk = (remaining < room) ? remaining : room;
-    const size_t n = Serial.write(
-        reinterpret_cast<const uint8_t*>(line + written), chunk);
-    if (n == 0) {
-      delay(1);
-      continue;
-    }
-    written += n;
-  }
-
-  // The terminator gets the same room check, the same retry, and its
-  // return value inspected -- setTxTimeoutMs(0) makes a write
-  // discard-and-return when the buffer is full, so an unchecked write is
-  // a silent drop.
-  //
-  // It needs a *reserved* slice rather than the body's leftovers, because
-  // the only way the body exhausts its budget is by spinning on a full
-  // buffer. The one moment the terminator gets written is therefore the
-  // moment it is most likely to be dropped: the failure correlates
-  // exactly with the condition the terminator exists to survive.
-  //
-  // Losing it is worse than losing bytes. A truncated body is one bad
-  // record; a missing newline merges this record with the next and leaves
-  // the reader no boundary to resync on, corrupting everything after.
-  const uint8_t newline = '\n';
-  const uint32_t terminatorStart = millis();
-  while (Serial && (millis() - terminatorStart) < kTerminatorWaitMs) {
-    if (Serial.availableForWrite() == 0) {
-      delay(1);
-      continue;
-    }
-    if (Serial.write(&newline, 1) == 1) {
-      return;
-    }
-    delay(1);
-  }
-}
+XiaoCdcConsole cdc;
 
 /// One newline-terminated verb from non-blocking CDC input. CRs are
 /// dropped so a terminal sending CRLF works. Returns false when no
@@ -839,7 +790,8 @@ void setup() {
   // Bind unconditionally: the shell holds no node (Design v1.2 D5), so
   // there is nothing for a rejected compiled-in add to invalidate -- and
   // a shell that failed to bind could not report the rejection.
-  engine.bind(host, transport, kImage, kVersion, writeCdcLine, nullptr);
+  engine.bind(host, transport, kImage, kVersion,
+              &CMRInet::testbed::writeCdcLineCb, &cdc);
   host.onTrace(ourOnTrace, nullptr);
   engine.setStatusExtender(emitGeneratorsStatus, nullptr);
 
