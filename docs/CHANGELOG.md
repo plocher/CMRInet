@@ -5,6 +5,45 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Host events for runtime node-table mutation (issue #91, Design v1.2 D5):
+  `addRemoteNode`, `deleteRemoteNode`, and `setRemoteNodeGeometry` now fire
+  `CMRIHostEvent`s, so a listener sees the table change whether the mutation
+  came from a C&C verb or a direct API call. A mid-run topology change was
+  previously invisible in the event stream — only the status roster hinted
+  at it — so an operator reading a capture could not tell "the node was
+  deleted" from "the node went silent," which are different faults with
+  different remedies. This matters most for #88, whose captures are the
+  artifact under analysis.
+  - Three new `CMRIHostEventType` values: `kNodeAdded`, `kNodeDeleted`,
+    `kGeometryChanged`. `kNodeDeleted` carries the departing identity by
+    value (`departedAddress`) because the slot is cleaned before the event
+    fires and `node` is null by design; `kGeometryChanged` carries both the
+    previous and the new NI/NO (`previousInputBytes` / `previousOutputBytes`),
+    so a reader can tell what changed without dereferencing the handle.
+  - **Mutation rendering is unified through the engine.** `TracerShell`'s D5
+    verb handlers become thin wrappers (parse, call the mutator, emit only
+    the error line on rejection); on success the engine event renders via
+    `onHostEvent_` through the same `emitNodeLine_` / `emitHostLine_` the
+    old verb acks used. The event payload is a superset of the old ack, so
+    the line shape is unchanged for add/delete and gains `previousIn` /
+    `previousOut` for geometry. One source of truth, one render path.
+  - **No event fires on a rejected mutation.** Each mutator returns its
+    `ConfigStatus` before reaching the listener dispatch, so a failed call
+    produces only the shell's error line, not a spurious event. Validation
+    lives in the mutator; the shell's redundant `ua > 127` pre-check on the
+    mutation verbs is removed, and an out-of-range UA now surfaces as
+    `addFailed` / `deleteFailed` / `geometryFailed` with the precise reason.
+  - **Mutator timestamps are last-tick, guarded.** Mutators run outside
+    `tick()` and have no clock of their own, so mutation events stamp
+    `nowMs` from a `lastTickMs_` captured at the top of `tick()`. A mutation
+    before the first tick honestly stamps 0 ("no clock yet") rather than a
+    fabricated value; pre-`begin()` adds are a legitimate boot-time path and
+    are not refused.
+  - 5 new `test_host` tests (delete names the departing node, runtime add
+    fires `kNodeAdded`, geometry carries old + new NI/NO, rejected mutations
+    fire nothing, pre-tick mutation stamps zero) and 2 new `test_tracer` tests
+    (geometry line carries `previousIn` / `previousOut`; a direct-API delete
+    renders the `node_delete` host-scoped line through the bound shell).
 - Degraded service classes and the conformance breaker (issue #87, Design
   v1.5 D16/D17). **This closes the #80 bug.** A node declared `NI=4`
   answering with 3 bytes took 1316 polls to a healthy node's 765 — 63% of

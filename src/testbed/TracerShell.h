@@ -84,6 +84,14 @@ inline const char* eventName(CMRIHostEventType type) {
     case CMRIHostEventType::kNodeStateChanged: return "state";
     case CMRIHostEventType::kBreakerTripped: return "breaker_open";
     case CMRIHostEventType::kBreakerClosed: return "breaker_close";
+    // Runtime node-table mutation (issue #91). The spellings match the
+    // shell's old verb-ack event names on purpose: the engine event is
+    // now the single source, and onHostEvent_ renders it through the same
+    // emitNodeLine_/emitHostLine_ the ack used, so a consumer sees one
+    // stream with the same shape it already parsed.
+    case CMRIHostEventType::kNodeAdded: return "node_add";
+    case CMRIHostEventType::kNodeDeleted: return "node_delete";
+    case CMRIHostEventType::kGeometryChanged: return "node_geometry";
   }
   return "unknown";
 }
@@ -415,10 +423,15 @@ class TracerShell {
     return VerbResult::kHandled;
   }
 
+  // Thin wrapper (issue #91): parse, call the mutator, emit only the
+  // error line on rejection. On success the engine fires kNodeAdded,
+  // which onHostEvent_ renders through the same emitNodeLine_ this used
+  // to call, so the line shape is unchanged. The mutator validates the
+  // UA range; the shell's old ua > 127 pre-check was redundant with it.
   VerbResult handleNodeAdd_(const char* args) {
     unsigned long ua = 0, in = 0, out = 0;
     if (!parseUint_(args, ua) || !parseUint_(args, in) ||
-        !parseUint_(args, out) || ua > 127u) {
+        !parseUint_(args, out)) {
       emitLine("error", "badVerb", "node add: want <ua> <in> <out>");
       return VerbResult::kHandled;
     }
@@ -429,13 +442,17 @@ class TracerShell {
       emitLine("error", "addFailed", configStatusString(status));
       return VerbResult::kHandled;
     }
-    emitNodeLine_(nowMs_, "node_add", *host_->node(static_cast<uint8_t>(ua)));
+    // Success: the engine's kNodeAdded event rendered the line.
     return VerbResult::kHandled;
   }
 
+  // Thin wrapper (issue #91): on success the engine fires kNodeDeleted,
+  // which onHostEvent_ renders host-scoped with the departed UA and the
+  // post-delete roster -- the same line this used to emit. The mutator
+  // validates the UA range.
   VerbResult handleNodeDelete_(const char* args) {
     unsigned long ua = 0;
-    if (!parseUint_(args, ua) || ua > 127u) {
+    if (!parseUint_(args, ua)) {
       emitLine("error", "badVerb", "node delete: want <ua>");
       return VerbResult::kHandled;
     }
@@ -445,20 +462,18 @@ class TracerShell {
       emitLine("error", "deleteFailed", configStatusString(status));
       return VerbResult::kHandled;
     }
-    // Host scope, necessarily: there is no node left to attribute this
-    // to, which is the point of the verb. The line names the departed UA
-    // and carries the roster, so a reader sees both the event and the
-    // membership it produced.
-    emitHostLine_(nowMs_, "node_delete", static_cast<int>(ua), nullptr,
-                  nullptr, /*identity=*/false, /*config=*/false,
-                  /*roster=*/true);
+    // Success: the engine's kNodeDeleted event rendered the line.
     return VerbResult::kHandled;
   }
 
+  // Thin wrapper (issue #91): on success the engine fires
+  // kGeometryChanged, which onHostEvent_ renders node-scoped with the
+  // previous and new NI/NO -- a strict superset of the line this used to
+  // emit. The mutator validates the UA range and byte ceilings.
   VerbResult handleNodeGeometry_(const char* args) {
     unsigned long ua = 0, in = 0, out = 0;
     if (!parseUint_(args, ua) || !parseUint_(args, in) ||
-        !parseUint_(args, out) || ua > 127u) {
+        !parseUint_(args, out)) {
       emitLine("error", "badVerb", "node geometry: want <ua> <in> <out>");
       return VerbResult::kHandled;
     }
@@ -469,8 +484,7 @@ class TracerShell {
       emitLine("error", "geometryFailed", configStatusString(status));
       return VerbResult::kHandled;
     }
-    emitNodeLine_(nowMs_, "node_geometry",
-                  *host_->node(static_cast<uint8_t>(ua)));
+    // Success: the engine's kGeometryChanged event rendered the line.
     return VerbResult::kHandled;
   }
 
@@ -486,6 +500,18 @@ class TracerShell {
       self.emitBackoffTrace_(event);
       return;
     }
+    // kNodeDeleted is host-scoped: the slot is already cleaned, so
+    // event.node is null by design (D5: delete cleans before the event
+    // fires). Render it before the null-node early-return below, or the
+    // event would be swallowed. The roster reflects the post-delete table
+    // (issue #91).
+    if (event.type == CMRIHostEventType::kNodeDeleted) {
+      self.emitHostLine_(event.nowMs, "node_delete",
+                         static_cast<int>(event.departedAddress), nullptr,
+                         nullptr, /*identity=*/false, /*config=*/false,
+                         /*roster=*/true);
+      return;
+    }
     if (self.backoffTraceOnly_ || event.node == nullptr) {
       return;
     }
@@ -495,6 +521,21 @@ class TracerShell {
                          stateName(event.previousState));
       return;
     }
+    // kGeometryChanged carries the old NI/NO alongside the new (already on
+    // the node line as in/out), so a reader can tell what changed without
+    // dereferencing the handle (issue #91).
+    if (event.type == CMRIHostEventType::kGeometryChanged) {
+      char extra[40];
+      snprintf(extra, sizeof(extra),
+               ",\"previousIn\":%u,\"previousOut\":%u",
+               static_cast<unsigned>(event.previousInputBytes),
+               static_cast<unsigned>(event.previousOutputBytes));
+      self.emitNodeLine_(event.nowMs, eventName(event.type), *event.node,
+                         /*identity=*/false, /*extraKey=*/nullptr,
+                         /*extraValue=*/nullptr, extra);
+      return;
+    }
+    // kNodeAdded and the exchange/health events render node-scoped.
     self.emitNodeLine_(event.nowMs, eventName(event.type), *event.node);
   }
 
@@ -637,7 +678,8 @@ class TracerShell {
   void emitNodeLine_(uint32_t nowMs, const char* event,
                      const RemoteNodeHandle& node, bool identity = false,
                      const char* extraKey = nullptr,
-                     const char* extraValue = nullptr) {
+                     const char* extraValue = nullptr,
+                     const char* extraJson = nullptr) {
     char inputsHex[2 * RemoteNodeHandle::kMaxInputBytes + 1] = "";
     const size_t inputLength = node.inputLength();
     for (size_t i = 0; i < inputLength; ++i) {
@@ -735,12 +777,20 @@ class TracerShell {
     if (extraKey != nullptr && extraValue != nullptr) {
       written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
     }
+    // Raw JSON fragment (e.g. ",\"previousIn\":N,\"previousOut\":M"),
+    // inserted verbatim. Distinct from extraKey/extraValue, which quote
+    // their value -- numeric fields like NI/NO must not be quoted
+    // (issue #91).
+    if (extraJson != nullptr) {
+      written = appendf_(written, "%s", extraJson);
+    }
     finish_(written);
   }
 
-  /// The live node table, keyed by UA. Until #91 lands per-mutation
-  /// events, this roster is the only evidence in the stream that
-  /// membership changed at all.
+  /// The live node table, keyed by UA. Per-mutation events (issue #91)
+  /// now make membership changes visible as their own event lines; the
+  /// roster remains the at-a-glance view of current membership that a
+  /// status or mutation line carries alongside the event.
   int appendRoster_(int written) {
     written = appendf_(written, ",\"roster\":[");
     bool first = true;
