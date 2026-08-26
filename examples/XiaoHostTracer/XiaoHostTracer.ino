@@ -977,7 +977,6 @@ void loop() {
       Serial.println("{\"event\":\"reset\"}");
       handled = true;
     } else if (strcmp(verb, "status") == 0) {
-      using VerbResult = CMRInet::testbed::TracerShell::VerbResult;
       engine.handleVerb(verb);
       handled = true;
     }

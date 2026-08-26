@@ -566,8 +566,9 @@ class TracerShell {
         0,
         "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
         "\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
-        ++seq_, nowMs_ - epochMs_, uaOf_(packet), transmit ? "tx" : "rx",
-        mtBuf, bodyHex);
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(nowMs_ - epochMs_), uaOf_(packet),
+        transmit ? "tx" : "rx", mtBuf, bodyHex);
     finish_(written);
   }
 
@@ -589,7 +590,9 @@ class TracerShell {
         "\"role\":\"host\",\"ua\":%u,"
         "\"old_backoff_ms\":%lu,\"new_backoff_ms\":%lu,\"reason\":\"%s\","
         "\"deadline_action\":\"%s\",\"now_ms\":%lu",
-        ++seq_, event.nowMs - epochMs_, event.node->address(),
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(event.nowMs - epochMs_),
+        event.node->address(),
         static_cast<unsigned long>(event.previousPollBackoffMs),
         static_cast<unsigned long>(event.newPollBackoffMs),
         pollBackoffChangeReasonString(event.pollBackoffReason),
@@ -615,7 +618,8 @@ class TracerShell {
 
     int written = appendf_(
         0, "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
-        ++seq_, nowMs - epochMs_, event);
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(nowMs - epochMs_), event);
     if (identity) {
       written = appendf_(written, ",\"image\":\"%s\",\"version\":\"%s\"",
                          image_, version_);
@@ -630,10 +634,16 @@ class TracerShell {
         ",\"nodes\":%u,\"polls\":%u,\"pollRetries\":%u,\"replies\":%u"
         ",\"rejected\":%u,\"unsolicited\":%u,\"orphaned\":%u"
         ",\"decodeErrors\":%u,\"slowGaps\":%u,\"maxGapMs\":%u",
-        static_cast<unsigned>(host_->nodeCount()), host.pollsSent,
-        host.pollSendRetries, host.repliesAccepted, host.repliesRejected,
-        host.unsolicitedPackets, host.orphanedExchanges, link.decodeErrors,
-        decoder.slowGaps, decoder.maxGapMs);
+        static_cast<unsigned>(host_->nodeCount()),
+        static_cast<unsigned>(host.pollsSent),
+        static_cast<unsigned>(host.pollSendRetries),
+        static_cast<unsigned>(host.repliesAccepted),
+        static_cast<unsigned>(host.repliesRejected),
+        static_cast<unsigned>(host.unsolicitedPackets),
+        static_cast<unsigned>(host.orphanedExchanges),
+        static_cast<unsigned>(link.decodeErrors),
+        static_cast<unsigned>(decoder.slowGaps),
+        static_cast<unsigned>(decoder.maxGapMs));
 
     // The degraded-lane ledger (D17). Host scope because the bound is on
     // the aggregate: the question an operator asks is "how much of this
@@ -650,16 +660,19 @@ class TracerShell {
         written,
         ",\"degradedGrants\":%u,\"degradedSlotDenials\":%u"
         ",\"degradedBandwidthDenials\":%u,\"degradedClampBypasses\":%u",
-        host.degradedGrants, host.degradedSlotDenials,
-        host.degradedBandwidthDenials, host.degradedClampBypasses);
+        static_cast<unsigned>(host.degradedGrants),
+        static_cast<unsigned>(host.degradedSlotDenials),
+        static_cast<unsigned>(host.degradedBandwidthDenials),
+        static_cast<unsigned>(host.degradedClampBypasses));
     if (config) {
       // The gap-observability band is config, not signal: the thresholds
       // every counter above was collected against.
       written = appendf_(written,
                          ",\"slowGapLoMs\":%u,\"slowGapHiMs\":%u,"
                          "\"interByteTimeoutMs\":%u",
-                         transport_->slowGapLoMs(), transport_->slowGapHiMs(),
-                         transport_->interByteTimeoutMs());
+                         static_cast<unsigned>(transport_->slowGapLoMs()),
+                         static_cast<unsigned>(transport_->slowGapHiMs()),
+                         static_cast<unsigned>(transport_->interByteTimeoutMs()));
     }
     if (extraKey != nullptr && extraValue != nullptr) {
       written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
@@ -708,7 +721,8 @@ class TracerShell {
 
     int written = appendf_(
         0, "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
-        ++seq_, nowMs - epochMs_, event);
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(nowMs - epochMs_), event);
     if (identity) {
       written = appendf_(written, ",\"image\":\"%s\",\"version\":\"%s\"",
                          image_, version_);
@@ -723,9 +737,13 @@ class TracerShell {
         node.address(), stateName(node.state()),
         node.enabled() ? "true" : "false",
         static_cast<unsigned>(inputLength),
-        static_cast<unsigned>(outputLength), stats.exchanges, stats.noReplies,
-        stats.errors, stats.recoveries, node.consecutiveMisses(),
-        stats.lastTurnaroundMs, inputsHex, outputsHex);
+        static_cast<unsigned>(outputLength),
+        static_cast<unsigned>(stats.exchanges),
+        static_cast<unsigned>(stats.noReplies),
+        static_cast<unsigned>(stats.errors),
+        static_cast<unsigned>(stats.recoveries),
+        static_cast<unsigned>(node.consecutiveMisses()),
+        static_cast<unsigned>(stats.lastTurnaroundMs), inputsHex, outputsHex);
 
     // The three stored axes, not just the scalar projection. `state` is
     // lossy by construction -- it answers "what is the single worst
@@ -758,7 +776,8 @@ class TracerShell {
         ",\"consecutiveNonconforming\":%u,\"breakerReinitAttempts\":%u",
         remoteNodeServiceClassString(node.serviceClass()),
         conformanceBreakerStateString(node.breakerState()),
-        node.consecutiveNonconforming(), node.breakerReinitAttempts());
+        static_cast<unsigned>(node.consecutiveNonconforming()),
+        static_cast<unsigned>(node.breakerReinitAttempts()));
 
     // Last-fault detail. Layer and attribution are rendered from the
     // classifiers rather than stored, so an analyzer gets the verdict

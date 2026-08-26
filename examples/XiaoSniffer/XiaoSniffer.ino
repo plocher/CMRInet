@@ -124,7 +124,7 @@ void emitEpoch() {
   snprintf(line, sizeof(line),
            "{\"seq\":%u,\"ts\":0,\"event\":\"epoch\",\"image\":\"%s\","
            "\"version\":\"%s\",\"anchor\":\"bootMs\",\"value\":%s}",
-           ++seq, kImage, kVersion, bootMs);
+           static_cast<unsigned>(++seq), kImage, kVersion, bootMs);
   emitLine();
 }
 
@@ -162,7 +162,8 @@ void emitFrame(const CMRInet::CMRIPacket& p) {
            "{\"seq\":%u,\"ts\":%u,\"event\":\"frame\","
            "\"dir\":\"observed\",\"ua\":%u,"
            "\"mt\":\"%s\",\"body\":\"%s\"}",
-           ++seq, static_cast<unsigned>(millis() - epochMs),
+           static_cast<unsigned>(++seq),
+           static_cast<unsigned>(millis() - epochMs),
            static_cast<unsigned>(p.ua), mtBuf, bodyHex);
   emitLine();
 }
@@ -175,10 +176,17 @@ void emitStats() {
            "\"timeoutAborts\":%u,\"danglingDle\":%u,\"overflowAborts\":%u,"
            "\"headerAborts\":%u,\"droppedPackets\":%u,\"slowGaps\":%u,"
            "\"maxGapMs\":%u}",
-           ++seq, static_cast<unsigned>(millis() - epochMs), kImage, kVersion,
-           s.framesDecoded, s.framesRestarted, s.timeoutAborts, s.danglingDle,
-           s.overflowAborts, s.headerAborts, s.droppedPackets, s.slowGaps,
-           s.maxGapMs);
+           static_cast<unsigned>(++seq),
+           static_cast<unsigned>(millis() - epochMs), kImage, kVersion,
+           static_cast<unsigned>(s.framesDecoded),
+           static_cast<unsigned>(s.framesRestarted),
+           static_cast<unsigned>(s.timeoutAborts),
+           static_cast<unsigned>(s.danglingDle),
+           static_cast<unsigned>(s.overflowAborts),
+           static_cast<unsigned>(s.headerAborts),
+           static_cast<unsigned>(s.droppedPackets),
+           static_cast<unsigned>(s.slowGaps),
+           static_cast<unsigned>(s.maxGapMs));
   emitLine();
 }
 
