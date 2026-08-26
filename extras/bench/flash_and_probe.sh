@@ -50,6 +50,13 @@ if [ ! -f "$SKETCH_INO" ]; then
     exit 1
 fi
 
+# Pre-flight: the sketch warning gate (issue #93). The ESP32 core suppresses
+# warnings with a trailing -w, so a clean arduino-cli compile does not mean a
+# sketch is warning-clean. Lint before flashing; `set -e` aborts on failure.
+# Compile-only (no hardware, no flash) -- the gate never touches a board.
+echo ">>> pre-flight: sketch warning gate ($SKETCH)"
+python3 "$REPO_DIR/extras/sketch_lint.py" "$SKETCH"
+
 echo ">>> [1/4] compile $SKETCH for $FQBN"
 rm -rf "$BUILD_DIR"
 arduino-cli compile --fqbn "$FQBN" $LIBS --build-path "$BUILD_DIR" "$SKETCH_INO" 2>&1 | tail -2
