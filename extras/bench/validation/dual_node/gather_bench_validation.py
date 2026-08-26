@@ -79,6 +79,25 @@ def _read_status_snapshot(ser, timeout_s: float = 3.0) -> Optional[dict]:
             return doc
     return None
 
+def _read_node_status(ser, ua: int, timeout_s: float = 3.0) -> Optional[dict]:
+    """Read one per-node status JSON payload from the tracer shell."""
+    ser.write(f"status {ua}\n".encode("utf-8"))
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if doc.get("event") != "status":
+            continue
+        if doc.get("ua") != ua:
+            continue
+        return doc
+    return None
+
 
 def _configure_dual_node_traffic(
     ser,
@@ -158,6 +177,7 @@ def main() -> int:
     ser = _tracer_client.reboot_and_reconnect(args.port)
     cleanup_ok = True
     status_snapshot: Optional[dict] = None
+    node_statuses: dict[str, Optional[dict]] = {}
 
     try:
         if not _tracer_client.sync_and_validate_boot(ser):
@@ -226,6 +246,10 @@ def main() -> int:
             return 1
 
         status_snapshot = _read_status_snapshot(ser)
+        node_statuses = {
+            str(args.ua_a): _read_node_status(ser, args.ua_a),
+            str(args.ua_b): _read_node_status(ser, args.ua_b),
+        }
 
         with log_path.open("w", encoding="utf-8") as handle:
             handle.write("# CMRI Dual Node Bench Validation\n")
@@ -264,6 +288,7 @@ def main() -> int:
             "ua_b_loopback_bit": args.ua_b_loopback_bit,
             "capture_file": log_path.name,
             "status_snapshot": status_snapshot,
+            "node_statuses": node_statuses,
             "timestamp": datetime.datetime.now().isoformat(),
         }
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
