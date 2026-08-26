@@ -82,6 +82,8 @@ inline const char* eventName(CMRIHostEventType type) {
     case CMRIHostEventType::kReinitScheduled: return "reinit";
     case CMRIHostEventType::kPollBackoffChanged: return "backoff";
     case CMRIHostEventType::kNodeStateChanged: return "state";
+    case CMRIHostEventType::kBreakerTripped: return "breaker_open";
+    case CMRIHostEventType::kBreakerClosed: return "breaker_close";
   }
   return "unknown";
 }
@@ -591,6 +593,24 @@ class TracerShell {
         host.pollSendRetries, host.repliesAccepted, host.repliesRejected,
         host.unsolicitedPackets, host.orphanedExchanges, link.decodeErrors,
         decoder.slowGaps, decoder.maxGapMs);
+
+    // The degraded-lane ledger (D17). Host scope because the bound is on
+    // the aggregate: the question an operator asks is "how much of this
+    // bus is going to broken nodes", not "how much is going to UA31".
+    //
+    // Both denial counters are carried, not just a total, because which
+    // gate bound says which failure mode is costing the layout: slot
+    // denials mean nonconforming-but-answering nodes, bandwidth denials
+    // mean silent ones. A single number would hide exactly the asymmetry
+    // the two gates exist to separate.
+    // VALIDATION: Design v1.5 D17: two gates, and the ceiling clamp that
+    // keeps the degraded class from being starved to zero.
+    written = appendf_(
+        written,
+        ",\"degradedGrants\":%u,\"degradedSlotDenials\":%u"
+        ",\"degradedBandwidthDenials\":%u,\"degradedClampBypasses\":%u",
+        host.degradedGrants, host.degradedSlotDenials,
+        host.degradedBandwidthDenials, host.degradedClampBypasses);
     if (config) {
       // The gap-observability band is config, not signal: the thresholds
       // every counter above was collected against.
@@ -681,6 +701,22 @@ class TracerShell {
         remoteNodeLivenessString(node.liveness()),
         remoteNodeImageStateString(node.imageState()),
         remoteNodeConformanceString(node.conformance()), observedIn);
+
+    // The breaker and the lane it puts this node in (D17). Not derivable
+    // from `state`: a tripped node reads MISCONFIGURED, and so does one
+    // that has never conformed and is still being polled at full rate.
+    // The difference is exactly what an operator needs -- one is costing
+    // the bus, the other has been bounded -- and only these fields carry
+    // it.
+    // VALIDATION: Design v1.5 D17: the breaker's three positions and the
+    // derived service class.
+    written = appendf_(
+        written,
+        ",\"serviceClass\":\"%s\",\"breaker\":\"%s\""
+        ",\"consecutiveNonconforming\":%u,\"breakerReinitAttempts\":%u",
+        remoteNodeServiceClassString(node.serviceClass()),
+        conformanceBreakerStateString(node.breakerState()),
+        node.consecutiveNonconforming(), node.breakerReinitAttempts());
 
     // Last-fault detail. Layer and attribution are rendered from the
     // classifiers rather than stored, so an analyzer gets the verdict

@@ -176,6 +176,51 @@ inline const char* remoteNodeConformanceString(RemoteNodeConformance c) {
   return "UNKNOWN";
 }
 
+/// Which scheduling lane a node is served from.
+///
+/// Derived, never stored, for the same reason RemoteNodeState is: it
+/// reads axes that already exist, so a stored copy would be a standing
+/// synchronization obligation with no independent content.
+// VALIDATION: Design v1.5 D17: two service classes, healthy and
+// degraded, with different guardrails. The degraded lane is rate
+// limited by two gates; the healthy lane consults neither.
+enum class RemoteNodeServiceClass : uint8_t {
+  kHealthy,   ///< served at full rate, ungated
+  kDegraded,  ///< served through the rate-limited lane
+};
+
+/// Telemetry spelling of the service class.
+inline const char* remoteNodeServiceClassString(RemoteNodeServiceClass c) {
+  switch (c) {
+    case RemoteNodeServiceClass::kHealthy:  return "HEALTHY";
+    case RemoteNodeServiceClass::kDegraded: return "DEGRADED";
+  }
+  return "UNKNOWN";
+}
+
+/// Conformance breaker position (D17).
+///
+/// Control substrate: it gates scheduling, so it is engine-written and
+/// never derived from observation (D15).
+// VALIDATION: Design v1.5 D17: the breaker's states are closed,
+// re-initializing, and open. A run of nonconforming replies past a
+// threshold arms bounded corrective re-inits; exhausting them opens it.
+enum class ConformanceBreakerState : uint8_t {
+  kClosed,          ///< no conformance fault run in progress
+  kReinitializing,  ///< corrective re-init attempts in progress, bounded
+  kOpen,            ///< tripped: bare-P probes only, at a low rate
+};
+
+/// Telemetry spelling of the breaker position.
+inline const char* conformanceBreakerStateString(ConformanceBreakerState s) {
+  switch (s) {
+    case ConformanceBreakerState::kClosed:         return "CLOSED";
+    case ConformanceBreakerState::kReinitializing: return "REINITIALIZING";
+    case ConformanceBreakerState::kOpen:           return "OPEN";
+  }
+  return "UNKNOWN";
+}
+
 /// Per-node configuration, independent of exchange discipline.
 struct RemoteNodeConfig {
   /// Input image size in logical bytes. This is the exact reply body
@@ -374,6 +419,42 @@ class RemoteNodeHandle {
   /// Current miss run length (control state).
   uint32_t consecutiveMisses() const { return consecutiveMisses_; }
 
+  /// Current nonconforming-reply run length (control state).
+  ///
+  /// The conformance ladder's counterpart to consecutiveMisses_. Two
+  /// ladders, one per failure mode: this one counts replies that
+  /// arrived with the wrong shape, that one counts replies that never
+  /// arrived. Both are bounded, and both end in an invalidation.
+  uint32_t consecutiveNonconforming() const {
+    return consecutiveNonconforming_;
+  }
+
+  /// Conformance breaker position (D17).
+  ConformanceBreakerState breakerState() const { return breakerState_; }
+
+  /// True while the breaker is tripped. Read by isHealthy().
+  bool conformanceBreakerOpen() const { return conformanceBreakerOpen_; }
+
+  /// Corrective re-init attempts spent in the current fault run.
+  uint32_t breakerReinitAttempts() const { return breakerReinitAttempts_; }
+
+  /// Which scheduling lane this node is served from.
+  ///
+  /// Degraded when a miss run is live or the conformance verdict is
+  /// nonconforming. `kUnknown` conformance is deliberately not degraded:
+  /// a newly added node has demonstrated no cost yet and must get a
+  /// full-rate first poll, or the table's newest member is the one that
+  /// starves.
+  // VALIDATION: Design v1.5 D17: service class is derived from axes
+  // that already exist, never stored.
+  RemoteNodeServiceClass serviceClass() const {
+    const bool degraded =
+        consecutiveMisses_ != 0 ||
+        conformance_ == RemoteNodeConformance::kNonconforming;
+    return degraded ? RemoteNodeServiceClass::kDegraded
+                    : RemoteNodeServiceClass::kHealthy;
+  }
+
   /// Operator predicate: true only when health is fully green.
   // VALIDATION: Design v1.3 D16: operator and application predicates are
   // separate; this predicate is stricter than input usability.
@@ -451,6 +532,24 @@ class RemoteNodeHandle {
   bool conformanceBreakerOpen_ = false;
   uint32_t consecutiveMisses_ = 0;
 
+  // Conformance breaker (D17). The liveness ladder above counts replies
+  // that never arrived; this one counts replies that arrived with the
+  // wrong shape. Both are control state: they gate scheduling, so D15
+  // keeps them out of the observation substrate.
+  //
+  // breakerState_ and conformanceBreakerOpen_ are deliberately not one
+  // field. The bool is the predicate isHealthy() already reads and is
+  // part of the published handle contract; the enum is the scheduler's
+  // three-position machine. Collapsing them would either widen the
+  // predicate's vocabulary or lose the re-initializing position.
+  ConformanceBreakerState breakerState_ = ConformanceBreakerState::kClosed;
+  uint32_t consecutiveNonconforming_ = 0;
+  uint32_t breakerReinitAttempts_ = 0;
+
+  // Probe pacing while the breaker is open. Bare P only -- a re-init
+  // sequence here would stall the round-robin on its post-I settle.
+  Deadline breakerProbe_;
+
   /// Geometry this node has demonstrated, and the last fault charged to
   /// it. Both are observation substrate.
   uint16_t observedInputBytes_ = kGeometryNeverObserved;
@@ -475,6 +574,18 @@ class RemoteNodeHandle {
   // maxPollBackoffMs; any accepted reply clears it immediately.
   Deadline pollBackoff_;
   uint32_t pollBackoffMs_ = 0;   ///< current backoff duration (0 = none yet)
+
+  // Ceiling clamp base (D17): when this node was last granted an
+  // exchange slot. A degraded node whose last grant is older than
+  // maxPollBackoffMs is admitted with both gates bypassed, which is
+  // what keeps the degraded class from being starved to zero.
+  //
+  // Age, not Deadline, because the question is "how long since" rather
+  // than "is it time yet". kNeverMarked reads as past every threshold,
+  // which is harmless here: a node that has never been granted a slot
+  // has neither a miss run nor a conformance verdict, so it is healthy
+  // class and never consults the clamp at all.
+  Age lastGrant_;
 
   /// Is the cached input image currently valid?
   ///
