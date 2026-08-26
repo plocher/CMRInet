@@ -59,7 +59,9 @@ def sniffer_rx_port() -> str:
     return _resolve_role("Sniffer", "RX")
 
 
-DEFAULT_NODE_ADDRESSES = (30, 31)
+DEFAULT_REAL_UA = 30
+DEFAULT_PHANTOM_UA = 31
+DEFAULT_NODE_ADDRESSES = (DEFAULT_REAL_UA, DEFAULT_PHANTOM_UA)
 DEFAULT_LOOPBACK_BYTE = 2
 DEFAULT_LOOPBACK_BIT = 1
 
@@ -304,7 +306,8 @@ def flush_lines(ser):
 def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
               capture_sniffers: bool = False,
               sniffer_tx_port: Optional[str] = None,
-              sniffer_rx_port: Optional[str] = None):
+              sniffer_rx_port: Optional[str] = None,
+              phantom_ua: int = DEFAULT_PHANTOM_UA):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
     log_file = out_dir / f"{tag}.log"
     host_raw_file = out_dir / f"packets.{tag}.Host.raw"
@@ -502,7 +505,7 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
             for line in dump_lines:
                 f.write(line + "\n")
 
-        res = _gap_deltas.analyze_lines(dump_lines)
+        res = _gap_deltas.analyze_lines(dump_lines, phantom_ua=phantom_ua)
         if not quiet_ok:
             res.verdict = "ERROR_NOT_QUIET"
         _host_marker("combo_complete", verdict=res.verdict, dump_lines=len(dump_lines))

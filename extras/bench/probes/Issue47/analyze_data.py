@@ -26,13 +26,13 @@ VERDICT_FAIL_STUCK = "FAIL_STUCK"
 VERDICT_FAIL_CYCLING = "FAIL_CYCLING"
 VERDICT_FAIL_TOO_FEW = "FAIL_TOO_FEW"
 VERDICT_FAIL_NO_TRACE = "FAIL_NO_TRACE"
+VERDICT_FAIL_WRONG_UA_VOCAB = "FAIL_WRONG_UA_VOCAB"
 VERDICT_ERROR = "ERROR"
 
 CYCLING_DROP_RATIO = 0.5
 CYCLING_HIGH_WATER_MS = 4000
 THRESHOLD_MS = 8000
-
-PHANTOM_UA_CANDIDATES = (96, 31)
+DEFAULT_PHANTOM_UA = 31
 
 PKT_RE = re.compile(
     r"PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
@@ -80,12 +80,25 @@ def parse_events(lines: Iterable[str], ua: int) -> List[Poll]:
     return out
 
 
-def find_phantom_ua(lines: List[str]) -> int:
-    """Pick the phantom UA that actually appeared in the capture."""
-    for candidate in PHANTOM_UA_CANDIDATES:
-        if any(f"ua={candidate}" in line for line in lines):
-            return candidate
-    return PHANTOM_UA_CANDIDATES[0]
+def _looks_wire_encoded(lines: List[str], semantic_ua: int) -> bool:
+    """True when capture appears wire-encoded where semantic UA was expected.
+
+    This helper is used only after no semantic-UA poll events were found, so it
+    refines failure diagnostics rather than changing a passing run to failing.
+    """
+    wire_ua = semantic_ua + ord("A")
+    has_semantic = False
+    has_wire = False
+    for line in lines:
+        m = PKT_RE.search(line)
+        if not m or m.group("dir") != "TX":
+            continue
+        ua = int(m.group("ua"))
+        if ua == semantic_ua:
+            has_semantic = True
+        if ua == wire_ua:
+            has_wire = True
+    return has_wire and not has_semantic
 
 
 def classify_monotonicity(gaps: List[int]) -> Tuple[str, int]:
@@ -128,7 +141,7 @@ def classify_monotonicity(gaps: List[int]) -> Tuple[str, int]:
         return VERDICT_FAIL_STUCK, monotone_prefix_max
 
 
-def analyze_lines(lines: List[str]) -> AnalyzerResult:
+def analyze_lines(lines: List[str], phantom_ua: int = DEFAULT_PHANTOM_UA) -> AnalyzerResult:
     if not any("PKT " in line for line in lines):
         return AnalyzerResult(
             verdict=VERDICT_FAIL_NO_TRACE,
@@ -137,17 +150,25 @@ def analyze_lines(lines: List[str]) -> AnalyzerResult:
             last_t_ms=-1
         )
 
-    ua = find_phantom_ua(lines)
-    events = parse_events(lines, ua)
+    events = parse_events(lines, phantom_ua)
     
     it_count = sum(1 for e in events if e.mt in ("I", "T"))
     p_events = [e for e in events if e.mt == "P"]
     poll_count = len(p_events)
 
     if not p_events:
+        if _looks_wire_encoded(lines, phantom_ua):
+            return AnalyzerResult(
+                verdict=VERDICT_FAIL_WRONG_UA_VOCAB,
+                phantom_ua=phantom_ua,
+                first_t_ms=-1,
+                last_t_ms=-1,
+                it_count=it_count,
+                poll_count=0
+            )
         return AnalyzerResult(
             verdict=VERDICT_FAIL_TOO_FEW,
-            phantom_ua=ua,
+            phantom_ua=phantom_ua,
             first_t_ms=-1 if not events else events[0].t_ms,
             last_t_ms=-1 if not events else events[-1].t_ms,
             it_count=it_count,
@@ -160,7 +181,7 @@ def analyze_lines(lines: List[str]) -> AnalyzerResult:
     if len(p_events) < 2:
         return AnalyzerResult(
             verdict=VERDICT_FAIL_TOO_FEW,
-            phantom_ua=ua,
+            phantom_ua=phantom_ua,
             first_t_ms=first_t_ms,
             last_t_ms=last_t_ms,
             it_count=it_count,
@@ -178,7 +199,7 @@ def analyze_lines(lines: List[str]) -> AnalyzerResult:
 
     return AnalyzerResult(
         verdict=verdict,
-        phantom_ua=ua,
+        phantom_ua=phantom_ua,
         first_t_ms=first_t_ms,
         last_t_ms=last_t_ms,
         gaps=gaps,
@@ -216,6 +237,11 @@ def print_result_text(res: AnalyzerResult):
         print(f"FAIL_TOO_FEW: insufficient data")
     elif res.verdict == VERDICT_FAIL_NO_TRACE:
         print(f"FAIL_NO_TRACE: no DIAG_TRACE lines in capture")
+    elif res.verdict == VERDICT_FAIL_WRONG_UA_VOCAB:
+        print(
+            f"FAIL_WRONG_UA_VOCAB: capture appears wire-encoded for UA {res.phantom_ua}; "
+            "decoded telemetry requires semantic UA"
+        )
     
     if res.monotone_prefix_max >= 0:
         print(f"monotone_prefix_max: {res.monotone_prefix_max}")
@@ -314,6 +340,7 @@ def rescore(sweep_dir: str):
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description="Analyzer for regression #47")
     parser.add_argument("target", help="Capture log file or sweep_results dir (if --rescore)")
+    parser.add_argument("--phantom-ua", type=int, default=DEFAULT_PHANTOM_UA)
     parser.add_argument("--rescore", action="store_true", help="Batch rescore a directory")
     args = parser.parse_args(argv[1:])
     
@@ -327,7 +354,7 @@ def main(argv: List[str]) -> int:
         print(f"ERROR: File not found {args.target}", file=sys.stderr)
         return 2
 
-    res = analyze_lines(lines)
+    res = analyze_lines(lines, phantom_ua=args.phantom_ua)
     print_result_text(res)
     
     if res.verdict == VERDICT_PASS:

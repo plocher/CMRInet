@@ -45,8 +45,8 @@ def test_run_combo_success(tmp_path):
         b"BEGIN CAPTURE t=1000\n",
         b"END CAPTURE t=2000 polls=10 its=5 ring_used=5/1000\n",
         b"BEGIN DUMP records=2\n",
-        b"PKT t=1000 TX ua=96 mt=P len=3 n=0\n",
-        b"PKT t=1500 TX ua=96 mt=P len=3 n=1\n",
+        b"PKT t=1000 TX ua=31 mt=P len=3 n=0\n",
+        b"PKT t=1500 TX ua=31 mt=P len=3 n=1\n",
         b"END DUMP\n",
         b"", b"", b"", b""
     ]
@@ -116,3 +116,11 @@ def test_cycling_ignores_small_drops():
     verdict, m_max = classify_monotonicity(gaps)
     assert verdict == VERDICT_PASS
     assert m_max == 8000
+
+def test_wire_encoded_input_rejected():
+    lines = [
+        "PKT t=1000 TX ua=96 mt=P len=3 n=0",
+        "PKT t=1500 TX ua=96 mt=P len=3 n=1",
+    ]
+    result = gap_deltas.analyze_lines(lines, phantom_ua=31)
+    assert result.verdict == gap_deltas.VERDICT_FAIL_WRONG_UA_VOCAB
