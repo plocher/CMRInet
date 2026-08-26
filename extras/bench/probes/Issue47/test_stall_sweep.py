@@ -45,8 +45,8 @@ def test_run_combo_success(tmp_path):
         b"BEGIN CAPTURE t=1000\n",
         b"END CAPTURE t=2000 polls=10 its=5 ring_used=5/1000\n",
         b"BEGIN DUMP records=2\n",
-        b"PKT t=1000 TX ua=96 mt=P len=3 n=0\n",
-        b"PKT t=1500 TX ua=96 mt=P len=3 n=1\n",
+        b"PKT t=1000 TX ua=31 mt=P len=3 n=0\n",
+        b"PKT t=1500 TX ua=31 mt=P len=3 n=1\n",
         b"END DUMP\n",
         b"", b"", b"", b""
     ]

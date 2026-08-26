@@ -178,7 +178,13 @@ constexpr const char* kImage = "xiao_host_tracer";
 // that D5 unlocked the table. `status` reports host scope plus a roster;
 // `status <ua>` reports one node. Telemetry carries the UA and never the
 // wire byte, so the roster is keyed the way its readers key it (#90).
-constexpr const char* kVersion = "0.7.0"; // #86: UA-scoped verbs, D5 runtime mutation
+// 0.8.0 (#90): ring-dump PKT lines now emit semantic UA (0..127), never
+// the CMRI wire byte. This keeps decoded telemetry uniform: framing and
+// escaping are already removed when these lines are produced.
+// 0.8.1 (#90): semantic-UA dump path now validates wire UA at the call
+// site and marks invalid records explicitly instead of silently
+// normalizing them into plausible semantic addresses.
+constexpr const char* kVersion = "0.8.1"; // #90: semantic-UA dump + invalid-UA marker
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
@@ -195,7 +201,7 @@ struct RingRecord {
   uint32_t t_ms;
   uint8_t ua;
   uint8_t mt;
-  uint8_t flags; // bit 0 = 1 for TX, 0 for RX
+  uint8_t flags; // bit 0 = TX, bit 1 = invalid wire-UA at capture
   uint8_t len;
 } __attribute__((packed));
 
@@ -208,6 +214,20 @@ uint32_t run_start_ms = 0;
 uint32_t run_polls = 0;
 uint32_t run_loop_its = 0;
 uint32_t run_it_frames = 0;
+uint32_t run_invalid_ua_records = 0;
+constexpr uint8_t kRingFlagTx = 0x01u;
+constexpr uint8_t kRingFlagInvalidUa = 0x02u;
+constexpr uint8_t kMaxWireUa = static_cast<uint8_t>(CMRInet::kUaOffset + 127u);
+bool isLegalWireUa(uint8_t wireUa) {
+  return wireUa >= CMRInet::kUaOffset && wireUa <= kMaxWireUa;
+}
+
+/// Convert a legal CMRI wire-UA byte to semantic UA (0..127).
+/// PRECONDITION: `wireUa` must satisfy isLegalWireUa(wireUa).
+
+uint8_t toSemanticUa(uint8_t wireUa) {
+  return static_cast<uint8_t>(wireUa - CMRInet::kUaOffset);
+}
 
 void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet) {
   if (run_active) {
@@ -216,10 +236,15 @@ void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet)
     }
     if (ring_used < kRingCap) {
       RingRecord& r = ring[ring_used++];
+      const bool legalUa = isLegalWireUa(packet.ua);
       r.t_ms = millis();
-      r.ua = packet.ua;
+      r.ua = legalUa ? toSemanticUa(packet.ua) : packet.ua;
       r.mt = packet.mt;
-      r.flags = transmit ? 1 : 0;
+      r.flags = transmit ? kRingFlagTx : 0u;
+      if (!legalUa) {
+        r.flags |= kRingFlagInvalidUa;
+        run_invalid_ua_records++;
+      }
       r.len = packet.length;
     }
   } else {
@@ -839,6 +864,7 @@ void loop() {
       Serial.print(" polls="); Serial.print(total_polls);
       Serial.print(" its="); Serial.print(run_it_frames);
       Serial.print(" loops="); Serial.print(run_loop_its);
+      Serial.print(" invalid_ua="); Serial.print(run_invalid_ua_records);
       Serial.print(" ring_used="); Serial.print(ring_used);
       Serial.print("/"); Serial.println(kRingCap);
     }
@@ -909,6 +935,7 @@ void loop() {
         run_polls = host.statistics().pollsSent;
         run_loop_its = 0;
         run_it_frames = 0;
+        run_invalid_ua_records = 0;
         run_start_ms = millis();
         run_end_ms = run_start_ms + secs * 1000;
         engine.setBackoffTraceOnly(true);
@@ -920,8 +947,11 @@ void loop() {
       for (size_t i = 0; i < ring_used; ++i) {
         const RingRecord& r = ring[i];
         Serial.print("PKT t="); Serial.print(r.t_ms);
-        Serial.print(r.flags == 1 ? " TX " : " RX ");
+        Serial.print((r.flags & kRingFlagTx) != 0u ? " TX " : " RX ");
         Serial.print("ua="); Serial.print(r.ua);
+        if ((r.flags & kRingFlagInvalidUa) != 0u) {
+          Serial.print(" ua_invalid=1");
+        }
         Serial.print(" mt="); Serial.print((char)r.mt);
         Serial.print(" len="); Serial.print(r.len);
         Serial.print(" n="); Serial.println(i);
