@@ -760,10 +760,21 @@ degraded — a newly added node has demonstrated no cost yet and must get
 a full-rate first poll, or the table's newest member is the one that
 starves.
 
-Liveness backoff and the conformance breaker are distinct mechanisms
-that share this allocator rather than holding independent timers. Where
-both apply, the gates AND. `maxPollBackoffMs` is demoted from primary
-knob to ceiling clamp; the operator-meaningful knob is the budget.
+Engagement conditions differ, and the difference is load-bearing
+(v1.5, correcting the earlier "share this allocator" framing). The
+gates engage only under healthy contention; the conformance breaker's
+state machine — arm, trip, close — engages on any nonconforming node
+unconditionally. That asymmetry is not accidental: tripping is the
+STALE → MISCONFIGURED writer (D16), a correctness obligation that
+cannot wait on whether healthy work happens to be present, while the
+gates exist to protect healthy work and have nothing to protect
+without it. A tripped breaker's *probes* still ride the degraded lane,
+so under contention they pass the same two gates; the breaker's own
+probe interval, clamped by `maxPollBackoffMs`, is its never-zero
+guarantee when there is nothing to gate. Liveness backoff is per-node
+pacing that runs as an eligibility check before the gates, not a third
+gate. `maxPollBackoffMs` is demoted from primary knob to ceiling clamp;
+the operator-meaningful knob is the budget.
 
 The **conformance breaker** trips after a bounded number of corrective
 re-init attempts. It is never a hard stop: a node reflashed with

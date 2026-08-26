@@ -769,10 +769,14 @@ bool CMRIHost::selectNextNode_(uint32_t nowMs) {
     }
     // A tripped breaker paces its own probes. Kept separate from the
     // liveness backoff above because the two answer different failure
-    // modes and a node can be subject to both at once; where both
-    // apply, they AND, as D17 requires.
-    // VALIDATION: Design v1.5 D17: liveness backoff and the conformance
-    // breaker are distinct mechanisms sharing one allocator.
+    // modes: the breaker is unconditional on conformance evidence, the
+    // gates below are conditional on healthy contention. A tripped node
+    // is degraded, so under contention its probe still passes both
+    // gates; without contention the probe interval's own clamp is the
+    // floor.
+    // VALIDATION: Design v1.5 D17: the gates and the breaker have
+    // different engagement conditions — gates under contention, breaker
+    // always. A tripped node's probes ride the degraded lane.
     if (node.breakerState_ == ConformanceBreakerState::kOpen &&
         node.breakerProbe_.armed() && !node.breakerProbe_.due(nowMs)) {
       continue;
