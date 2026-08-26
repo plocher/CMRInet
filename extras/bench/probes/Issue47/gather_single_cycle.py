@@ -17,6 +17,12 @@ def main() -> int:
     parser.add_argument("--mode", choices=["yield", "busy"], default="yield")
     parser.add_argument("--traffic", default="fast slow loopback")
     parser.add_argument("--tag", default="single_cycle")
+    parser.add_argument("--real-ua", type=int, default=30)
+    parser.add_argument("--real-in", type=int, default=7)
+    parser.add_argument("--real-out", type=int, default=7)
+    parser.add_argument("--phantom-ua", type=int, default=31)
+    parser.add_argument("--phantom-in", type=int, default=4)
+    parser.add_argument("--phantom-out", type=int, default=4)
     args = parser.parse_args()
     args.port = args.port or _tracer_client.host_port()
     s = args.stall
@@ -34,6 +40,10 @@ def main() -> int:
     print(f"    mode    : {mode}")
     print(f"    traffic : {traffic}")
     print(f"    secs    : {args.secs}")
+    print(
+        f"    topology: real ua{args.real_ua} ({args.real_in}/{args.real_out}) "
+        f"phantom ua{args.phantom_ua} ({args.phantom_in}/{args.phantom_out})"
+    )
     
     ser = _tracer_client.reboot_and_reconnect(args.port)
     
@@ -42,9 +52,15 @@ def main() -> int:
         return 1
         
     print("Configuring topology for session...")
-    ser.write(b"node add 30 7 7\n")
+    ser.write(
+        f"node add {args.real_ua} {args.real_in} {args.real_out}\n".encode("utf-8")
+    )
     time.sleep(0.1)
-    ser.write(b"node add 31 4 4\n")
+    ser.write(
+        (
+            f"node add {args.phantom_ua} {args.phantom_in} {args.phantom_out}\n"
+        ).encode("utf-8")
+    )
     time.sleep(0.1)
     _tracer_client.flush_lines(ser)
     
@@ -53,7 +69,7 @@ def main() -> int:
     try:
         res = _tracer_client.run_combo(
             ser, s, p, mode, traffic, args.secs, out_dir, tag,
-            capture_sniffers=True
+            capture_sniffers=True, phantom_ua=args.phantom_ua
         )
         print(f"  -> {res.verdict} max_gap={res.max_gap}")
         _gap_deltas.print_result_text(res)
@@ -71,9 +87,9 @@ def main() -> int:
         time.sleep(0.1)
         ser.write(b"disable toggleoutfrominput\n")
         time.sleep(0.1)
-        ser.write(b"node disable 30\n")
+        ser.write(f"node disable {args.real_ua}\n".encode("utf-8"))
         time.sleep(0.1)
-        ser.write(b"node disable 31\n")
+        ser.write(f"node disable {args.phantom_ua}\n".encode("utf-8"))
         time.sleep(0.1)
         
         # Verify sustained quietness by observing the line stream.
