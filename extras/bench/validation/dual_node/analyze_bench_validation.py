@@ -21,11 +21,16 @@ class NodeEvidence:
     """Validation evidence for one node address."""
 
     address: int
-    wire_ua: int
+    expected_input_bytes: Optional[int] = None
     tx_i_or_t: int = 0
     tx_polls: int = 0
     rx_replies: int = 0
     status_state: Optional[str] = None
+    accepted_exchanges: Optional[int] = None
+    observed_input_bytes: Optional[int] = None
+    last_fault_name: Optional[str] = None
+    last_fault_expected: Optional[int] = None
+    last_fault_observed: Optional[int] = None
 
 
 @dataclass
@@ -38,18 +43,13 @@ class ValidationResult:
     failures: list[str]
 
 
-def _wire_ua(address: int) -> int:
-    """Convert node address to on-wire UA."""
-    return address + 65
-
-
-def _extract_node_states(status_snapshot: Optional[dict]) -> dict[int, str]:
-    """Extract per-UA state from the status snapshot if present."""
-    if not status_snapshot:
-        return {}
+def _extract_node_states(status_snapshot: Optional[dict]) -> tuple[dict[int, str], list[str]]:
+    """Extract per-UA state from status snapshot and return validation failures."""
+    if status_snapshot is None:
+        return {}, ["status_snapshot missing or null"]
     nodes = status_snapshot.get("nodes")
     if not isinstance(nodes, list):
-        return {}
+        return {}, ["status_snapshot missing nodes list"]
     out: dict[int, str] = {}
     for item in nodes:
         if not isinstance(item, dict):
@@ -58,7 +58,23 @@ def _extract_node_states(status_snapshot: Optional[dict]) -> dict[int, str]:
         state = item.get("state")
         if isinstance(ua, int) and isinstance(state, str):
             out[ua] = state
-    return out
+    return out, []
+
+def _extract_node_statuses(node_statuses: Optional[dict]) -> tuple[dict[int, dict], list[str]]:
+    """Extract per-UA node status payloads keyed by semantic UA."""
+    if node_statuses is None:
+        return {}, ["node_statuses missing from manifest"]
+    if not isinstance(node_statuses, dict):
+        return {}, ["node_statuses is not a JSON object"]
+    out: dict[int, dict] = {}
+    for key, value in node_statuses.items():
+        try:
+            ua = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            out[ua] = value
+    return out, []
 
 
 def _analyze_lines(
@@ -66,25 +82,30 @@ def _analyze_lines(
     ua_a: int,
     ua_b: int,
     status_snapshot: Optional[dict],
+    node_statuses: Optional[dict] = None,
+    expected_inputs: Optional[dict[int, int]] = None,
 ) -> ValidationResult:
     """Analyze capture lines for required initialization and poll/reply activity."""
     evidence = {
-        ua_a: NodeEvidence(address=ua_a, wire_ua=_wire_ua(ua_a)),
-        ua_b: NodeEvidence(address=ua_b, wire_ua=_wire_ua(ua_b)),
+        ua_a: NodeEvidence(
+            address=ua_a,
+            expected_input_bytes=(expected_inputs or {}).get(ua_a),
+        ),
+        ua_b: NodeEvidence(
+            address=ua_b,
+            expected_input_bytes=(expected_inputs or {}).get(ua_b),
+        ),
     }
-    wire_to_address = {
-        _wire_ua(ua_a): ua_a,
-        _wire_ua(ua_b): ua_b,
-    }
+    seen_uas: set[int] = set()
 
     for line in lines:
         match = PKT_RE.search(line)
         if not match:
             continue
-        wire_ua = int(match.group("ua"))
-        if wire_ua not in wire_to_address:
+        addr = int(match.group("ua"))
+        seen_uas.add(addr)
+        if addr not in evidence:
             continue
-        addr = wire_to_address[wire_ua]
         node = evidence[addr]
         direction = match.group("dir")
         mt = match.group("mt")
@@ -96,21 +117,65 @@ def _analyze_lines(
         elif direction == "RX" and mt == "R":
             node.rx_replies += 1
 
-    node_states = _extract_node_states(status_snapshot)
+    node_states, status_failures = _extract_node_states(status_snapshot)
+    parsed_node_statuses, node_status_failures = _extract_node_statuses(node_statuses)
     for addr, node in evidence.items():
         node.status_state = node_states.get(addr)
-
-    failures: list[str] = []
+    failures: list[str] = list(status_failures)
+    failures.extend(node_status_failures)
     for addr in (ua_a, ua_b):
         node = evidence[addr]
+        status_doc = parsed_node_statuses.get(addr)
+        if status_doc is None:
+            failures.append(f"UA{addr}: per-node status missing from node_statuses")
+        else:
+            state_value = status_doc.get("state")
+            if isinstance(state_value, str):
+                node.status_state = state_value
+            exchanges_value = status_doc.get("exchanges")
+            if isinstance(exchanges_value, int):
+                node.accepted_exchanges = exchanges_value
+            observed_input_value = status_doc.get("observedIn")
+            if isinstance(observed_input_value, int):
+                node.observed_input_bytes = observed_input_value
+            fault_doc = status_doc.get("fault")
+            if isinstance(fault_doc, dict):
+                fault_name = fault_doc.get("name")
+                if isinstance(fault_name, str):
+                    node.last_fault_name = fault_name
+                fault_expected = fault_doc.get("expected")
+                if isinstance(fault_expected, int):
+                    node.last_fault_expected = fault_expected
+                fault_observed = fault_doc.get("observed")
+                if isinstance(fault_observed, int):
+                    node.last_fault_observed = fault_observed
         if node.tx_i_or_t == 0:
             failures.append(f"UA{addr}: no TX I/T frames captured")
         if node.tx_polls == 0:
             failures.append(f"UA{addr}: no TX poll frames captured")
         if node.rx_replies == 0:
             failures.append(f"UA{addr}: no RX reply frames captured")
+        if node.status_state is None:
+            failures.append(f"UA{addr}: state missing from status_snapshot")
+        if node.accepted_exchanges is None:
+            failures.append(f"UA{addr}: accepted exchange count missing in per-node status")
+        elif node.accepted_exchanges == 0:
+            failures.append(f"UA{addr}: no accepted exchanges recorded")
         if node.status_state in ("UNINITIALIZED", "OFFLINE"):
             failures.append(f"UA{addr}: status state is {node.status_state}")
+        if node.expected_input_bytes is not None:
+            observed_geometry = node.observed_input_bytes
+            if observed_geometry is None and node.last_fault_name == "GEOMETRY_MISMATCH":
+                observed_geometry = node.last_fault_observed
+            if observed_geometry is not None and observed_geometry != node.expected_input_bytes:
+                failures.append(
+                    f"UA{addr}: geometry disagreement (expected {node.expected_input_bytes}, observed {observed_geometry})"
+                )
+        wire_ua = addr + ord("A")
+        if wire_ua in seen_uas and addr not in seen_uas:
+            failures.append(
+                f"UA{addr}: capture appears wire-encoded (saw ua={wire_ua}); semantic UA required"
+            )
 
     return ValidationResult(
         pass_validation=(len(failures) == 0),
@@ -139,9 +204,11 @@ def main() -> int:
 
     target = Path(args.target)
     status_snapshot: Optional[dict] = None
+    node_statuses: Optional[dict] = None
     capture_path: Path
     ua_a = args.ua_a
     ua_b = args.ua_b
+    expected_inputs: dict[int, int] = {}
     summary_path: Optional[Path] = None
 
     if target.is_dir():
@@ -153,7 +220,12 @@ def main() -> int:
         capture_path = target / capture_name
         ua_a = int(manifest.get("ua_a", ua_a))
         ua_b = int(manifest.get("ua_b", ua_b))
+        expected_inputs = {
+            ua_a: int(manifest.get("ua_a_in", 0)),
+            ua_b: int(manifest.get("ua_b_in", 0)),
+        }
         status_snapshot = manifest.get("status_snapshot")
+        node_statuses = manifest.get("node_statuses")
         if args.write_summary:
             summary_path = target / "summary.json"
     else:
@@ -164,11 +236,28 @@ def main() -> int:
         return 2
 
     lines = capture_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    result = _analyze_lines(lines, ua_a=ua_a, ua_b=ua_b, status_snapshot=status_snapshot)
+    result = _analyze_lines(
+        lines,
+        ua_a=ua_a,
+        ua_b=ua_b,
+        status_snapshot=status_snapshot,
+        node_statuses=node_statuses,
+        expected_inputs=expected_inputs,
+    )
 
     print(f"Capture: {capture_path}")
-    print(f"UA{result.ua_a.address} (wire {result.ua_a.wire_ua}) -> I/T TX={result.ua_a.tx_i_or_t}, P TX={result.ua_a.tx_polls}, R RX={result.ua_a.rx_replies}, state={result.ua_a.status_state}")
-    print(f"UA{result.ua_b.address} (wire {result.ua_b.wire_ua}) -> I/T TX={result.ua_b.tx_i_or_t}, P TX={result.ua_b.tx_polls}, R RX={result.ua_b.rx_replies}, state={result.ua_b.status_state}")
+    print(
+        f"UA{result.ua_a.address} -> I/T TX={result.ua_a.tx_i_or_t}, "
+        f"P TX={result.ua_a.tx_polls}, R RX={result.ua_a.rx_replies}, "
+        f"state={result.ua_a.status_state}, exchanges={result.ua_a.accepted_exchanges}, "
+        f"observedIn={result.ua_a.observed_input_bytes}"
+    )
+    print(
+        f"UA{result.ua_b.address} -> I/T TX={result.ua_b.tx_i_or_t}, "
+        f"P TX={result.ua_b.tx_polls}, R RX={result.ua_b.rx_replies}, "
+        f"state={result.ua_b.status_state}, exchanges={result.ua_b.accepted_exchanges}, "
+        f"observedIn={result.ua_b.observed_input_bytes}"
+    )
     if result.pass_validation:
         print("PASS: both nodes initialized and responded to polls in this capture")
     else:
