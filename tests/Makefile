@@ -24,7 +24,7 @@ LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRIPacket.h \
 
 TESTS   := test_codec test_time test_mock_transport test_serial_transport \
            test_host test_tracer test_host_display_metrics \
-           test_xiao_generators test_conformance_fault
+           test_xiao_generators test_conformance_fault test_cdc_line
 TARGETS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
