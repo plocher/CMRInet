@@ -189,7 +189,7 @@ class HostStatusPanel {
       if (interval == 0) {
         snprintf(buf, len, "---ms");
       } else {
-        snprintf(buf, len, "%ums", interval);
+        snprintf(buf, len, "%ums", static_cast<unsigned>(interval));
       }
     }
   }
@@ -209,7 +209,7 @@ class HostStatusPanel {
         ? nodeErrors_[nodeIndex].countInLastMs(nowMs, kErrorWindowMs)
         : 0;
     snprintf(buf, len, "UA%u:%s %s %2uerr", address,
-             stateTag ? stateTag : "---", lat, recentErrs);
+             stateTag ? stateTag : "---", lat, static_cast<unsigned>(recentErrs));
   }
 
  private:
