@@ -499,6 +499,56 @@ static void test_node_geometry_verb_reannounces_ni_no(void) {
       line, "geometry change did not re-announce the new NI/NO in an I");
 }
 
+// The geometry-change event line carries the previous NI/NO alongside the
+// new (in/out), so a reader can tell what changed without dereferencing
+// the handle (issue #91). The event is the ack now: the verb handler
+// emits nothing on success, and onHostEvent_ renders this line.
+static void test_geometry_event_line_carries_previous_geometry(void) {
+  TracerRig rig(2, 3, /*replyTimeoutMs=*/50);  // declares 2 in / 3 out
+  rig.run(0, 6);                               // I, T, P for the original geometry
+  rig.lines.clear();
+  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+                    rig.verb("node geometry 5 4 1"));
+  const std::string* line =
+      findContaining(rig.lines, "\"event\":\"node_geometry\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(line,
+                               "geometry change emitted no node_geometry line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"ua\":5"),
+                           "geometry line missing its UA");
+  // New geometry on the node line as in/out.
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"in\":4,\"out\":1"),
+                           "geometry line missing the new in/out");
+  // Previous geometry carried by value in the event.
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"previousIn\":2"),
+                           "geometry line missing previousIn");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"previousOut\":3"),
+                           "geometry line missing previousOut");
+}
+
+// A direct API delete (no C&C verb) renders the node_delete host-scoped
+// line through the bound shell, because the engine fires kNodeDeleted
+// regardless of the trigger (issue #91). This is the #88 case: a sketch
+// mutates the table in code, and the capture still sees it.
+static void test_direct_api_delete_renders_node_delete_line(void) {
+  TracerRig rig;
+  rig.run(0, 3);  // let the engine settle so lastTickMs_ is set
+  rig.lines.clear();
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    rig.host.deleteRemoteNode(5));
+  const std::string* line =
+      findContaining(rig.lines, "\"event\":\"node_delete\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(
+      line, "direct-API delete rendered no node_delete line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"ua\":5"),
+                           "node_delete line missing the departed UA");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"present\":false"),
+                           "node_delete line did not mark the UA absent");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"nodes\":0"),
+                           "node_delete line did not reflect the empty table");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"roster\":[]"),
+                           "node_delete line did not render the empty roster");
+}
+
 // A mutation under live traffic orphans the outstanding exchange, and the
 // host-scope counter is where a bench operator can see it happened. A
 // nonzero value is the signal that mutation is happening mid-traffic --
@@ -683,6 +733,8 @@ int main(void) {
   RUN_TEST(test_verb_on_unknown_ua_reports_no_such_node);
   RUN_TEST(test_node_add_and_delete_verbs_move_the_roster);
   RUN_TEST(test_node_geometry_verb_reannounces_ni_no);
+  RUN_TEST(test_geometry_event_line_carries_previous_geometry);
+  RUN_TEST(test_direct_api_delete_renders_node_delete_line);
   RUN_TEST(test_host_status_surfaces_an_orphaned_exchange);
   RUN_TEST(test_status_line_includes_image_and_version);
   RUN_TEST(test_epoch_line_includes_image_and_version);

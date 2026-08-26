@@ -123,6 +123,13 @@ struct ListenerLog {
   /// Conformance breaker transitions (D17).
   int breakerTripped = 0;
   int breakerClosed = 0;
+  /// Runtime node-table mutation events (issue #91).
+  int nodeAdded = 0;
+  int nodeDeleted = 0;
+  int geometryChanged = 0;
+  uint8_t lastDepartedAddress = 0;
+  uint16_t lastPreviousInputBytes = 0;
+  uint16_t lastPreviousOutputBytes = 0;
 };
 
 static void recordEvent(void* context, const CMRIHostEvent& event) {
@@ -145,6 +152,16 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
       break;
     case CMRIHostEventType::kBreakerTripped: ++log.breakerTripped; break;
     case CMRIHostEventType::kBreakerClosed: ++log.breakerClosed; break;
+    case CMRIHostEventType::kNodeAdded: ++log.nodeAdded; break;
+    case CMRIHostEventType::kNodeDeleted:
+      ++log.nodeDeleted;
+      log.lastDepartedAddress = event.departedAddress;
+      break;
+    case CMRIHostEventType::kGeometryChanged:
+      ++log.geometryChanged;
+      log.lastPreviousInputBytes = event.previousInputBytes;
+      log.lastPreviousOutputBytes = event.previousOutputBytes;
+      break;
   }
   log.lastNode = event.node;
   log.lastEventMs = event.nowMs;
@@ -1824,6 +1841,152 @@ static void test_full_mutation_lifecycle(void) {
   TEST_ASSERT_EQUAL_size_t(2, host.nodeCount());
 }
 
+// --------------------------------------- mutation events (#91)
+//
+// Runtime add, delete, and geometry change now fire CMRIHostEvents, so
+// a listener sees the node table change whether the mutation came from a
+// C&C verb or a direct API call. These tests drive the mutators directly
+// (no shell) to prove the listener seam is the single source.
+
+// A delete fires kNodeDeleted. The slot is cleaned before the event
+// fires (D5), so the event carries the departing identity by value and
+// its node pointer is null -- the listener can still name the node that
+// left (issue #91).
+static void test_delete_event_names_the_departing_node(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 2, 0));
+  host.begin();
+  host.tick(1000);  // establish a clock so the delete stamp is non-zero
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.deleteRemoteNode(5));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, log.nodeDeleted,
+                                "delete did not fire kNodeDeleted");
+  TEST_ASSERT_NULL_MESSAGE(log.lastNode,
+                           "kNodeDeleted carried a non-null node pointer");
+  TEST_ASSERT_EQUAL_UINT8_MESSAGE(5, log.lastDepartedAddress,
+                                  "kNodeDeleted named the wrong address");
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      1000, log.lastEventMs,
+      "delete event did not stamp the last-tick clock");
+  TEST_ASSERT_EQUAL_size_t(0, host.nodeCount());
+}
+
+// A runtime add fires kNodeAdded with the new handle, so a listener sees
+// the table grow even when the add is a direct API call, not a C&C verb
+// (issue #91).
+static void test_add_event_fires_for_runtime_add(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  host.begin();
+  host.tick(500);  // running, with a clock
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(6, 1, 2));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, log.nodeAdded,
+                                "add did not fire kNodeAdded");
+  TEST_ASSERT_NOT_NULL_MESSAGE(log.lastNode,
+                                "kNodeAdded carried a null node pointer");
+  TEST_ASSERT_EQUAL_UINT8_MESSAGE(6, log.lastNode->address(),
+                                  "kNodeAdded named the wrong node");
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      500, log.lastEventMs,
+      "add event did not stamp the last-tick clock");
+}
+
+// A geometry change fires kGeometryChanged carrying both the old and the
+// new NI/NO, so a reader can tell what changed without dereferencing the
+// handle (issue #91). The new geometry is on the handle; the old rides by
+// value in the event.
+static void test_geometry_event_carries_old_and_new_geometry(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 2, 1));
+  host.begin();
+  host.tick(100);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.setRemoteNodeGeometry(5, 4, 3));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      1, log.geometryChanged,
+      "geometry change did not fire kGeometryChanged");
+  TEST_ASSERT_EQUAL_UINT16_MESSAGE(
+      2, log.lastPreviousInputBytes,
+      "kGeometryChanged lost the old input bytes");
+  TEST_ASSERT_EQUAL_UINT16_MESSAGE(
+      1, log.lastPreviousOutputBytes,
+      "kGeometryChanged lost the old output bytes");
+  // The handle already holds the new geometry.
+  TEST_ASSERT_EQUAL_size_t(4, host.node(5)->inputLength());
+  TEST_ASSERT_EQUAL_size_t(3, host.node(5)->outputLength());
+}
+
+// A rejected mutation fires no event: each mutator returns its
+// ConfigStatus before reaching the event dispatch (issue #91). This is
+// the invariant that lets the shell's verb handlers become thin wrappers
+// -- validation lives in the mutator, and a failed call produces only the
+// error line, not a spurious event.
+static void test_rejected_mutation_fires_no_event(void) {
+  using CS = CMRIHost::ConfigStatus;
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+  TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(5, 2, 0));
+  host.begin();
+  host.tick(100);
+  // Reset so the successful add above is not read as a mutation event
+  // from the rejected calls below.
+  log.nodeAdded = 0;
+  log.nodeDeleted = 0;
+  log.geometryChanged = 0;
+
+  // Duplicate address.
+  TEST_ASSERT_EQUAL(CS::kAddressInUse, host.addRemoteNode(5, 1, 1));
+  // No such node.
+  TEST_ASSERT_EQUAL(CS::kNoSuchNode, host.deleteRemoteNode(99));
+  TEST_ASSERT_EQUAL(CS::kNoSuchNode, host.setRemoteNodeGeometry(99, 1, 1));
+  // Byte ceilings.
+  TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge,
+                    host.setRemoteNodeGeometry(
+                        5, RemoteNodeHandle::kMaxInputBytes + 1, 0));
+  TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge,
+                    host.setRemoteNodeGeometry(
+                        5, 0, RemoteNodeHandle::kMaxOutputBytes + 1));
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, log.nodeAdded,
+                                "a rejected add fired kNodeAdded");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, log.nodeDeleted,
+                                "a rejected delete fired kNodeDeleted");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      0, log.geometryChanged,
+      "a rejected geometry change fired kGeometryChanged");
+}
+
+// A mutation before the first tick stamps nowMs=0 -- "no clock yet" --
+// rather than a fabricated timestamp. The guard is what keeps the event
+// stream honest when a sketch adds its compiled-in nodes before the host
+// begins ticking (issue #91). Pre-begin adds are a legitimate boot-time
+// path and are not refused.
+static void test_mutation_before_first_tick_stamps_zero_clock(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+  // No begin(), no tick(): lastTickMs_ is still its default 0.
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 1, 1));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, log.nodeAdded,
+                                "pre-tick add did not fire kNodeAdded");
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      0, log.lastEventMs,
+      "pre-tick mutation stamped a non-zero clock");
+}
+
 // --------------------------------------------------- anti-starvation (#41)
 
 // Reproduces the map issue #41 defect: a node whose outputs are marked
@@ -2551,6 +2714,11 @@ int main(void) {
   RUN_TEST(test_reused_slot_is_a_new_subject);
   RUN_TEST(test_geometry_change_invalidates_image_and_forces_reinit);
   RUN_TEST(test_full_mutation_lifecycle);
+  RUN_TEST(test_delete_event_names_the_departing_node);
+  RUN_TEST(test_add_event_fires_for_runtime_add);
+  RUN_TEST(test_geometry_event_carries_old_and_new_geometry);
+  RUN_TEST(test_rejected_mutation_fires_no_event);
+  RUN_TEST(test_mutation_before_first_tick_stamps_zero_clock);
   RUN_TEST(test_dirty_output_cannot_starve_poll_forever);
   RUN_TEST(test_anti_starvation_does_not_starve_transmit);
   RUN_TEST(test_poll_backoff_doubles_and_clears_on_reply);

@@ -160,6 +160,18 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   policies_[free] = policy;
   occupied_[free] = true;
   ++nodeCount_;
+
+  // A listener sees the table grow, whether the add came from a C&C verb
+  // or a direct API call (issue #91). The handle is valid from here until
+  // the node is deleted, so event.node names the new node. nowMs is the
+  // last tick's clock -- the honest "as of" time for a call that runs
+  // outside tick(). No event fires on a rejected add: every rejection
+  // above returns before reaching here.
+  CMRIHostEvent addEvent;
+  addEvent.type = CMRIHostEventType::kNodeAdded;
+  addEvent.node = &node;
+  addEvent.nowMs = lastTickMs_;
+  fire_(addEvent);
   return ConfigStatus::kOk;
 }
 
@@ -180,6 +192,20 @@ CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
   occupied_[slot] = false;
   resetSlot_(slot);
   --nodeCount_;
+
+  // A listener sees the node leave. The slot is already cleaned, so
+  // event.node is null by design and the departing identity rides by
+  // value in departedAddress (issue #91). Firing AFTER the clean is
+  // deliberate: the roster rendered at event time reflects the
+  // post-delete membership, so a reader sees the event and the shrunk
+  // table it produced. No event fires on a rejected delete (kNoSuchNode
+  // returns above).
+  CMRIHostEvent deleteEvent;
+  deleteEvent.type = CMRIHostEventType::kNodeDeleted;
+  deleteEvent.node = nullptr;
+  deleteEvent.departedAddress = address;
+  deleteEvent.nowMs = lastTickMs_;
+  fire_(deleteEvent);
   return ConfigStatus::kOk;
 }
 
@@ -203,6 +229,11 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   detachExchangeFrom_(slot);
 
   RemoteNodeHandle& node = nodes_[slot];
+  // Capture the old geometry before mutating: the kGeometryChanged event
+  // carries both old and new NI/NO so a reader can tell what changed
+  // without dereferencing the handle (issue #91).
+  const uint16_t previousInputBytes = node.config_.inputBytes;
+  const uint16_t previousOutputBytes = node.config_.outputBytes;
   node.config_.inputBytes = inputBytes;
   node.config_.outputBytes = outputBytes;
 
@@ -259,6 +290,20 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   // still the best evidence available. Keeping it is what lets an
   // operator correct a declaration and see observed and declared agree
   // (D14: declared is a claim, observed is evidence).
+
+  // A listener sees the geometry change in place: same address, same
+  // handle, same counters, but the declared NI/NO just changed. The
+  // event carries the previous NI/NO by value; the new values are on
+  // node->inputLength()/outputLength() (the handle already holds them).
+  // No event fires on a rejected geometry change (too-large bytes or
+  // kNoSuchNode return above) (issue #91).
+  CMRIHostEvent geometryEvent;
+  geometryEvent.type = CMRIHostEventType::kGeometryChanged;
+  geometryEvent.node = &node;
+  geometryEvent.nowMs = lastTickMs_;
+  geometryEvent.previousInputBytes = previousInputBytes;
+  geometryEvent.previousOutputBytes = previousOutputBytes;
+  fire_(geometryEvent);
   return ConfigStatus::kOk;
 }
 
@@ -292,6 +337,12 @@ void CMRIHost::tick(uint32_t nowMs) {
   if (!began_) {
     return;
   }
+  // The engine clock as of this tick. Mutators run outside tick() and
+  // have no clock of their own, so node-table-mutation events stamp
+  // `nowMs` from lastTickMs_. Stamped only while running: a mutation
+  // before the first effective tick honestly reports 0 ("no clock yet")
+  // rather than a stale or fabricated value (issue #91).
+  lastTickMs_ = nowMs;
   transport_.tick(nowMs);
   for (size_t i = 0; i < kMaxNodes; ++i) {
     if (occupied_[i]) {
@@ -1179,6 +1230,18 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.pollBackoffReason = pollBackoffReason;
   event.previousPollBackoffMs = previousPollBackoffMs;
   event.newPollBackoffMs = newPollBackoffMs;
+  fire_(event);
+}
+
+/// Deliver a pre-built event to the listener, if one is registered.
+/// Shared dispatch tail for emitEvent_() and the node-table mutators
+/// (issue #91): the mutators build their events inline and call this
+/// directly, since their payloads do not fit emitEvent_'s exchange-shaped
+/// parameter list. A null listener costs one branch (Design v1.1 D7).
+void CMRIHost::fire_(CMRIHostEvent& event) {
+  if (eventListener_ == nullptr) {
+    return;
+  }
   eventListener_(eventContext_, event);
 }
 

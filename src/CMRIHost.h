@@ -197,6 +197,13 @@ enum class CMRIHostEventType : uint8_t {
   kNodeStateChanged,  ///< node health moved between states
   kBreakerTripped,    ///< conformance breaker opened: bare-P probes only
   kBreakerClosed,     ///< conformance breaker re-closed; re-init ladder armed
+  // Runtime node-table mutation (issue #91). These fire from inside the
+  // mutators, so a listener sees the table change whether it came from a
+  // C&C verb or a direct API call — the gap that left a mid-run topology
+  // change invisible in the trace stream (only the roster hinted at it).
+  kNodeAdded,         ///< a node was added to the table (node is the new handle)
+  kNodeDeleted,       ///< a node was deleted (node is null; departedAddress carries identity)
+  kGeometryChanged,   ///< a node's declared NI/NO changed in place (old + new carried)
 };
 
 /// Why a reply was rejected. Meaningful only when a CMRIHostEvent
@@ -276,6 +283,25 @@ struct CMRIHostEvent {
   PollBackoffChangeReason pollBackoffReason = PollBackoffChangeReason::kNone;
   uint32_t previousPollBackoffMs = 0;
   uint32_t newPollBackoffMs = 0;
+
+  /// Identity for kNodeDeleted. The slot is cleaned before the event
+  /// fires (D5: delete tombstones and resets in place), so `node` is
+  /// null by the time a listener runs and the departing node's address
+  /// rides by value here. A handle cached across the delete would read
+  /// address 0; this is the value the listener needs to name the node
+  /// that just left.
+  uint8_t departedAddress = 0;
+
+  /// Geometry carried by kGeometryChanged, in data bytes. `previous*`
+  /// is the declared NI/NO before the in-place change; the new values
+  /// are on `node->inputLength()` / `node->outputLength()` (the handle
+  /// already holds the new geometry by the time the event fires). A
+  /// reader can tell what changed without dereferencing the handle —
+  /// which matters for the bench capture, where the question "was a
+  /// card added or removed" has different remedies (D14: a geometry
+  /// disagreement is a configuration fix, not a firmware fix).
+  uint16_t previousInputBytes = 0;
+  uint16_t previousOutputBytes = 0;
 };
 
 /// Event listener. Plain function pointer with a context cookie
@@ -659,6 +685,14 @@ class CMRIHost {
                       PollBackoffChangeReason::kNone,
                   uint32_t previousPollBackoffMs = 0,
                   uint32_t newPollBackoffMs = 0);
+
+  /// Deliver a pre-built event to the listener, if one is registered.
+  /// This is the dispatch tail shared by emitEvent_() (which builds the
+  /// exchange/health events) and the mutators (which build the
+  /// node-table-mutation events inline, since those do not fit
+  /// emitEvent_'s exchange-shaped parameter list). A null listener costs
+  /// one branch, per the D7 observability rule.
+  void fire_(CMRIHostEvent& event);
   void emitTrace_(bool transmit, const CMRIPacket& packet);
 
   CMRITransport& transport_;
@@ -685,6 +719,13 @@ class CMRIHost {
   CMRIHostTraceListener traceListener_ = nullptr;
   void* traceContext_ = nullptr;
 
+  /// The engine clock as of the most recent tick(). Mutators run outside
+  /// tick() and have no clock of their own, so node-table-mutation events
+  /// stamp `nowMs` from this. Zero until the first tick(); a mutation
+  /// before then honestly reports "no clock yet" (issue #91). Not refused:
+  /// a sketch's compiled-in adds before begin() are a legitimate boot-time
+  /// path, and refusing them would break node registration.
+  uint32_t lastTickMs_ = 0;
   bool began_ = false;
   Phase phase_ = Phase::kIdle;
   OutboundKind outboundKind_ = OutboundKind::kPoll;
