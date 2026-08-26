@@ -5,6 +5,21 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Testable CDC line writer (issue #99): the chunked `writeCdcLine`
+  logic is pulled out of `examples/XiaoHostTracer/XiaoHostTracer.ino`
+  into `src/testbed/CdcLineWriter.h` behind a `CdcConsole` seam (open,
+  room, write, clock, yield), so the chunking, the per-call room check,
+  and the reserved-terminator-budget split run under the desktop
+  `-Werror` gate and a fake port. The logic is identical to the
+  sketch-local copy; only the location changes. A `LineWriter`
+  trampoline (`writeCdcLineCb`) lets the shared engine bind the shared
+  logic directly. `tests/test_cdc_line.cpp` covers the happy path, a
+  chunked body, the #86 full-buffer case (the terminator lands when the
+  buffer was full through the body budget), a closed stream, and
+  body-budget exhaustion with the reserved terminator slice. The sketch
+  keeps only a `XiaoCdcConsole` adapter bound to `Serial`, `millis`,
+  and `delay`. The desktop tracer is unchanged: its `puts` and `fflush`
+  writer has no bounded buffer and no full-buffer problem.
 - Sketch warning gate for the examples (issue #93): `make sketch-lint`
   compiles every example sketch under `-Wall -Wextra -Werror -Wswitch`,
   compile-only, with warnings bound to our code only. The ESP32 core
