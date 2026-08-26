@@ -5,6 +5,34 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Sketch warning gate for the examples (issue #93): `make sketch-lint`
+  compiles every example sketch under `-Wall -Wextra -Werror -Wswitch`,
+  compile-only, with warnings bound to our code only. The ESP32 core
+  suppresses warnings for the sketch translation unit (it appends `-w`
+  *after* our flags, and last wins), and no `arduino-cli` invocation
+  switches them back on, so an unhandled enumerator — or any ordinary
+  warning — in a sketch shipped silently. `RemoteNodeState` grew
+  `kMisconfigured`/`kDegraded` under #84 and two sketch copies of the
+  state switch rotted to `"??"` on the same commit, unnoticed, for
+  exactly this reason. The gate harvests each sketch's real
+  cross-compiler command via `arduino-cli compile
+  --only-compilation-database`, then recompiles the sketch translation
+  unit with `-w` dropped, `-Wall -Wextra -Werror -Wswitch` added, and
+  every third-party include dir (esp32 core, tools, Wire/SPI, Adafruit
+  GFX/BusIO/SSD1306) demoted to `-isystem` so their header noise is
+  suppressed while `src` and `examples/<sketch>` stay on `-I`. Board
+  `-D` defines are kept verbatim (notably `-DARDUINO_USB_CDC_ON_BOOT=1`,
+  which overriding `build.extra_flags` would clobber). No hardware
+  needed — compile-only, `-o /dev/null`, no flash. New top-level
+  `Makefile` adds `sketch-lint`, `test`, `desktop`, and `check` (all
+  three gates) targets; `extras/bench/flash_and_probe.sh` runs the gate
+  as a pre-flight before flashing. See
+  [docs/sketch-warning-gate.md](docs/sketch-warning-gate.md). Whether
+  the gate also runs in CI is deferred to map #72; it leaves a clean
+  seam (one script, non-zero exit) for that. The shared-helper half of
+  #93 (both sketches call `remoteNodeStateTag()`, `TracerShell`
+  delegates) landed under #85; this ticket lands the gate that makes a
+  revert of that delegation fail a documented check.
 - Host events for runtime node-table mutation (issue #91, Design v1.2 D5):
   `addRemoteNode`, `deleteRemoteNode`, and `setRemoteNodeGeometry` now fire
   `CMRIHostEvent`s, so a listener sees the table change whether the mutation
@@ -320,6 +348,20 @@ High-level changes, newest first.
   `SimpleHost`, `XiaoHostTracer`, `cmri_tracer`, `test_host`.
 
 ### Fixed
+- Non-portable `printf` format specifiers across the host telemetry and
+  OLED display paths (surfaced by the #93 sketch warning gate, fixed
+  under #93): `uint32_t` and `unsigned long` values were passed to `%u`
+  converters at ~50 sites in `src/testbed/TracerShell.h`,
+  `src/SimpleHostMetrics.h`, and `examples/XiaoSniffer/XiaoSniffer.ino`.
+  On the RV32 cross-compiler `uint32_t` is `long unsigned int`, so `%u`
+  is a `-Wformat` mismatch; the host compiler never flagged it because
+  on macOS `uint32_t` is `unsigned int`. The code compiled but was
+  non-portable. Fixed by wrapping each such argument in
+  `static_cast<unsigned>(...)` paired with `%u` (the tree's existing
+  convention), valid on every target since `unsigned` is `unsigned int`
+  everywhere. No struct field types or public APIs changed. Also removed
+  an unused `using VerbResult` alias in `XiaoHostTracer.ino` flagged as
+  `-Wunused-local-typedefs`.
 - `XiaoHostTracer` `node add` reported `addFailed` forever after a single
   rejected add, and silently ignored every subsequent add for the life of
   the boot (issue #80). The verb inspected the sticky host-wide
