@@ -184,7 +184,13 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.8.1 (#90): semantic-UA dump path now validates wire UA at the call
 // site and marks invalid records explicitly instead of silently
 // normalizing them into plausible semantic addresses.
-constexpr const char* kVersion = "0.8.1"; // #90: semantic-UA dump + invalid-UA marker
+// 0.9.0 (#87): D17 telemetry. Host lines carry the degraded-lane ledger
+// (grants, per-gate denials, clamp bypasses); node lines carry the
+// derived service class, the conformance breaker's position, and the
+// conformance run. Two new events, breaker_open and breaker_close. An
+// analyzer keying on 0.8.x will not find these fields, which is why the
+// minor bumps rather than the patch.
+constexpr const char* kVersion = "0.9.0"; // #87: degraded lane + breaker telemetry
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,

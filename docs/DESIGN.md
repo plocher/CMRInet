@@ -1,7 +1,7 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.4 (bump when any decision or contract in this document
+Version: 1.5 (bump when any decision or contract in this document
 changes). A `// VALIDATION:` tag cites the version in which *that
 clause* last changed, not the current document version. Tags are
 therefore re-stamped per clause, as the clause changes and the
@@ -9,6 +9,17 @@ implementing code follows — never wholesale, because a tag naming a
 version the code does not yet satisfy asserts something false. See
 `docs/agents/validation-comments.md`.
 Change log:
+- v1.5 (2026-08-26): the breaker gets a writer, and D16's correction is
+  narrowed (issue #87). D16 v1.4 removed the breaker dependency
+  wholesale; that overshot in the opposite direction from the text it
+  corrected. Two of the three paths to MISCONFIGURED need no
+  invalidation, but the previously-conformed-and-still-answering path
+  needs one and cannot get it from interop 2.3.10, whose ladder is
+  armed by silence. D17 gains the mechanism for both gates, the derived
+  service class, the breaker's state machine, and an invariant naming
+  the corrective re-init as load-bearing for correctness rather than
+  courtesy. Behaviour changes, so D16/D17 tags on the implementing
+  paths move to v1.5.
 - v1.4 (2026-08-25): conformance becomes reachable (issue #85). D14
   draws the attribution boundary: only image-rung faults move a Node's
   stored conformance verdict, because the packet rung cannot always
@@ -620,8 +631,9 @@ The lifecycle is chronological rather than a free cross-product:
 OFFLINE → UNINITIALIZED → ONLINE → DEGRADED/MISCONFIGURED → OFFLINE.
 A node that goes nonconforming while still holding a valid image
 reaches STALE first, because rejected replies stop refreshing
-freshness; it reaches MISCONFIGURED when invalidation clears the image
-(interop 2.3.10).
+freshness; it reaches MISCONFIGURED when invalidation clears the image.
+Which invalidation, exactly, depends on the path, and the answer is not
+the obvious one — see below (v1.5).
 
 The projection therefore reads the image axis **three** ways under a
 nonconforming verdict (v1.4): fresh gives DEGRADED, stale gives STALE,
@@ -638,11 +650,33 @@ reported UNINITIALIZED — "hasn't started yet" — which is a large part
 of why it hid. Both paths reach MISCONFIGURED; only one passes through
 STALE.
 
-MISCONFIGURED does **not** depend on D17's breaker (v1.4, correcting
-earlier text that made it a precondition). The ordinary re-init ladder
-of interop 2.3.10 invalidates the image on its own, and the
-never-conformed path needs no invalidation at all. The breaker remains
-D17's business; reachability of this state is not.
+Whether MISCONFIGURED depends on D17's breaker is **path-dependent**,
+and both earlier texts overshot (v1.5). Pre-v1.4 made the breaker a
+precondition, which is wrong for two of the three paths. v1.4 removed
+the dependency entirely, which is wrong for the third — and the third
+is the one the field produces most.
+
+The three paths, because the difference is the whole point:
+- **Never conformed.** The image axis is already none, so the node
+  reaches MISCONFIGURED with nothing to invalidate. No breaker. This is
+  the #80 bench node, and v1.4 is right about it.
+- **Conformed, went silent, returned nonconforming.** Silence arms the
+  ordinary 2.3.10 ladder, which invalidates; the node then returns
+  answering with the wrong geometry and reads MISCONFIGURED. No
+  breaker. v1.4 is right about this one too.
+- **Conformed, then nonconforming while still answering.** A reply
+  proves presence, so the miss run ends and never restarts. The 2.3.10
+  ladder is armed by silence and this node is never silent, so nothing
+  clears freshness and the node parks at STALE with a growing age,
+  permanently. Only D17's bounded corrective re-init can complete the
+  transition. v1.4 named 2.3.10 as the mechanism here; that mechanism
+  cannot fire on this path.
+
+So the breaker is not a precondition for the state in general, and it
+is the sole writer that completes it for the answering case. That case
+is organic rot — IO cards rearranged, a sketch recompiled, the node
+still alive on the bus — which makes it the likeliest field path rather
+than an edge case. D17 records the consequence as an invariant.
 
 One consequence for testing, recorded because it retires a criterion
 (v1.4): silent liveness now implies an invalidated image, so "silent
@@ -672,9 +706,10 @@ nonconforming, which fails *both* predicates, and the only
 conformance value that separates them is `kUnknown` — the unset case,
 which proves nothing. Divergence therefore comes from liveness:
 `kMissing` with a fresh image is usable but not healthy. The conformance
-*domain* will separate them once D17's breaker has a writer, since
-`isHealthy()` reads the breaker and `inputsUsable()` does not; that is
-the first case where the two disagree with every axis set.
+*domain* separates them as of v1.5, now that D17's breaker has a
+writer: `isHealthy()` reads the breaker and `inputsUsable()` does not,
+so an open breaker over an otherwise clean node is the first case where
+the two disagree with every axis set.
 
 ### D17. Degraded nodes are a service class with a bounded budget
 A Host serves a layout that evolves organically: nodes are added
@@ -694,7 +729,36 @@ lane governed by **two gates**, both of which must pass:
 The asymmetry is measured, not assumed: a silent probe costs the reply
 timeout (order 250 ms) while an answering probe costs turnaround (order
 15-20 ms). A single time budget misses the first failure mode; a single
-slot budget misses the second.
+slot budget misses the second. One 60 s capture holds both degraded
+classes on one bus: the silent node drew 7 polls and the nonconforming
+one 1206 with zero accepted exchanges — a 172x gap, because backoff
+catches silence and nothing catches nonconformance.
+
+Mechanism, so neither gate is left to the implementer (v1.5). Gate A is
+a signed slot credit: a healthy grant adds one, a degraded grant debits
+the configured ratio, and the credit is clamped at a burst ceiling so
+an idle spell cannot bank unlimited degraded slots. Gate B is a leaky
+bucket in milliseconds, refilled at the configured percentage of
+elapsed wall clock, capped the same way, and debited the *measured*
+duration of each degraded exchange rather than a per-packet-kind
+estimate. Measuring is what keeps the two gates independent: one
+exchange charges Gate A a turn and Gate B its true cost, so the 20 ms
+probe and the 250 ms probe are each expensive in the currency that
+notices them. An orphaned exchange (D5) still debits Gate B — the wall
+clock was spent whether or not it can be charged to a node.
+
+The gates are consulted only for the degraded class. A healthy node is
+admitted without reference to either, so a layout with no degraded node
+schedules exactly as it did before this decision existed.
+
+Service class is derived, never stored, for the same reason
+`RemoteNodeState` is: it reads axes that already exist, and a stored
+copy would be a standing synchronization obligation with no independent
+content. A node is degraded when it has a live miss run or a
+nonconforming verdict. Unknown conformance is deliberately **not**
+degraded — a newly added node has demonstrated no cost yet and must get
+a full-rate first poll, or the table's newest member is the one that
+starves.
 
 Liveness backoff and the conformance breaker are distinct mechanisms
 that share this allocator rather than holding independent timers. Where
@@ -712,9 +776,34 @@ the re-init ladder on close because a reflashed node has lost its
 session. If a breakered node falls silent, that is the liveness path's
 job, not the breaker's.
 
+Its states are CLOSED, re-initializing, and OPEN (v1.5). A run of
+nonconforming replies past a threshold moves CLOSED to re-initializing
+and arms one corrective attempt: an I, the full T that must follow it
+(2.3.1), and the invalidation. Any conforming reply returns the breaker
+to CLOSED and clears the run. Exhausting the bounded attempts opens it.
+Thresholding on a *run* rather than a single mismatch is what preserves
+D16's chronology: with realistic staleness thresholds the image ages
+out before the ladder arms, so DEGRADED precedes STALE precedes
+MISCONFIGURED in the field and not merely on paper.
+
+Invariant, and the reason the re-init step is not an optimization
+target (v1.5): **the bounded corrective re-init must run before the
+breaker trips.** It is the only mechanism that completes STALE →
+MISCONFIGURED for a node that keeps answering, because interop 2.3.10's
+ladder is armed by silence and such a node is never silent (D16). Trim
+the attempts and every previously-healthy misconfigured node strands at
+STALE with a growing age — "your data is old" standing in for "your
+geometry is wrong", which is exactly the concealment D16 and #80 exist
+to remove. An implementer optimizing the breaker must argue with this
+paragraph first.
+
 Invariant: **the degraded class is never starved to zero**, or recovery
 is never observed. The ceiling clamp guarantees this and may
 deliberately exceed budget — slightly over budget beats never noticed.
+Concretely, a degraded node whose last exchange is older than
+`maxPollBackoffMs` is admitted with both gates bypassed. That single
+comparison is what holds when every node is degraded and no healthy
+grant ever accrues Gate A credit.
 
 Rationale for failing fast rather than polling on: in a static-firmware
 world where Host and Node share an externally supplied configuration

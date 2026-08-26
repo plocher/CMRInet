@@ -11,6 +11,22 @@
 
 namespace CMRInet {
 
+namespace {
+
+/// Percentages come from a sketch-writable config, so clamp rather than
+/// trust. A share above 100 would make Gate A's debit negative and turn
+/// the credit counter into a source of free slots.
+uint32_t clampPercent(uint8_t percent) {
+  return percent > 100u ? 100u : static_cast<uint32_t>(percent);
+}
+
+/// The longest elapsed span one Gate B refill will credit. Bounds the
+/// multiply inside uint32_t and costs nothing in practice: the bucket
+/// saturates at its burst ceiling long before this much time passes.
+constexpr uint32_t kMaxRefillSpanMs = 60000u;
+
+}  // namespace
+
 CMRIHost::CMRIHost(CMRITransport& transport, const CMRIHostConfig& config)
     : transport_(transport), config_(config) {}
 
@@ -222,6 +238,20 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   // latched.
   node.conformance_ = RemoteNodeConformance::kUnknown;
 
+  // A tripped breaker re-closes on a runtime geometry change: the
+  // operator just corrected the Host's side of the disagreement, which
+  // is one of the two ways the fault can be fixed. The other is a
+  // reflash, which the bare-P probe discovers on its own.
+  //
+  // The re-init this close would arm is already armed above, so only
+  // the ladder's bookkeeping needs resetting. resetBreaker_ rather than
+  // closeBreaker_ because this is a configuration call with no clock,
+  // and an event stamped with a fabricated timestamp is worse than no
+  // event: every other listener field here is real.
+  // VALIDATION: Design v1.5 D17: the breaker re-closes on either a
+  // conforming reply or a runtime change to the declared geometry.
+  resetBreaker_(node);
+
   // Observation is untouched: same address, same logical device, so the
   // counters keep running -- and observedInputBytes_ in particular
   // survives deliberately. What changed is the Host's *claim*, not the
@@ -268,6 +298,11 @@ void CMRIHost::tick(uint32_t nowMs) {
       nodes_[i].freshness_.poll(nowMs);
     }
   }
+  // Gate B accrues against wall clock, so it refills here rather than
+  // in the scheduler: time passes during an exchange too, and a bucket
+  // that only refilled between exchanges would under-credit exactly the
+  // long silent probes it exists to bound.
+  refillDegradedBudget_(nowMs);
   drainReceive_(nowMs);
   runSchedule_(nowMs);
   updateNodeStates_(nowMs);
@@ -387,10 +422,19 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     node.lastFault_.observed = static_cast<uint16_t>(reply.length);
     node.lastFault_.atMs = nowMs;
     // The node answered at all, so it is not chronically offline; clear
-    // any poll backoff the same as a clean accept (map issue #41).
+    // any *liveness* backoff the same as a clean accept (map issue #41).
+    //
+    // This clearing is what made the #80 node an attractive nuisance: it
+    // left a permanently-broken node immediately eligible on every
+    // rotation, 1206 polls to a silent node's 7. It stays, because the
+    // reading is correct -- this is not a liveness fault. What changed
+    // in D17 is that the node is now in the degraded lane, so the two
+    // gates bound it instead of nothing bounding it.
     const uint32_t previousBackoffMs = node.pollBackoffMs_;
     node.pollBackoffMs_ = 0;
     node.pollBackoff_.disarm();
+
+    ++node.consecutiveNonconforming_;
     emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
                RemoteNodeState::kUninitialized,
                RemoteNodeState::kUninitialized,
@@ -401,6 +445,39 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
                RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0,
                0, 0, PollBackoffChangeReason::kGeometryMismatch,
                previousBackoffMs, node.pollBackoffMs_);
+
+    // The conformance ladder, mirroring the liveness ladder in
+    // runSchedule_ -- including its event order. Both report the
+    // exchange's own outcome first and the consequence second, so a
+    // listener never sees a ladder arm before the reply that armed it.
+    //
+    // A run past the threshold arms one bounded corrective re-init;
+    // exhausting the attempts trips the breaker. Thresholding on a run
+    // rather than a single mismatch is what leaves room for D16's
+    // chronology to play out: the image ages to STALE first.
+    // VALIDATION: Design v1.5 D17: a run of nonconforming replies arms
+    // bounded corrective re-inits, then trips the breaker.
+    if (node.breakerState_ != ConformanceBreakerState::kOpen &&
+        node.consecutiveNonconforming_ >
+            config_.conformanceReinitThreshold) {
+      // At least one attempt, always. A configured zero would trip the
+      // breaker without ever invalidating, and the node would strand at
+      // STALE reporting "your data is old" for what is really "your
+      // geometry is wrong" -- the concealment #80 exists to remove. The
+      // invariant is enforced here rather than documented and hoped for.
+      // VALIDATION: Design v1.5 D17: the bounded corrective re-init must
+      // run before the breaker trips; it is the sole writer that
+      // completes STALE -> MISCONFIGURED for a node that keeps
+      // answering.
+      const uint32_t attempts = config_.conformanceReinitAttempts == 0
+                                    ? 1u
+                                    : config_.conformanceReinitAttempts;
+      if (node.breakerReinitAttempts_ < attempts) {
+        armCorrectiveReinit_(node, nowMs);
+      } else {
+        tripBreaker_(node, nowMs);
+      }
+    }
     finishExchange_(nowMs);
     return;
   }
@@ -425,6 +502,17 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     node.consecutiveMisses_ = 0;
     node.reinitArmed_ = false;  // a reply ends the miss-run, disarming the ladder
   }
+  // A conforming reply ends the conformance run too, and re-closes the
+  // breaker if it was open or mid-ladder. This is the recovery path a
+  // reflashed node takes: the bare-P probe gets a correctly-shaped
+  // answer, and the Host resumes without being restarted.
+  // VALIDATION: Design v1.5 D17: the breaker re-closes on a conforming
+  // reply, arming the re-init ladder because a reflashed node has lost
+  // its session.
+  if (node.breakerState_ != ConformanceBreakerState::kClosed ||
+      node.consecutiveNonconforming_ != 0) {
+    closeBreaker_(node, nowMs);
+  }
   // A reply proves the node is present and responsive: clear any poll
   // backoff immediately rather than ramping it down (map issue #41).
   const uint32_t previousBackoffMs = node.pollBackoffMs_;
@@ -446,6 +534,9 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
 /// Clearing the orphan mark here is what bounds its lifetime to exactly
 /// one exchange: every path out of an exchange funnels through this.
 void CMRIHost::finishExchange_(uint32_t nowMs) {
+  // Charge Gate B before the phase resets, while the grant record still
+  // describes the exchange that just ended.
+  chargeDegradedExchange_(nowMs);
   waitGate_.disarm();
   paceGate_.armIn(nowMs, config_.pollPacingMs);
   phase_ = Phase::kIdle;
@@ -481,7 +572,19 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
     // 2.3.1, is unaffected); once armed and due, force the poll through
     // regardless of outputsDirty_.
     const bool pollOverdue = node.pollDueBy_.due(nowMs);
-    if (node.needsInit_) {
+    if (node.breakerState_ == ConformanceBreakerState::kOpen) {
+      // A tripped breaker probes with a bare P and nothing else. Never a
+      // re-init sequence: its ~500 ms post-I settle occupies the single
+      // exchange slot, so probing a shelf of broken nodes that way would
+      // stall the round-robin for the healthy ones. The whole point of
+      // tripping was to stop paying that.
+      // VALIDATION: Design v1.5 D17: probe with a bare P, never a
+      // re-init sequence, whose post-I settle would stall the
+      // round-robin.
+      buildPollPacket_(polledIndex_);
+      outboundKind_ = OutboundKind::kPoll;
+      node.pollDueBy_.armIn(nowMs, config_.maxOutputPreemptMs);
+    } else if (node.needsInit_) {
       buildInitPacket_(polledIndex_);
       outboundKind_ = OutboundKind::kInit;
     } else if (node.outputsDirty_ && !pollOverdue) {
@@ -630,6 +733,28 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
 // VALIDATION: Design v1.2 D5: delete tombstones a slot; the cursor must
 // skip tombstones rather than assume a compacted table.
 bool CMRIHost::selectNextNode_(uint32_t nowMs) {
+  // Is there any healthy work to protect? The gates exist to bound
+  // degraded impact *on healthy nodes* -- that is D17's whole
+  // justification, both gates included. With no healthy node in the
+  // rotation there is nothing to protect, and throttling anyway would
+  // buy nothing while delaying every recovery: a lone silent node would
+  // jump straight from the 250 ms backoff ladder to the ceiling clamp's
+  // 32 s on its very first miss, pushing the interop 2.3.10 re-init
+  // ladder from ~16 s out to over three minutes.
+  //
+  // So the gates are conditional on contention, and the per-node
+  // liveness backoff below is what paces a degraded-only bus. That
+  // backoff is unchanged by D17 and the bench shows it already works:
+  // it is what held the silent node to 7 polls in 60 s.
+  // VALIDATION: Design v1.5 D17: the gates bound degraded impact on
+  // healthy nodes; the degraded class is never starved to zero.
+  bool healthyContenders = false;
+  for (size_t i = 0; i < kMaxNodes && !healthyContenders; ++i) {
+    healthyContenders =
+        occupied_[i] && nodes_[i].config_.enabled &&
+        nodes_[i].serviceClass() == RemoteNodeServiceClass::kHealthy;
+  }
+
   for (size_t step = 0; step < kMaxNodes; ++step) {
     const size_t candidate = (cursor_ + step) % kMaxNodes;
     if (!occupied_[candidate]) {
@@ -641,6 +766,55 @@ bool CMRIHost::selectNextNode_(uint32_t nowMs) {
     }
     if (node.pollBackoff_.armed() && !node.pollBackoff_.due(nowMs)) {
       continue;  // still backed off; try the next enabled node first
+    }
+    // A tripped breaker paces its own probes. Kept separate from the
+    // liveness backoff above because the two answer different failure
+    // modes and a node can be subject to both at once; where both
+    // apply, they AND, as D17 requires.
+    // VALIDATION: Design v1.5 D17: liveness backoff and the conformance
+    // breaker are distinct mechanisms sharing one allocator.
+    if (node.breakerState_ == ConformanceBreakerState::kOpen &&
+        node.breakerProbe_.armed() && !node.breakerProbe_.due(nowMs)) {
+      continue;
+    }
+
+    // Service class decides whether the two gates are consulted at all.
+    // A healthy node is admitted without reference to either, so a
+    // layout with no degraded node schedules exactly as it did before
+    // D17 existed.
+    // VALIDATION: Design v1.5 D17: the gates are consulted only for the
+    // degraded class.
+    const bool degraded =
+        node.serviceClass() == RemoteNodeServiceClass::kDegraded;
+    if (degraded && healthyContenders) {
+      if (!admitDegraded_(node, nowMs)) {
+        // Gated out. Keep walking: a healthy node further round the
+        // rotation may still be admissible, and cursor_ is untouched so
+        // the refusal costs this node no rotation position.
+        continue;
+      }
+    } else if (!degraded) {
+      // Healthy grants are what fund the degraded lane. Capped at one
+      // banked degraded slot so a long healthy run cannot buy a burst.
+      // VALIDATION: Design v1.5 D17: Gate A is a signed slot credit,
+      // clamped at a burst ceiling.
+      const int32_t share =
+          static_cast<int32_t>(clampPercent(config_.degradedSlotSharePercent));
+      const int32_t debit = 100 - share;
+      degradedSlotCredit_ += share;
+      if (degradedSlotCredit_ > debit) {
+        degradedSlotCredit_ = debit;
+      }
+    }
+
+    // Grant. Record the lane now rather than re-deriving it at
+    // completion: a reply can end the miss run mid-exchange, and Gate B
+    // must be charged for the lane that was actually spent.
+    node.lastGrant_.mark(nowMs);
+    exchangeDegraded_ = degraded;
+    exchangeStartedMs_ = nowMs;
+    if (node.breakerState_ == ConformanceBreakerState::kOpen) {
+      node.breakerProbe_.armIn(nowMs, breakerProbeIntervalMs_());
     }
     polledIndex_ = candidate;
     cursor_ = (candidate + 1) % kMaxNodes;
@@ -654,6 +828,196 @@ bool CMRIHost::selectNextNode_(uint32_t nowMs) {
   // tick; backoff deadlines are the schedule, so idling here preserves
   // progress without violating interop's "poll forever" behavior (2.3.10).
   return false;
+}
+
+/// Two-gate admission for one degraded candidate.
+///
+/// Healthy candidates never reach here. Both gates must pass, except
+/// under the ceiling clamp, which outranks them.
+bool CMRIHost::admitDegraded_(RemoteNodeHandle& node, uint32_t nowMs) {
+  const int32_t share =
+      static_cast<int32_t>(clampPercent(config_.degradedSlotSharePercent));
+  const int32_t debit = 100 - share;
+
+  // The ceiling clamp outranks both gates, and it is not a nicety. When
+  // every node is degraded there is no healthy grant to fund Gate A, so
+  // the credit never rises, so the degraded class would be starved to
+  // zero -- and a class served at zero rate can never demonstrate its
+  // own recovery. Bypassing may push the aggregate briefly over budget,
+  // deliberately: slightly over budget beats never noticed.
+  // VALIDATION: Design v1.5 D17: the degraded class is never starved to
+  // zero; the ceiling clamp guarantees this and may exceed budget.
+  if (node.lastGrant_.atLeast(nowMs, config_.maxPollBackoffMs)) {
+    ++statistics_.degradedClampBypasses;
+    ++statistics_.degradedGrants;
+    // Charged anyway. The bypass does not ask permission, but it does
+    // pay, so a run of them drives the credit negative and the long-run
+    // average is pulled back toward budget rather than drifting above
+    // it forever.
+    degradedSlotCredit_ -= debit;
+    return true;
+  }
+
+  // Gate A: rotation slots. Nonconforming-but-answering nodes bind
+  // here. They cost only turnaround, so a wall-clock budget alone
+  // barely notices them -- 1206 polls in 60 s at ~15 ms each is a small
+  // fraction of the wall clock and most of the rotation.
+  // VALIDATION: Design v1.5 D17: Gate A bounds participation share and
+  // trace noise.
+  if (degradedSlotCredit_ < debit) {
+    ++statistics_.degradedSlotDenials;
+    return false;
+  }
+
+  // Gate B: wall-clock bandwidth. Silent nodes bind here. They cost a
+  // full reply gate per probe, which a slot budget barely notices --
+  // one slot, 250 ms.
+  // VALIDATION: Design v1.5 D17: Gate B bounds cycle latency for
+  // healthy nodes, and both gates must pass.
+  if (clampPercent(config_.degradedBandwidthPercent) < 100u &&
+      degradedBudgetMs_ <= 0) {
+    ++statistics_.degradedBandwidthDenials;
+    return false;
+  }
+
+  degradedSlotCredit_ -= debit;
+  ++statistics_.degradedGrants;
+  return true;
+}
+
+/// Credit Gate B for wall clock elapsed since the last refill.
+void CMRIHost::refillDegradedBudget_(uint32_t nowMs) {
+  if (!degradedRefillStarted_) {
+    // Seeded from the first tick, never from zero. A sketch's first
+    // tick(millis()) can arrive at any large value after boot, and
+    // crediting that whole span would hand the degraded lane an
+    // unbounded opening burst -- the same class of bug the explicit
+    // never-marked state in CMRITime.h exists to prevent.
+    degradedRefillAtMs_ = nowMs;
+    degradedRefillStarted_ = true;
+    return;
+  }
+  uint32_t elapsed = nowMs - degradedRefillAtMs_;
+  if (elapsed == 0) {
+    return;
+  }
+  if (elapsed > kMaxRefillSpanMs) {
+    elapsed = kMaxRefillSpanMs;
+  }
+  degradedRefillAtMs_ = nowMs;
+
+  // The remainder is carried, not discarded. Truncating each tick would
+  // refill nothing at all whenever the tick interval times the
+  // percentage falls below one millisecond -- which is the common case
+  // for a fast loop() and a small budget.
+  const uint32_t numerator =
+      elapsed * clampPercent(config_.degradedBandwidthPercent) +
+      degradedRefillRemainderMs_;
+  degradedBudgetMs_ += static_cast<int32_t>(numerator / 100u);
+  degradedRefillRemainderMs_ = numerator % 100u;
+
+  const int32_t burst = static_cast<int32_t>(config_.degradedBurstMs);
+  if (degradedBudgetMs_ > burst) {
+    degradedBudgetMs_ = burst;
+  }
+}
+
+/// Debit Gate B by what the finished degraded exchange actually cost.
+void CMRIHost::chargeDegradedExchange_(uint32_t nowMs) {
+  if (!exchangeDegraded_) {
+    return;
+  }
+  exchangeDegraded_ = false;
+  // Measured, never estimated per packet kind. Measuring is what keeps
+  // the two gates independent: this same exchange already cost Gate A
+  // exactly one turn, and it costs Gate B whatever it really took --
+  // ~250 ms for a silent probe, ~15 ms for an answering one. A cost
+  // table would have to be maintained against real hardware; a clock
+  // difference does not.
+  //
+  // An orphaned exchange is charged too. The wall clock was spent
+  // whether or not it can be attributed to a node, and Gate B is a
+  // host-wide budget, so declining to charge would let repeated
+  // mutation-during-exchange leak real time straight past the bound.
+  // VALIDATION: Design v1.5 D17: Gate B is debited the measured
+  // duration of each degraded exchange; an orphaned exchange still
+  // debits it.
+  degradedBudgetMs_ -= static_cast<int32_t>(nowMs - exchangeStartedMs_);
+}
+
+/// Arm one bounded corrective re-init: I, the full T that follows it,
+/// and the invalidation.
+///
+/// LOAD-BEARING, and it does not look it. The invalidation here is the
+/// only mechanism that completes STALE -> MISCONFIGURED for a node that
+/// keeps answering. Interop 2.3.10's ladder is armed by silence, and a
+/// node replying with the wrong geometry is never silent -- acceptReply_
+/// zeroes its miss run on every mismatch, correctly, because the reply
+/// does prove presence. Delete this call and such a node parks at STALE
+/// with a growing age, reporting "your data is old" for what is really
+/// "your geometry is wrong": the exact concealment #80 was filed about.
+// VALIDATION: Design v1.5 D16: whether MISCONFIGURED depends on the
+// breaker is path-dependent; the previously-conformed, still-answering
+// path reaches it only through this corrective re-init.
+// VALIDATION: Design v1.5 D17: bounded corrective re-init attempts
+// precede the trip, each arming I, the full T, and the invalidation.
+void CMRIHost::armCorrectiveReinit_(RemoteNodeHandle& node, uint32_t nowMs) {
+  node.breakerState_ = ConformanceBreakerState::kReinitializing;
+  ++node.breakerReinitAttempts_;
+  // Reset the run so the next attempt needs a fresh one. Without this,
+  // every later mismatch would arm another re-init on the spot and the
+  // whole bounded budget would be spent in as many replies.
+  node.consecutiveNonconforming_ = 0;
+  node.needsInit_ = true;
+  node.outputsDirty_ = true;
+  invalidateNodeInputs_(node);
+  emitEvent_(CMRIHostEventType::kReinitScheduled, node, nowMs);
+}
+
+/// Trip the breaker. Bare-P probes only from here, and never zero rate.
+// VALIDATION: Design v1.5 D17: the breaker trips after a bounded number
+// of corrective re-init attempts and is never a hard stop.
+void CMRIHost::tripBreaker_(RemoteNodeHandle& node, uint32_t nowMs) {
+  node.breakerState_ = ConformanceBreakerState::kOpen;
+  node.conformanceBreakerOpen_ = true;
+  node.consecutiveNonconforming_ = 0;
+  node.breakerProbe_.armIn(nowMs, breakerProbeIntervalMs_());
+  emitEvent_(CMRIHostEventType::kBreakerTripped, node, nowMs);
+}
+
+/// Return the breaker to closed. Pure state: no event, no re-init.
+void CMRIHost::resetBreaker_(RemoteNodeHandle& node) {
+  node.breakerState_ = ConformanceBreakerState::kClosed;
+  node.conformanceBreakerOpen_ = false;
+  node.consecutiveNonconforming_ = 0;
+  node.breakerReinitAttempts_ = 0;
+  node.breakerProbe_.disarm();
+}
+
+/// Re-close the breaker on current evidence.
+void CMRIHost::closeBreaker_(RemoteNodeHandle& node, uint32_t nowMs) {
+  const bool wasEngaged =
+      node.breakerState_ != ConformanceBreakerState::kClosed;
+  const bool wasOpen = node.breakerState_ == ConformanceBreakerState::kOpen;
+  resetBreaker_(node);
+  if (wasOpen) {
+    // A reflashed node has lost its session, so it is owed a fresh I and
+    // the full T that must follow. Only from open: a mid-ladder close
+    // means the node answered correctly to a re-init already sent, so it
+    // has a session and re-arming would buy nothing but another ~500 ms
+    // settle.
+    // VALIDATION: Design v1.5 D17: re-close arms the re-init ladder,
+    // because a reflashed node has lost its session.
+    node.needsInit_ = true;
+    node.outputsDirty_ = true;
+  }
+  if (wasEngaged) {
+    // Only when something actually closed. A stray mismatch followed by
+    // a good reply clears the run counter without the breaker ever
+    // having engaged, and reporting that as a close would put noise in
+    // the event stream an analyzer has to filter back out.
+    emitEvent_(CMRIHostEventType::kBreakerClosed, node, nowMs);
+  }
 }
 
 /// Build the CPNODE 'C' initialization packet for a node.

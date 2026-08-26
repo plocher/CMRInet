@@ -5,6 +5,63 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Degraded service classes and the conformance breaker (issue #87, Design
+  v1.5 D16/D17). **This closes the #80 bug.** A node declared `NI=4`
+  answering with 3 bytes took 1316 polls to a healthy node's 765 — 63% of
+  all poll slots, serviced 1.7x more often than the node doing real work,
+  while committing nothing. #85 gave that node its right name
+  (`MISCONFIGURED`); this gives it a bounded cost.
+  - **Two gates, because the cost asymmetry is measured.** A silent probe
+    burns a full reply timeout (~250 ms) and one slot; an answering
+    nonconforming probe burns turnaround (~15-20 ms) and one slot. One
+    60 s capture holds both on one bus at 7 polls against 1206 — a 172x
+    gap. Gate A bounds rotation slots, Gate B bounds wall-clock
+    bandwidth, and both must pass. Either alone misses one failure mode.
+  - **The gates engage only when a healthy node is contending.** Their
+    justification is protecting healthy nodes, so where there are none
+    they protect nothing and would only delay recovery — a lone silent
+    node would jump from the 250 ms backoff ladder straight to the
+    ceiling clamp on its first miss.
+  - **`maxPollBackoffMs` is demoted from primary knob to ceiling clamp**,
+    and is now what guarantees the degraded class is never starved to
+    zero. It may deliberately exceed budget: a class served at zero rate
+    can never demonstrate its own recovery.
+  - **The conformance breaker gets a writer.** A run of nonconforming
+    replies arms bounded corrective re-inits, then trips. A tripped
+    breaker probes with a bare `P`, never a re-init — the post-`I` settle
+    would stall the round-robin — and re-closes on a conforming reply or
+    a runtime geometry change. `conformanceBreakerOpen_` had existed
+    unwritten since #85; `isHealthy()` and `inputsUsable()` now diverge
+    with every axis set, as D16 predicted.
+  - **The corrective re-init is load-bearing for correctness, not
+    courtesy.** D16 v1.4 said MISCONFIGURED does not depend on the
+    breaker. That is right for two of the three paths and wrong for the
+    third: a node that conformed and then went nonconforming *while still
+    answering* never accumulates a miss, so interop 2.3.10's
+    silence-armed ladder can never fire and nothing else clears
+    freshness. It parks at STALE with a growing age — "your data is old"
+    standing in for "your geometry is wrong", the same concealment #80
+    was filed about. That is the organic-rot case (cards rearranged,
+    sketch recompiled, node alive on the bus), so it is the likeliest
+    field path, not an edge case. D16 is narrowed to v1.5 rather than
+    reverted, and the engine enforces at least one attempt even when zero
+    are configured.
+  - **First priority ranking in a deliberately flat round-robin**, so it
+    is a documented departure: `docs/adr/0002-priority-ranking-in-the-round-robin.md`.
+  - New `CMRIHostConfig` knobs: `degradedSlotSharePercent`,
+    `degradedBandwidthPercent`, `degradedBurstMs`,
+    `conformanceReinitThreshold`, `conformanceReinitAttempts`,
+    `breakerProbeIntervalMs`. Defaults leave a healthy-only layout
+    scheduled exactly as before — with no degraded node present, neither
+    gate is consulted.
+  - `RemoteNodeHandle` gains `serviceClass()`, `breakerState()`,
+    `conformanceBreakerOpen()`, `consecutiveNonconforming()`, and
+    `breakerReinitAttempts()`. `CMRIHostStatistics` gains the
+    degraded-lane ledger, carrying both denial counters separately
+    because which gate bound says which failure mode is costing the
+    layout. Two new events, `kBreakerTripped` and `kBreakerClosed`.
+  - Tracer telemetry moves to image version `0.9.0`: host lines carry the
+    ledger, node lines carry service class and breaker position.
 - Observed node geometry and conformance evaluation (issue #85, Design
   v1.4 D14/D15/D16, breaking for two projected states): the Host now
   captures the geometry a Node actually demonstrates and stores a
@@ -128,6 +185,13 @@ High-level changes, newest first.
   it at runtime stops them.
 
 ### Changed
+- The STALE-rung test no longer raises `missThreshold` to "prevent
+  invalidation" (issue #87). That suppressed nothing: a node answering
+  every poll cannot arm a silence-driven ladder at any threshold, so the
+  setup implied a hazard that did not exist while the real one — the
+  conformance ladder — went unnamed. It now suppresses the mechanism
+  actually reachable on that path and asserts zero misses to prove which
+  one that is. Same shape of drift as the D16 defect it sits next to.
 - `TracerShell` no longer holds a node, and every verb names its UA
   (issue #86, breaking for the C&C vocabulary):
   - The shell bound one `RemoteNodeHandle` at `bind()` and used it for

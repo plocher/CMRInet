@@ -99,10 +99,89 @@ struct CMRIHostConfig {
   /// Any accepted reply clears the backoff immediately -- recovery is
   /// never throttled. Independent of missThreshold, which governs
   /// reported health and the re-init ladder, not scheduling.
+  ///
+  /// This is per-node pacing *within* the degraded lane. The aggregate
+  /// bound across all degraded nodes is the two gates below (D17).
   uint32_t initialPollBackoffMs = 250;
 
-  /// Upper bound for the poll-retry backoff above.
+  /// Ceiling clamp, and the degraded class's guaranteed-service floor.
+  ///
+  /// Two jobs, which is why it is not named for either one. It caps the
+  /// exponential poll-retry backoff above, and it bounds how long a
+  /// degraded node may be denied by the two gates: once its last
+  /// granted slot is older than this, it is admitted with both gates
+  /// bypassed.
+  ///
+  /// Demoted from primary throttle to clamp by D17 -- the
+  /// operator-meaningful knob is now the budget. The bypass may push
+  /// the aggregate briefly over budget, deliberately: slightly over
+  /// budget beats never noticed, and a degraded class starved to zero
+  /// can never demonstrate recovery.
+  // VALIDATION: Design v1.5 D17: maxPollBackoffMs is demoted from
+  // primary knob to ceiling clamp, and the clamp is what guarantees the
+  // degraded class is never starved to zero.
   uint32_t maxPollBackoffMs = 32000;
+
+  /// Gate A: the largest share of granted exchange slots, as a
+  /// percentage, that degraded nodes may take collectively.
+  ///
+  /// Bounds participation share and trace noise. Nonconforming-but-
+  /// answering nodes bind here: they are cheap in milliseconds and
+  /// expensive in turns, so a wall-clock budget alone barely notices
+  /// them. 100 disables the gate; 0 leaves only the ceiling clamp.
+  // VALIDATION: Design v1.5 D17: Gate A bounds rotation slots.
+  uint8_t degradedSlotSharePercent = 20;
+
+  /// Gate B: the largest share of wall-clock time, as a percentage,
+  /// that degraded exchanges may consume collectively.
+  ///
+  /// Bounds cycle latency for healthy nodes. Silent nodes bind here:
+  /// each probe burns a full reply gate, which a slot budget barely
+  /// notices. 100 disables the gate.
+  // VALIDATION: Design v1.5 D17: Gate B bounds wall-clock bandwidth.
+  uint8_t degradedBandwidthPercent = 10;
+
+  /// Gate B burst ceiling: the most unspent degraded time, in ms, the
+  /// budget may accumulate. Bounds what an idle spell can bank, so a
+  /// quiet layout cannot fund one long unthrottled degraded burst.
+  uint32_t degradedBurstMs = 1000;
+
+  /// A run of this many consecutive nonconforming replies arms one
+  /// corrective re-init. The conformance ladder's counterpart to
+  /// missThreshold, and deliberately the same default: the two ladders
+  /// answer the same shape of question about different evidence.
+  ///
+  /// Thresholding on a run rather than a single mismatch is what keeps
+  /// D16's chronology intact -- with realistic staleness thresholds the
+  /// image ages out before the ladder arms, so DEGRADED precedes STALE
+  /// precedes MISCONFIGURED.
+  // VALIDATION: Design v1.5 D17: the breaker arms on a run of
+  // nonconforming replies, not on the first one.
+  uint32_t conformanceReinitThreshold = 5;
+
+  /// How many corrective re-init attempts the breaker makes before it
+  /// trips. Bounded, never zero.
+  ///
+  /// LOAD-BEARING, and not an optimization target. The corrective
+  /// re-init is the only mechanism that completes STALE ->
+  /// MISCONFIGURED for a node that keeps answering, because interop
+  /// 2.3.10's ladder is armed by silence and such a node is never
+  /// silent. Set this to 0 and every previously-healthy misconfigured
+  /// node strands at STALE with a growing age, reporting "your data is
+  /// old" for what is actually "your geometry is wrong".
+  // VALIDATION: Design v1.5 D17: the bounded corrective re-init must
+  // run before the breaker trips; it is the sole writer that completes
+  // the STALE -> MISCONFIGURED transition for an answering node.
+  uint32_t conformanceReinitAttempts = 3;
+
+  /// How often a tripped breaker probes, in ms. The probe is a bare P,
+  /// never a re-init sequence: the post-I settle would stall the
+  /// round-robin. Also clamped by maxPollBackoffMs, so the probe rate
+  /// is never zero -- zero traffic means no evidence of recovery can
+  /// ever arrive.
+  // VALIDATION: Design v1.5 D17: a tripped breaker probes at a low rate
+  // with a bare P and is never a hard stop.
+  uint32_t breakerProbeIntervalMs = 30000;
 };
 
 /// What the Host engine is reporting through its event listener.
@@ -116,6 +195,8 @@ enum class CMRIHostEventType : uint8_t {
   kReinitScheduled,   ///< re-init ladder armed: I + full T + invalidation owed
   kPollBackoffChanged,///< per-node poll backoff duration changed
   kNodeStateChanged,  ///< node health moved between states
+  kBreakerTripped,    ///< conformance breaker opened: bare-P probes only
+  kBreakerClosed,     ///< conformance breaker re-closed; re-init ladder armed
 };
 
 /// Why a reply was rejected. Meaningful only when a CMRIHostEvent
@@ -228,6 +309,25 @@ struct CMRIHostStatistics {
   // exchange's node orphans that exchange rather than aborting a send
   // already on the wire (D13).
   uint32_t orphanedExchanges = 0;
+
+  /// Degraded-lane allocator ledger (D17). Host-wide because the bound
+  /// is on the aggregate, not per node -- organic rot produces several
+  /// broken nodes at once, and a per-node bound would let their sum
+  /// grow without limit.
+  ///
+  /// Grants plus the two denial counters do not sum to a fixed total: a
+  /// candidate denied by Gate A is never tested against Gate B, so each
+  /// denial names the gate that actually bound. That asymmetry is the
+  /// point -- it says which failure mode is costing the layout.
+  uint32_t degradedGrants = 0;          ///< slots granted to degraded nodes
+  uint32_t degradedSlotDenials = 0;     ///< Gate A refusals
+  uint32_t degradedBandwidthDenials = 0;///< Gate B refusals
+
+  /// Grants that bypassed both gates because the ceiling clamp expired.
+  /// The never-starved invariant made countable: a layout where this is
+  /// the only source of degraded grants is one where the budget is too
+  /// tight for its degraded population.
+  uint32_t degradedClampBypasses = 0;
 };
 
 /// The polled-strategy Host engine.
@@ -496,6 +596,49 @@ class CMRIHost {
   void drainReceive_(uint32_t nowMs);
   void runSchedule_(uint32_t nowMs);
   bool selectNextNode_(uint32_t nowMs);
+
+  /// Two-gate admission for one degraded candidate (D17). Healthy
+  /// candidates never reach here. Charges the ledger and the gates on
+  /// success; counts the binding gate on refusal.
+  bool admitDegraded_(RemoteNodeHandle& node, uint32_t nowMs);
+
+  /// Credit Gate B's leaky bucket for wall clock elapsed since the last
+  /// refill, capped at the burst ceiling.
+  void refillDegradedBudget_(uint32_t nowMs);
+
+  /// Effective probe interval for a tripped breaker: the configured
+  /// interval, clamped by maxPollBackoffMs so the probe rate can never
+  /// fall below the guaranteed-service floor. Zero traffic means no
+  /// evidence of recovery can ever arrive.
+  uint32_t breakerProbeIntervalMs_() const {
+    return config_.breakerProbeIntervalMs > config_.maxPollBackoffMs
+               ? config_.maxPollBackoffMs
+               : config_.breakerProbeIntervalMs;
+  }
+
+  /// Debit Gate B by the measured duration of the exchange just
+  /// finished, when that exchange was granted to the degraded lane.
+  void chargeDegradedExchange_(uint32_t nowMs);
+
+  /// Arm one bounded corrective re-init: I, the full T that must follow
+  /// it, and the invalidation that clears freshness.
+  ///
+  /// LOAD-BEARING. This invalidation is the only mechanism that
+  /// completes STALE -> MISCONFIGURED for a node that keeps answering.
+  void armCorrectiveReinit_(RemoteNodeHandle& node, uint32_t nowMs);
+
+  /// Trip the breaker: bare-P probes only from here.
+  void tripBreaker_(RemoteNodeHandle& node, uint32_t nowMs);
+
+  /// Return the breaker to closed and clear the conformance ladder.
+  /// Pure state, no event and no re-init arming -- for callers that
+  /// have no clock, or that have already armed one themselves.
+  void resetBreaker_(RemoteNodeHandle& node);
+
+  /// Re-close the breaker on current evidence, arming the re-init
+  /// ladder when it was open, because a reflashed node has lost its
+  /// session. Emits kBreakerClosed.
+  void closeBreaker_(RemoteNodeHandle& node, uint32_t nowMs);
   void buildInitPacket_(size_t nodeIndex);
   void buildTransmitPacket_(size_t nodeIndex);
   void buildPollPacket_(size_t nodeIndex);
@@ -565,6 +708,42 @@ class CMRIHost {
   Deadline paceGate_;       ///< time gate between exchanges
   Deadline waitGate_;       ///< post-send wait: reply gate / settle / gap
   uint32_t gateArmedMs_ = 0;  ///< when the wait was armed (turnaround base)
+
+  // ---- degraded-lane allocator (D17), host-wide ----
+  //
+  // Host-wide and not per node, because the bound is on the aggregate:
+  // organic rot produces several broken nodes at once, and per-node
+  // budgets would let their sum grow without limit.
+
+  /// Gate A. A healthy grant credits degradedSlotSharePercent; a
+  /// degraded grant debits (100 - that). Equilibrium is exactly the
+  /// configured share, with no division on the hot path and no window
+  /// history to store. Signed because the debit lands before the next
+  /// credit does.
+  int32_t degradedSlotCredit_ = 0;
+
+  /// Gate B. Milliseconds of degraded exchange time still affordable.
+  /// Signed deliberately: a slot is granted before its cost is known,
+  /// so a single over-budget exchange may drive this negative and is
+  /// repaid by refill rather than forgiven.
+  int32_t degradedBudgetMs_ = 0;
+
+  /// Sub-millisecond remainder carried between refills, so a slow
+  /// percentage does not truncate to zero on every short tick.
+  uint32_t degradedRefillRemainderMs_ = 0;
+
+  /// Clock base for the next refill. Started at begin(), because a zero
+  /// base would credit the entire epoch on the first tick.
+  uint32_t degradedRefillAtMs_ = 0;
+  bool degradedRefillStarted_ = false;
+
+  /// The outstanding exchange was granted to the degraded lane, and
+  /// when it started. Recorded at grant time rather than read back from
+  /// the node at completion: service class can change mid-exchange (a
+  /// reply arrives and clears the miss run), and Gate B must be charged
+  /// for the lane that was actually spent.
+  bool exchangeDegraded_ = false;
+  uint32_t exchangeStartedMs_ = 0;
 };
 
 /// Human-readable name for a CMRIHost::ConfigStatus value.

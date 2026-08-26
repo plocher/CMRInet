@@ -120,6 +120,9 @@ struct ListenerLog {
   ConformanceFault lastFault = ConformanceFault::kNone;
   uint16_t lastExpectedLength = 0;
   uint16_t lastReplyLength = 0;
+  /// Conformance breaker transitions (D17).
+  int breakerTripped = 0;
+  int breakerClosed = 0;
 };
 
 static void recordEvent(void* context, const CMRIHostEvent& event) {
@@ -140,6 +143,8 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
       log.lastPreviousState = event.previousState;
       log.lastNewState = event.newState;
       break;
+    case CMRIHostEventType::kBreakerTripped: ++log.breakerTripped; break;
+    case CMRIHostEventType::kBreakerClosed: ++log.breakerClosed; break;
   }
   log.lastNode = event.node;
   log.lastEventMs = event.nowMs;
@@ -623,10 +628,19 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
   // STALE when that image ages out -- rejected replies stop refreshing
   // freshness, and "your data is old" is the honest report for as long
   // as the last good image is still valid.
-  // VALIDATION: Design v1.4 D16: a nonconforming node reaches STALE
-  // first; MISCONFIGURED needs invalidation to clear the image.
+  // VALIDATION: Design v1.5 D16: a nonconforming node reaches STALE
+  // first; MISCONFIGURED needs invalidation to clear the image, and on
+  // this path only D17's corrective re-init can supply one.
+  //
+  // Suppressing the conformance ladder is what holds the node at the
+  // middle rung. This used to raise missThreshold instead, which read as
+  // "stop the re-init ladder from invalidating" but suppressed nothing:
+  // interop 2.3.10's ladder is armed by silence, and a node answering
+  // every poll never accumulates a miss, so that ladder was unreachable
+  // at the default of 5 too. The setup implied a hazard that did not
+  // exist while the real one went unnamed (#87).
   CMRIHostConfig config;
-  config.missThreshold = 1000;  // no invalidation inside this test
+  config.conformanceReinitThreshold = 0xFFFFFFFFu;
   Rig rig(config, CMRIHost::RemoteNodePolicy(), 2, 0);
   RemoteNodeConfig staleConfig;
   staleConfig.inputBytes = 2;
@@ -647,10 +661,12 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
   TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming, node->conformance());
 
   // Wrong geometry arrives while the image is still inside its 100 ms
-  // staleness window.
+  // staleness window, and keeps arriving. Answering forever is the
+  // honest shape of this path -- the node is alive with rearranged IO,
+  // not dying -- and it keeps liveness out of the result below.
   rig.transport.onSendReplyPacket(
       6 + kUaOffset, 'P', makePacket(6, 'R', threeBytes, sizeof(threeBytes)),
-      0, 1);
+      0, MockCMRITransport::kRepeatForever);
   uint32_t t = 511;
   bool faulted = false;
   for (; t <= 590 && !faulted; ++t) {
@@ -664,14 +680,24 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
   TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, node->imageState());
   TEST_ASSERT_EQUAL(RemoteNodeState::kDegraded, node->state());
 
-  // Nothing refreshes it from here, so the image ages out. Still
-  // nonconforming, still answering -- and now STALE, not MISCONFIGURED.
+  // Rejected replies never refresh freshness, so the image ages out.
+  // Still nonconforming, still answering -- and now STALE, not
+  // MISCONFIGURED.
   runUntil(rig.host, t, 900);
   TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
                     node->conformance());
   TEST_ASSERT_EQUAL(RemoteNodeImageState::kStale, node->imageState());
-  TEST_ASSERT_TRUE(node->liveness() != RemoteNodeLiveness::kSilent);
   TEST_ASSERT_EQUAL(RemoteNodeState::kStale, node->state());
+
+  // Never silent, and never a single miss: the proof that 2.3.10's
+  // ladder was not merely suppressed here but structurally unreachable.
+  // That is why D17's breaker is the only exit from this rung, and why
+  // test_answering_nonconforming_node_reaches_misconfigured is the
+  // continuation of this one rather than a separate concern.
+  TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, node->liveness());
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      0, node->statistics().noReplies,
+      "the node fell silent, so the silence ladder was reachable after all");
 }
 
 static void test_wrong_geometry_after_invalidation_reports_misconfigured(void) {
@@ -1990,6 +2016,482 @@ static void test_poll_backoff_doubles_and_clears_on_reply(void) {
                            "node 6 stayed throttled after recovery");
 }
 
+// ------------------------------------- D17: degraded service classes (#87)
+//
+// The mock's replay script is head-of-step matched, so a kRepeatForever
+// step for one UA would block every other node's step forever. These
+// multi-node scenarios therefore drive the mock directly: observe each
+// completed send with takeSent() and answer it per the node's own
+// policy. That also gives an exact per-node poll count, which is the
+// same quantity the bench captures as `tx_polls` -- so the assertions
+// below compare against the #80 baseline in its own units.
+
+struct FaultyNode {
+  enum Kind : uint8_t {
+    kConforming,   ///< answers with the declared geometry
+    kWrongLength,  ///< answers, but with the wrong body length
+    kSilent,       ///< never answers
+  };
+
+  FaultyNode() = default;
+  FaultyNode(uint8_t addr, Kind k, uint16_t actual)
+      : address(addr), kind(k), actualIn(actual) {}
+
+  uint8_t address = 0;
+  Kind kind = kConforming;
+  /// What the Node really sends. The Host's *declared* geometry is not
+  /// mirrored here on purpose: the host table already holds it, and a
+  /// second copy in the rig could disagree with it -- which is the
+  /// declared-versus-observed confusion the whole D14 axis exists to
+  /// resolve. The disagreement under test must come from the real
+  /// configuration, not from the fixture.
+  uint16_t actualIn = 0;
+  uint32_t polls = 0;  ///< P frames addressed to this node
+};
+
+/// Tick the host over [fromMs, toMs], answering every poll according to
+/// the matching node's policy. Returns with all counters updated.
+static void pumpFaultyBus(CMRIHost& host, MockCMRITransport& transport,
+                          FaultyNode* nodes, size_t count, uint32_t fromMs,
+                          uint32_t toMs) {
+  static const uint8_t kFiller[RemoteNodeHandle::kMaxInputBytes] = {0};
+  CMRIPacket sent;
+  for (uint32_t t = fromMs; t <= toMs; ++t) {
+    host.tick(t);
+    while (transport.takeSent(sent)) {
+      if (sent.mt != 'P') {
+        continue;  // I and T expect no reply (interop E8)
+      }
+      if (sent.ua < kUaOffset) {
+        continue;
+      }
+      const uint8_t address = static_cast<uint8_t>(sent.ua - kUaOffset);
+      for (size_t i = 0; i < count; ++i) {
+        if (nodes[i].address != address) {
+          continue;
+        }
+        ++nodes[i].polls;
+        if (nodes[i].kind != FaultyNode::kSilent) {
+          transport.injectPacketAt(
+              makePacket(address, 'R', kFiller, nodes[i].actualIn), t);
+        }
+        break;
+      }
+    }
+  }
+}
+
+// Done-when 1: degraded participation stays bounded with a mixed
+// healthy/silent/nonconforming population.
+//
+// The #80 baseline is the thing being refuted. There a node declared
+// NI=4 answering with 3 bytes took 1316 polls to a healthy node's 765 --
+// it was serviced 1.7x MORE than the node doing real work, while
+// committing nothing. Geometry mismatch cleared its poll backoff, so it
+// was immediately eligible on every rotation.
+// VALIDATION: Design v1.5 D17: degraded nodes have bounded, shared,
+// predictable impact on healthy ones.
+static void test_degraded_participation_is_bounded(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.degradedSlotSharePercent = 20;
+  config.degradedBandwidthPercent = 10;
+  CMRIHost host(transport, config);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(30, 7, 0));
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(32, 4, 0));
+  host.begin();
+
+  FaultyNode nodes[3];
+  nodes[0] = FaultyNode(30, FaultyNode::kConforming, 7);
+  nodes[1] = FaultyNode(31, FaultyNode::kWrongLength, 3);  // the #80 node
+  nodes[2] = FaultyNode(32, FaultyNode::kSilent, 4);
+
+  pumpFaultyBus(host, transport, nodes, 3, 0, 60000);  // 60 s, as on the bench
+
+  const RemoteNodeHandle* healthy = host.node(30);
+  const RemoteNodeHandle* broken = host.node(31);
+  const RemoteNodeHandle* silent = host.node(32);
+  TEST_ASSERT_NOT_NULL(healthy);
+  TEST_ASSERT_NOT_NULL(broken);
+  TEST_ASSERT_NOT_NULL(silent);
+
+  // The healthy node is doing real work.
+  TEST_ASSERT_TRUE_MESSAGE(healthy->statistics().exchanges > 100,
+                           "healthy node never got going");
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, healthy->state());
+
+  // The inversion is gone. On the #80 baseline the ratio was 1.72 the
+  // other way: the broken node was serviced MORE than the working one.
+  TEST_ASSERT_TRUE_MESSAGE(
+      nodes[1].polls < nodes[0].polls,
+      "the nonconforming node is still outpolling the healthy one");
+
+  // And bounded, not merely smaller.
+  //
+  // Under defaults this bound is held mostly by the *breaker*, not by
+  // the gates: the nonconforming node exhausts its corrective re-inits
+  // within a few seconds and then drops to one bare-P probe per probe
+  // interval, which throttles far harder than a 20% slot share. The
+  // gates carry the pre-trip window and the silent node. Both mechanisms
+  // are in play here by design -- this is the end-to-end acceptance
+  // check, and test_gates_alone_bound_degraded_share below isolates the
+  // allocator's own contribution with the breaker suppressed.
+  const uint32_t degradedPolls = nodes[1].polls + nodes[2].polls;
+  const uint32_t totalPolls = nodes[0].polls + degradedPolls;
+  TEST_ASSERT_TRUE_MESSAGE(totalPolls > 0, "nothing was polled at all");
+  TEST_ASSERT_TRUE_MESSAGE(
+      degradedPolls * 100u < totalPolls * 35u,
+      "degraded nodes took more than a bounded share of the rotation");
+
+  // The ledger agrees with the wire, and names which gate bound.
+  const CMRIHostStatistics& stats = host.statistics();
+  TEST_ASSERT_TRUE_MESSAGE(stats.degradedGrants > 0,
+                           "degraded class was never served");
+  TEST_ASSERT_TRUE_MESSAGE(
+      stats.degradedSlotDenials + stats.degradedBandwidthDenials > 0,
+      "no gate ever bound, so nothing was being bounded");
+
+  // Neither degraded node committed anything, which is what makes their
+  // former share pure waste.
+  TEST_ASSERT_EQUAL_UINT32(0, broken->statistics().exchanges);
+  TEST_ASSERT_EQUAL_UINT32(0, silent->statistics().exchanges);
+}
+
+// The allocator on its own, with the breaker held off so it cannot do
+// the work and mask a broken gate.
+//
+// This is the test that actually measures Gate A. The end-to-end check
+// above cannot: under defaults the breaker trips within seconds and
+// throttles the nonconforming node an order of magnitude harder than a
+// slot share would, so that test still passes with the gates removed
+// entirely. Suppressing the conformance ladder here leaves the two gates
+// as the only thing bounding a node that answers every poll.
+// VALIDATION: Design v1.5 D17: Gate A is a signed slot credit whose
+// equilibrium is the configured share.
+static void test_gates_alone_bound_degraded_share(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.degradedSlotSharePercent = 20;
+  config.degradedBandwidthPercent = 10;
+  // The breaker must not participate: this test is about the allocator.
+  config.conformanceReinitThreshold = 0xFFFFFFFFu;
+  CMRIHost host(transport, config);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(30, 7, 0));
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  host.begin();
+
+  FaultyNode nodes[2];
+  nodes[0] = FaultyNode(30, FaultyNode::kConforming, 7);
+  nodes[1] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, nodes, 2, 0, 60000);
+
+  // The breaker really did stay out of it.
+  TEST_ASSERT_FALSE_MESSAGE(host.node(31)->conformanceBreakerOpen(),
+                            "the breaker engaged and masked the gates");
+
+  const uint32_t totalPolls = nodes[0].polls + nodes[1].polls;
+  TEST_ASSERT_TRUE_MESSAGE(totalPolls > 100, "the bus barely ran");
+
+  // Equilibrium is the configured share. Ungated this node would take
+  // roughly half the rotation, since it answers as promptly as the
+  // healthy one and its geometry mismatch clears the liveness backoff.
+  TEST_ASSERT_TRUE_MESSAGE(
+      nodes[1].polls * 100u < totalPolls * 30u,
+      "Gate A did not hold the degraded node near its configured share");
+  TEST_ASSERT_TRUE_MESSAGE(
+      nodes[1].polls * 100u > totalPolls * 8u,
+      "the degraded node got far less than its share; it is over-throttled");
+
+  // Gate A is the one that bound, which is the asymmetry D17 predicts:
+  // an answering node is cheap in milliseconds and expensive in turns,
+  // so a wall-clock budget alone would barely notice it.
+  const CMRIHostStatistics& stats = host.statistics();
+  TEST_ASSERT_TRUE_MESSAGE(stats.degradedSlotDenials > 0,
+                           "Gate A never refused an answering node");
+  TEST_ASSERT_TRUE_MESSAGE(
+      stats.degradedSlotDenials > stats.degradedBandwidthDenials,
+      "the wall-clock gate bound an answering node before the slot gate");
+}
+
+// Done-when 3: the degraded class is never starved to zero.
+//
+// The sharp case: Gate A is shut outright (share 0), so nothing but the
+// ceiling clamp can admit a degraded node. Recovery is unobservable if
+// this fails, because a node polled at zero rate can never demonstrate
+// that it is fixed.
+// VALIDATION: Design v1.5 D17: the ceiling clamp guarantees the degraded
+// class is never starved to zero, and may deliberately exceed budget.
+static void test_degraded_class_is_never_starved_to_zero(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.degradedSlotSharePercent = 0;   // Gate A always refuses
+  config.degradedBandwidthPercent = 0;   // Gate B always refuses
+  config.maxPollBackoffMs = 2000;        // the clamp under test
+  CMRIHost host(transport, config);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(30, 7, 0));
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  host.begin();
+
+  FaultyNode nodes[2];
+  nodes[0] = FaultyNode(30, FaultyNode::kConforming, 7);
+  nodes[1] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+
+  pumpFaultyBus(host, transport, nodes, 2, 0, 20000);
+
+  // Served, despite both gates being shut for the whole run.
+  TEST_ASSERT_TRUE_MESSAGE(nodes[1].polls > 0,
+                           "degraded node was starved to zero");
+  TEST_ASSERT_TRUE_MESSAGE(
+      host.statistics().degradedClampBypasses > 0,
+      "the clamp never fired, so something else admitted the node");
+
+  // Bounded from the other side too: the clamp is a floor, not a licence.
+  // Roughly one grant per clamp interval over the window.
+  TEST_ASSERT_TRUE_MESSAGE(nodes[1].polls < 40u,
+                           "the clamp admitted far more than a floor");
+
+  // The healthy node kept working throughout.
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, host.node(30)->state());
+}
+
+// The gates protect healthy nodes, so with no healthy node contending
+// they must not engage at all. Otherwise a lone silent node jumps from
+// the 250 ms backoff ladder straight to the ceiling clamp on its first
+// miss, and interop 2.3.10's re-init ladder slips from ~16 s to minutes.
+// VALIDATION: Design v1.5 D17: the gates bound degraded impact on
+// healthy nodes.
+static void test_gates_do_not_engage_without_healthy_contention(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  host.begin();
+
+  FaultyNode nodes[1];
+  nodes[0] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, nodes, 1, 0, 5000);
+
+  // Polled freely, and the allocator was never consulted.
+  TEST_ASSERT_TRUE_MESSAGE(nodes[0].polls > 10u,
+                           "a lone degraded node was throttled by the gates");
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, host.statistics().degradedGrants,
+                                   "the gates engaged with nothing to protect");
+  TEST_ASSERT_EQUAL_UINT32(0, host.statistics().degradedSlotDenials);
+}
+
+// Done-when 4, and the D16 cross-dependency this whole ticket turns on.
+//
+// A node that conformed and then went nonconforming while STILL
+// ANSWERING is the organic-rot case: cards rearranged, sketch
+// recompiled, node alive on the bus. Its miss run is zeroed by every
+// mismatch (the reply does prove presence), so interop 2.3.10's
+// silence-armed ladder can never fire and nothing else clears freshness.
+// Without D17's bounded corrective re-init it parks at STALE forever
+// with a growing age, reporting "your data is old" for what is really
+// "your geometry is wrong".
+// VALIDATION: Design v1.5 D16: the previously-conformed, still-answering
+// path reaches MISCONFIGURED only through D17's corrective re-init.
+static void test_answering_nonconforming_node_reaches_misconfigured(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.conformanceReinitThreshold = 2;  // keep the window short
+  CMRIHost host(transport, config);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+
+  RemoteNodeConfig nodeConfig;
+  nodeConfig.inputBytes = 4;
+  nodeConfig.stalenessMs = 100;
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.addRemoteNode(31, nodeConfig));
+  host.begin();
+
+  // First it works.
+  FaultyNode good[1];
+  good[0] = FaultyNode(31, FaultyNode::kConforming, 4);
+  pumpFaultyBus(host, transport, good, 1, 0, 700);
+  RemoteNodeHandle* node = host.node(31);
+  TEST_ASSERT_NOT_NULL(node);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming, node->conformance());
+
+  // Then an IO card is pulled. It keeps answering, with the wrong shape.
+  FaultyNode rotted[1];
+  rotted[0] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, rotted, 1, 701, 720);
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
+                    node->conformance());
+  // Still answering: this is emphatically not a liveness fault.
+  TEST_ASSERT_TRUE(node->liveness() != RemoteNodeLiveness::kSilent);
+  TEST_ASSERT_EQUAL_UINT32(0, node->consecutiveMisses());
+
+  // The corrective re-init fires and invalidates, which is the only
+  // thing on this path that can clear freshness.
+  pumpFaultyBus(host, transport, rotted, 1, 721, 4000);
+  TEST_ASSERT_TRUE_MESSAGE(log.reinitScheduled > 0,
+                           "the corrective re-init never ran");
+  TEST_ASSERT_EQUAL_MESSAGE(RemoteNodeImageState::kNone, node->imageState(),
+                            "freshness was never cleared");
+  TEST_ASSERT_EQUAL_MESSAGE(
+      RemoteNodeState::kMisconfigured, node->state(),
+      "the node stranded instead of naming the real problem");
+  TEST_ASSERT_EQUAL_UINT32(Age::kNeverMarked, node->inputAgeMs(4000));
+
+  // The miss run stayed at zero throughout, which is the proof that the
+  // 2.3.10 ladder could not have been what invalidated the image.
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      0, node->statistics().noReplies,
+      "the node fell silent, so this exercised the wrong path");
+}
+
+// The invariant, enforced rather than documented: a configured zero
+// attempts must still run one. Trimming the re-init as an optimisation
+// would otherwise strand every previously-healthy misconfigured node at
+// STALE, silently.
+// VALIDATION: Design v1.5 D17: the bounded corrective re-init must run
+// before the breaker trips.
+static void test_zero_configured_reinit_attempts_still_invalidates(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.conformanceReinitThreshold = 2;
+  config.conformanceReinitAttempts = 0;  // the trimmed configuration
+  CMRIHost host(transport, config);
+
+  RemoteNodeConfig nodeConfig;
+  nodeConfig.inputBytes = 4;
+  nodeConfig.stalenessMs = 100;
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.addRemoteNode(31, nodeConfig));
+  host.begin();
+
+  FaultyNode good[1];
+  good[0] = FaultyNode(31, FaultyNode::kConforming, 4);
+  pumpFaultyBus(host, transport, good, 1, 0, 700);
+  RemoteNodeHandle* node = host.node(31);
+  TEST_ASSERT_NOT_NULL(node);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+
+  FaultyNode rotted[1];
+  rotted[0] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, rotted, 1, 701, 4000);
+
+  TEST_ASSERT_EQUAL_MESSAGE(
+      RemoteNodeState::kMisconfigured, node->state(),
+      "zero attempts stranded the node at STALE");
+}
+
+// Done-when 2: recovery after a simulated reflash, with no Host restart.
+//
+// The breaker must never be a hard stop. A node reflashed with correct
+// firmware has to come back on its own, because zero traffic means no
+// evidence of recovery can ever arrive.
+// VALIDATION: Design v1.5 D17: the breaker trips after bounded
+// corrective re-inits, probes with a bare P, and re-closes on a
+// conforming reply.
+static void test_breaker_trips_then_recovers_after_reflash(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.conformanceReinitThreshold = 2;
+  config.conformanceReinitAttempts = 2;
+  config.breakerProbeIntervalMs = 1000;  // keep the test window sane
+  CMRIHost host(transport, config);
+  ListenerLog log;
+  host.onEvent(recordEvent, &log);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  host.begin();
+  RemoteNodeHandle* node = host.node(31);
+  TEST_ASSERT_NOT_NULL(node);
+
+  // A miscompiled sketch: answers every poll with the wrong shape.
+  FaultyNode rotted[1];
+  rotted[0] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, rotted, 1, 0, 8000);
+
+  TEST_ASSERT_TRUE_MESSAGE(node->conformanceBreakerOpen(),
+                           "the breaker never tripped");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, log.breakerTripped,
+                                "expected exactly one trip");
+  TEST_ASSERT_EQUAL(RemoteNodeState::kMisconfigured, node->state());
+  TEST_ASSERT_FALSE(node->isHealthy());
+  // The breaker is the axis doing the work here: every other axis on a
+  // tripped-but-answering node still reads clean of silence.
+  TEST_ASSERT_TRUE(node->liveness() != RemoteNodeLiveness::kSilent);
+
+  // Tripped means throttled, not stopped. Count the probes over a window
+  // and check they are paced, not free-running.
+  const uint32_t polledAtTrip = rotted[0].polls;
+  pumpFaultyBus(host, transport, rotted, 1, 8001, 12000);
+  const uint32_t probes = rotted[0].polls - polledAtTrip;
+  TEST_ASSERT_TRUE_MESSAGE(probes > 0, "a tripped breaker went silent");
+  TEST_ASSERT_TRUE_MESSAGE(probes < 10u, "probes were not rate limited");
+
+  // A tripped breaker probes with a bare P, never a re-init: the post-I
+  // settle would stall the round-robin.
+  CMRIPacket sent;
+  while (transport.takeSent(sent)) {
+    TEST_ASSERT_NOT_EQUAL_MESSAGE('I', sent.mt,
+                                  "a tripped breaker sent a re-init");
+  }
+
+  // Now the node is reflashed with matching firmware. No Host restart:
+  // begin() is never called again.
+  FaultyNode reflashed[1];
+  reflashed[0] = FaultyNode(31, FaultyNode::kConforming, 4);
+  pumpFaultyBus(host, transport, reflashed, 1, 12001, 20000);
+
+  TEST_ASSERT_FALSE_MESSAGE(node->conformanceBreakerOpen(),
+                            "the breaker never re-closed");
+  TEST_ASSERT_TRUE_MESSAGE(log.breakerClosed > 0, "no close was reported");
+  TEST_ASSERT_EQUAL(RemoteNodeConformance::kConforming, node->conformance());
+  TEST_ASSERT_EQUAL_MESSAGE(RemoteNodeState::kOnline, node->state(),
+                            "the node did not return to service");
+  TEST_ASSERT_TRUE(node->isHealthy());
+  TEST_ASSERT_TRUE_MESSAGE(node->statistics().exchanges > 0,
+                           "the recovered node never committed an image");
+}
+
+// A runtime geometry correction is the other way back: the operator
+// fixes the Host's declaration rather than the Node's firmware.
+// VALIDATION: Design v1.5 D17: the breaker re-closes on a runtime change
+// to the declared geometry.
+static void test_geometry_correction_closes_the_breaker(void) {
+  MockCMRITransport transport;
+  CMRIHostConfig config;
+  config.conformanceReinitThreshold = 2;
+  config.conformanceReinitAttempts = 2;
+  CMRIHost host(transport, config);
+
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(31, 4, 0));
+  host.begin();
+  RemoteNodeHandle* node = host.node(31);
+  TEST_ASSERT_NOT_NULL(node);
+
+  FaultyNode rotted[1];
+  rotted[0] = FaultyNode(31, FaultyNode::kWrongLength, 3);
+  pumpFaultyBus(host, transport, rotted, 1, 0, 8000);
+  TEST_ASSERT_TRUE_MESSAGE(node->conformanceBreakerOpen(),
+                           "the breaker never tripped");
+
+  // The operator reads observedIn=3 off the handle and corrects the
+  // declaration to match. That is a Host-side fix, so the node's own
+  // behaviour never changes.
+  TEST_ASSERT_EQUAL_UINT16(3, node->observedInputBytes());
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                    host.setRemoteNodeGeometry(31, 3, 0));
+  TEST_ASSERT_FALSE_MESSAGE(node->conformanceBreakerOpen(),
+                            "the geometry correction left the breaker open");
+
+  FaultyNode corrected[1];
+  corrected[0] = FaultyNode(31, FaultyNode::kConforming, 3);
+  pumpFaultyBus(host, transport, corrected, 1, 8001, 10000);
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
+  TEST_ASSERT_TRUE(node->isHealthy());
+}
+
 // ----------------------------------------------------------------- runner
 
 int main(void) {
@@ -2052,5 +2554,13 @@ int main(void) {
   RUN_TEST(test_dirty_output_cannot_starve_poll_forever);
   RUN_TEST(test_anti_starvation_does_not_starve_transmit);
   RUN_TEST(test_poll_backoff_doubles_and_clears_on_reply);
+  RUN_TEST(test_degraded_participation_is_bounded);
+  RUN_TEST(test_gates_alone_bound_degraded_share);
+  RUN_TEST(test_degraded_class_is_never_starved_to_zero);
+  RUN_TEST(test_gates_do_not_engage_without_healthy_contention);
+  RUN_TEST(test_answering_nonconforming_node_reaches_misconfigured);
+  RUN_TEST(test_zero_configured_reinit_attempts_still_invalidates);
+  RUN_TEST(test_breaker_trips_then_recovers_after_reflash);
+  RUN_TEST(test_geometry_correction_closes_the_breaker);
   return UNITY_END();
 }
