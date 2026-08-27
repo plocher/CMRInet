@@ -546,16 +546,6 @@ class TracerShell {
     self.emitTrace_(transmit, packet);
   }
 
-  /// The packet's own semantic UA, decoded back from the wire byte. A
-  /// frame whose UA byte sits below the offset is not carrying a UA
-  /// at all, so report the raw byte rather than wrapping it into a
-  /// plausible-looking small number.
-  static unsigned wireUAOf_(const CMRIPacket& packet) {
-    return (packet.wireUA >= kWireUAOffset)
-               ? static_cast<unsigned>(packet.wireUA - kWireUAOffset)
-               : static_cast<unsigned>(packet.wireUA);
-  }
-
   void emitTrace_(bool transmit, const CMRIPacket& packet) {
     char bodyHex[2 * kMaxBody + 1] = "";
     const size_t len = packet.length;
@@ -563,12 +553,31 @@ class TracerShell {
       snprintf(&bodyHex[2 * i], 3, "%02X", packet.body[i]);
     }
     const char mtBuf[2] = {static_cast<char>(packet.mt), '\0'};
+    // Uniform trace line: every trace line carries the same field set,
+    // regardless of whether the wire-UA byte is legal. A consumer
+    // reads "legal" once and branches — no field-presence check, no
+    // variable stream that swaps between telemetry and raw.
+    //
+    // When legal, "UA" is the decoded ordinal (wireUA - kWireUAOffset).
+    // When illegal, "UA" is null and "wireUA" carries the raw byte
+    // for diagnosis. Per ADR-0001: raw views are not decoded telemetry.
+    const bool legal = isLegalWireUA(packet.wireUA);
     int written = appendf_(
         0,
         "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
-        "\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
+        "\"wireUA\":%u,\"legal\":%s,\"UA\":",
         static_cast<unsigned>(++seq_),
-        static_cast<unsigned>(nowMs_ - epochMs_), wireUAOf_(packet),
+        static_cast<unsigned>(nowMs_ - epochMs_),
+        static_cast<unsigned>(packet.wireUA),
+        legal ? "true" : "false");
+    if (legal) {
+      written = appendf_(written, "%u",
+          static_cast<unsigned>(packet.wireUA - kWireUAOffset));
+    } else {
+      written = appendf_(written, "null");
+    }
+    written = appendf_(written,
+        ",\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
         transmit ? "tx" : "rx", mtBuf, bodyHex);
     finish_(written);
   }
