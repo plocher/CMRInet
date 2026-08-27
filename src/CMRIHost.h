@@ -204,6 +204,10 @@ enum class CMRIHostEventType : uint8_t {
   kNodeAdded,         ///< a node was added to the table (node is the new handle)
   kNodeDeleted,       ///< a node was deleted (node is null; departedUA carries identity)
   kGeometryChanged,   ///< a node's declared NI/NO changed in place (old + new carried)
+  // Packet-layer absolute legality (issue #96). An illegal wire-UA byte
+  // is not carrying a UA at all, so it names no node to charge. The event
+  // fires with node = null and replyWireUA holding the raw byte.
+  kIllegalWireUA,     ///< a packet carried an illegal wire-UA byte (node is null)
 };
 
 /// Why a reply was rejected. Meaningful only when a CMRIHostEvent
@@ -259,7 +263,7 @@ struct CMRIHostEvent {
   /// Reject details. Meaningful only when type == kReplyRejected.
   ReplyRejectReason rejectReason = ReplyRejectReason::kNone;
   uint16_t replyLength = 0;  ///< body byte count of the rejected reply
-  uint8_t  replyWireUA = 0;      ///< UA byte of the rejected reply
+  uint8_t  replyWireUA = 0;      ///< wire-UA byte of the rejected reply (kReplyRejected) or the illegal byte (kIllegalWireUA)
   uint8_t  replyMt = 0;      ///< MT byte of the rejected reply
 
   /// `rejectReason` classified into the shared taxonomy. Derived from
@@ -354,6 +358,18 @@ struct CMRIHostStatistics {
   /// the only source of degraded grants is one where the budget is too
   /// tight for its degraded population.
   uint32_t degradedClampBypasses = 0;
+
+  /// Packets whose wire-UA byte was outside the legal range [65, 192].
+  /// Host-scope and monotonic: an illegal UA names no node to charge, so
+  /// this counter is the only surface on which a chronic illegal-UA
+  /// emitter becomes visible. A climbing count correlated with a node's
+  /// miss ladder at the poll rate localizes a static firmware defect
+  /// (e.g. a node that omits the +65 offset) that no per-node
+  /// attribution can name.
+  // VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+  // absolute packet-rung fault. It is counted at host scope because no
+  // node can be attributed.
+  uint32_t illegalWireUAFaults = 0;
 };
 
 /// The polled-strategy Host engine.
@@ -620,6 +636,14 @@ class CMRIHost {
   void detachExchangeFrom_(size_t slot);
 
   void drainReceive_(uint32_t nowMs);
+
+  /// Detect and reject a packet whose wire-UA byte is outside the legal
+  /// range [65, 192]. Bumps the host-scope illegalWireUAFaults counter
+  /// and fires kIllegalWireUA with node = null (an illegal UA names no
+  /// node). Called before the solicited/unsolicited split, because
+  /// illegality is content-only, not exchange-dependent.
+  void rejectIllegalWireUA_(const CMRIPacket& packet, uint32_t nowMs);
+
   void runSchedule_(uint32_t nowMs);
   bool selectNextNode_(uint32_t nowMs);
 
