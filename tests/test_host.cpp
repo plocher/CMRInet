@@ -25,7 +25,7 @@ using CMRInet::ConformanceFaultRecord;
 using CMRInet::ConformanceLayer;
 using CMRInet::encodeFrame;
 using CMRInet::FaultAttribution;
-using CMRInet::kUaOffset;
+using CMRInet::kWireUAOffset;
 using CMRInet::layerOf;
 using CMRInet::MockCMRITransport;
 using CMRInet::RemoteNodeConfig;
@@ -41,11 +41,11 @@ void tearDown(void) {}
 
 // ---------------------------------------------------------------- helpers
 
-/// Build a packet for node address `addr` (UA = addr + 65).
+/// Build a packet for node UA `addr` (UA = addr + 65).
 static CMRIPacket makePacket(uint8_t addr, uint8_t mt,
                              const uint8_t* body = nullptr, size_t len = 0) {
   CMRIPacket p;
-  p.ua = static_cast<uint8_t>(addr + kUaOffset);
+  p.wireUA = static_cast<uint8_t>(addr + kWireUAOffset);
   p.mt = mt;
   TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
   return p;
@@ -58,7 +58,7 @@ static void runUntil(CMRIHost& host, uint32_t fromMs, uint32_t toMs) {
   }
 }
 
-/// One host + mock rig with a single node at address 5.
+/// One host + mock rig with a single node at UA 5.
 struct Rig {
   MockCMRITransport transport;
   CMRIHost host;
@@ -71,7 +71,7 @@ struct Rig {
                uint16_t outputBytes = 0)
       : host(transport, config) {
     // Register the node, then look up its handle. addRemoteNode returns
-    // this call's status, not the handle; node(address) does.
+    // this call's status, not the handle; node(UA) does.
     RemoteNodeConfig nodeConfig;
     nodeConfig.inputBytes = inputBytes;
     nodeConfig.outputBytes = outputBytes;
@@ -155,7 +155,7 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
     case CMRIHostEventType::kNodeAdded: ++log.nodeAdded; break;
     case CMRIHostEventType::kNodeDeleted:
       ++log.nodeDeleted;
-      log.lastDepartedAddress = event.departedAddress;
+      log.lastDepartedAddress = event.departedUA;
       break;
     case CMRIHostEventType::kGeometryChanged:
       ++log.geometryChanged;
@@ -187,7 +187,7 @@ static void test_first_exchange_is_init(void) {
   rig.host.tick(0);
   CMRIPacket sent;
   TEST_ASSERT_TRUE(rig.transport.takeSent(sent));
-  TEST_ASSERT_EQUAL_HEX8(5 + kUaOffset, sent.ua);
+  TEST_ASSERT_EQUAL_HEX8(5 + kWireUAOffset, sent.wireUA);
   TEST_ASSERT_EQUAL_HEX8('I', sent.mt);
   TEST_ASSERT_EQUAL_UINT16(13, sent.length);
   // CPNODE 'C' dialect (interop E3):
@@ -244,7 +244,7 @@ static void test_poll_carries_wire_ua_and_empty_body(void) {
   runUntil(rig.host, base, base + 1);
   CMRIPacket sent;
   TEST_ASSERT_TRUE(rig.transport.takeSent(sent));  // P (I and T drained)
-  TEST_ASSERT_EQUAL_HEX8(5 + kUaOffset, sent.ua);
+  TEST_ASSERT_EQUAL_HEX8(5 + kWireUAOffset, sent.wireUA);
   TEST_ASSERT_EQUAL_HEX8('P', sent.mt);
   TEST_ASSERT_EQUAL_UINT16(0, sent.length);
   TEST_ASSERT_EQUAL_UINT32(1, rig.host.statistics().pollsSent);
@@ -303,7 +303,7 @@ static void test_refresh_resends_transmit_on_interval(void) {
   config.transmitRefreshMs = 100;
   Rig rig(config, CMRIHost::RemoteNodePolicy(), 0, 1);
   rig.host.begin();
-  rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'R'), 0,
+  rig.transport.onSendReplyPacket(5 + kWireUAOffset, 'P', makePacket(5, 'R'), 0,
                                   MockCMRITransport::kRepeatForever);
   runUntil(rig.host, 0, 501);  // I + T (lastTxMs_ = 501)
   CMRIPacket sent;
@@ -325,7 +325,7 @@ static void test_reply_commits_inputs_freshness_state_statistics(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, rig.node->state());
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
@@ -373,7 +373,7 @@ static void test_turnaround_is_measured_from_send_complete(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
       /*delayMs=*/20);
   runUntil(rig.host, base, base + 20);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
@@ -422,7 +422,7 @@ static void test_wrong_ua_reply_is_rejected(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 250);
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
@@ -447,7 +447,7 @@ static void test_wrong_mt_reply_is_rejected(void) {
   ListenerLog log;
   rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
-  rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'E'));
+  rig.transport.onSendReplyPacket(5 + kWireUAOffset, 'P', makePacket(5, 'E'));
   runUntil(rig.host, base, base + 250);
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
@@ -469,7 +469,7 @@ static void test_wrong_length_reply_counts_error_without_commit(void) {
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)));
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().errors);
   TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().exchanges);
@@ -494,7 +494,7 @@ static void test_declared_geometry_disagreement_is_observed_and_reported(void) {
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
       0, 1);
   runUntil(rig.host, base, base + 2);
 
@@ -549,14 +549,14 @@ static void test_conformance_decays_to_unknown_when_contact_is_lost(void) {
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
       0, 1);
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL(RemoteNodeConformance::kNonconforming,
                     rig.node->conformance());
 
   // Now it stops answering entirely.
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P',
                                  MockCMRITransport::kRepeatForever);
   bool silent = false;
   for (uint32_t t = base + 3; t <= base + 25000 && !silent; ++t) {
@@ -583,13 +583,13 @@ static void test_degraded_when_a_conforming_node_starts_faulting(void) {
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
       0, 1);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
 
   uint32_t t = base;
@@ -671,7 +671,7 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
 
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   rig.transport.onSendReplyPacket(
-      6 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      6 + kWireUAOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   runUntil(rig.host, 0, 510);  // I -> settle -> T -> P -> reply
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
@@ -682,7 +682,7 @@ static void test_nonconforming_node_reaches_stale_before_misconfigured(void) {
   // honest shape of this path -- the node is alive with rearranged IO,
   // not dying -- and it keeps liveness out of the result below.
   rig.transport.onSendReplyPacket(
-      6 + kUaOffset, 'P', makePacket(6, 'R', threeBytes, sizeof(threeBytes)),
+      6 + kWireUAOffset, 'P', makePacket(6, 'R', threeBytes, sizeof(threeBytes)),
       0, MockCMRITransport::kRepeatForever);
   uint32_t t = 511;
   bool faulted = false;
@@ -734,7 +734,7 @@ static void test_wrong_geometry_after_invalidation_reports_misconfigured(void) {
   // Establish a committed image first, so invalidation has something to
   // invalidate.
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
@@ -742,9 +742,9 @@ static void test_wrong_geometry_after_invalidation_reports_misconfigured(void) {
   // Then a silent miss-run past the threshold (which fires the re-init
   // ladder and invalidates the image), and a return with wrong
   // geometry. The mismatch reply must not commit data.
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 6);
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P', 6);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
       0, 1);
 
   bool reachedGeometryReject = false;
@@ -792,7 +792,7 @@ static void test_self_echoed_poll_does_not_make_the_node_nonconforming(void) {
   // Establish a healthy, conforming node first, so the echo has a real
   // verdict to damage rather than an unset one.
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   uint32_t t = base;
   bool committed = false;
@@ -804,7 +804,7 @@ static void test_self_echoed_poll_does_not_make_the_node_nonconforming(void) {
   TEST_ASSERT_TRUE(rig.node->isHealthy());
 
   // Now the Host's own poll echoes back at it: same UA, mt 'P'.
-  rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'P'), 0, 1);
+  rig.transport.onSendReplyPacket(5 + kWireUAOffset, 'P', makePacket(5, 'P'), 0, 1);
   const uint32_t rejectedBefore = rig.host.statistics().repliesRejected;
   bool echoed = false;
   for (; t <= base + 5000 && !echoed; ++t) {
@@ -847,7 +847,7 @@ static void test_axes_and_predicates_diverge_at_missing_with_fresh_image(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   uint32_t t = base;
   bool committed = false;
@@ -916,13 +916,13 @@ static void test_health_implies_usability_but_not_the_reverse(void) {
   // uninitialized, healthy, degraded, healthy, and missing-with-a-fresh
   // image without needing to know which tick each lands on.
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', threeBytes, sizeof(threeBytes)),
       0, 1);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
 
   bool sawHealthy = false;
@@ -951,9 +951,9 @@ static void test_health_implies_usability_but_not_the_reverse(void) {
 static void test_recovery_after_miss(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 1);
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P', 1);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   bool reachedRecovery = false;
   for (uint32_t t = base; t <= base + 6000; ++t) {
     rig.host.tick(t);
@@ -973,9 +973,9 @@ static void test_recovery_after_miss(void) {
 static void test_offline_after_miss_threshold_then_recovers(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P', 6);
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P', 6);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   // Wait until six misses are actually observed under the active backoff
   // schedule; the 6th miss arms the re-init ladder.
   bool reachedSixMisses = false;
@@ -1012,7 +1012,7 @@ static void test_reinit_ladder_fires_after_miss_threshold(void) {
   ListenerLog log;
   rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P',
                                  MockCMRITransport::kRepeatForever);
   // Run until the ladder is observed under the active backoff schedule.
   bool ladderArmed = false;
@@ -1043,11 +1043,11 @@ static void test_invalidation_keeps_last_good_bytes(void) {
   uint32_t base = primeToPoll(rig);
   // Establish a good input image.
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0, 1);
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0, 1);
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));
   // Force the re-init ladder: silence forever, run past six misses.
-  rig.transport.onSendStaySilent(5 + kUaOffset, 'P',
+  rig.transport.onSendStaySilent(5 + kWireUAOffset, 'P',
                                  MockCMRITransport::kRepeatForever);
   bool reachedSixMisses = false;
   uint32_t sixMissesAt = base + 3;
@@ -1101,7 +1101,7 @@ static void test_stale_when_inputs_outlive_threshold(void) {
   rig.node->setEnabled(false);  // only the staleness node is polled
   rig.host.begin();
   rig.transport.onSendReplyPacket(
-      6 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      6 + kWireUAOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       1);
   // I (t=0) -> settle -> T -> P -> reply; node 6 ONLINE.
   runUntil(rig.host, 0, 510);
@@ -1121,7 +1121,7 @@ static void test_output_only_node_gets_keepalive_poll(void) {
   (void)rig.transport.takeSent(sent);  // I
   (void)rig.transport.takeSent(sent);  // T
   // An output-only node still receives a keepalive P (interop 2.3.13).
-  rig.transport.onSendReplyPacket(5 + kUaOffset, 'P', makePacket(5, 'R'), 0, 1);
+  rig.transport.onSendReplyPacket(5 + kWireUAOffset, 'P', makePacket(5, 'R'), 0, 1);
   runUntil(rig.host, 502, 510);  // first P at 508, reply accepted at 509
   TEST_ASSERT_TRUE(rig.transport.takeSent(sent));  // P (I and T drained)
   TEST_ASSERT_EQUAL_HEX8('P', sent.mt);
@@ -1151,7 +1151,7 @@ static void test_pacing_gap_between_exchanges(void) {
   Rig rig;
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), 0,
       MockCMRITransport::kRepeatForever);
   runUntil(rig.host, base, base + 1);  // P at base, reply accepted
   TEST_ASSERT_EQUAL_UINT32(1, rig.host.statistics().pollsSent);
@@ -1180,14 +1180,14 @@ static void test_round_robin_over_enabled_nodes(void) {
   int pollSeen = 0;
   while (transport.takeSent(sent)) {
     if (sent.mt == 'P' && pollSeen < 2) {
-      if (pollSeen == 0) firstPollUa = sent.ua;
-      else secondPollUa = sent.ua;
+      if (pollSeen == 0) firstPollUa = sent.wireUA;
+      else secondPollUa = sent.wireUA;
       ++pollSeen;
     }
   }
   TEST_ASSERT_EQUAL_INT(2, pollSeen);
-  TEST_ASSERT_EQUAL_HEX8(1 + kUaOffset, firstPollUa);
-  TEST_ASSERT_EQUAL_HEX8(2 + kUaOffset, secondPollUa);
+  TEST_ASSERT_EQUAL_HEX8(1 + kWireUAOffset, firstPollUa);
+  TEST_ASSERT_EQUAL_HEX8(2 + kWireUAOffset, secondPollUa);
 }
 
 static void test_send_refusal_retries_without_blocking(void) {
@@ -1221,7 +1221,7 @@ static void test_exchange_completes_over_gapped_wire_bytes(void) {
   const size_t n = encodeFrame(reply, wire, sizeof(wire));
   TEST_ASSERT_TRUE(n > 0);
   uint32_t base = primeToPoll(rig);
-  rig.transport.onSendReplyBytes(5 + kUaOffset, 'P', wire, n, /*delayMs=*/1,
+  rig.transport.onSendReplyBytes(5 + kWireUAOffset, 'P', wire, n, /*delayMs=*/1,
                                  /*repeat=*/1, /*interByteGapMs=*/2);
   runUntil(rig.host, base, base + 40);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
@@ -1235,7 +1235,7 @@ static void test_event_listener_sees_accept_and_state_change(void) {
   rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_INT(1, log.accepted);
   TEST_ASSERT_EQUAL_PTR(rig.node, log.lastNode);
@@ -1270,7 +1270,7 @@ static void test_event_listener_sees_rejected_reply(void) {
   rig.host.onEvent(recordEvent, &log);
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(6, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_INT(1, log.rejected);
   TEST_ASSERT_EQUAL_INT(0, log.accepted);
@@ -1282,7 +1282,7 @@ static void test_trace_listener_sees_both_directions(void) {
   rig.host.onTrace(recordTrace, &log);
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 2);
   // Preamble traced I and T on TX; the P and R happen here.
   TEST_ASSERT_TRUE(log.txTraces >= 1);
@@ -1318,7 +1318,7 @@ static void test_listener_registration_is_legal_at_runtime(void) {
   rig.host.onTrace(recordTrace, &log);
 
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 20);
 
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
@@ -1335,7 +1335,7 @@ static void test_listener_registration_is_legal_at_runtime(void) {
   const int acceptedAfterClear = log.accepted;
   const int tracesAfterClear = log.txTraces;
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base + 21, base + 60);
   TEST_ASSERT_EQUAL_INT(acceptedAfterClear, log.accepted);
   TEST_ASSERT_EQUAL_INT(tracesAfterClear, log.txTraces);
@@ -1347,7 +1347,7 @@ static void test_null_listeners_are_harmless(void) {
   rig.host.onTrace(nullptr);
   uint32_t base = primeToPoll(rig);
   rig.transport.onSendReplyPacket(
-      5 + kUaOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
   runUntil(rig.host, base, base + 2);
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
 }
@@ -1372,7 +1372,7 @@ static void test_add_remote_node_validation(void) {
   RemoteNodeConfig tooManyOutputs;
   tooManyOutputs.outputBytes = RemoteNodeHandle::kMaxOutputBytes + 1;
 
-  TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.addRemoteNode(128, ok));
+  TEST_ASSERT_EQUAL(CS::kUAOutOfRange, h.addRemoteNode(128, ok));
   TEST_ASSERT_EQUAL(CS::kInputBytesTooLarge, h.addRemoteNode(5, tooManyInputs));
   TEST_ASSERT_EQUAL(CS::kOutputBytesTooLarge,
                     h.addRemoteNode(5, tooManyOutputs));
@@ -1383,8 +1383,8 @@ static void test_add_remote_node_validation(void) {
   TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
   TEST_ASSERT_NOT_NULL(h.node(5));
 
-  // A duplicate address is rejected without disturbing the original.
-  TEST_ASSERT_EQUAL(CS::kAddressInUse, h.addRemoteNode(5, ok));
+  // A duplicate UA is rejected without disturbing the original.
+  TEST_ASSERT_EQUAL(CS::kUAInUse, h.addRemoteNode(5, ok));
   TEST_ASSERT_EQUAL_size_t(1, h.nodeCount());
 
   // begin() is the config->running transition, not a table lock: the
@@ -1395,8 +1395,8 @@ static void test_add_remote_node_validation(void) {
   TEST_ASSERT_NOT_NULL(h.node(6));
 
   // The same validations still apply at runtime.
-  TEST_ASSERT_EQUAL(CS::kAddressInUse, h.addRemoteNode(6, ok));
-  TEST_ASSERT_EQUAL(CS::kAddressOutOfRange, h.addRemoteNode(200, ok));
+  TEST_ASSERT_EQUAL(CS::kUAInUse, h.addRemoteNode(6, ok));
+  TEST_ASSERT_EQUAL(CS::kUAOutOfRange, h.addRemoteNode(200, ok));
 
   // Mutators name a live node; a missing one is its own status, not a
   // silent no-op.
@@ -1436,7 +1436,7 @@ static void test_add_after_begin_bootstraps_the_new_node(void) {
   for (uint32_t t = 601; t <= 4000; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.ua != 6 + kUaOffset) {
+      if (sent.wireUA != 6 + kWireUAOffset) {
         continue;
       }
       if (sent.mt == 'I') {
@@ -1480,9 +1480,9 @@ static void test_delete_removes_the_node_from_the_rotation(void) {
   for (uint32_t t = 2001; t <= 9000; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.ua == 5 + kUaOffset) {
+      if (sent.wireUA == 5 + kWireUAOffset) {
         addressedTheDeletedNode = true;
-      } else if (sent.ua == 6 + kUaOffset) {
+      } else if (sent.wireUA == 6 + kWireUAOffset) {
         addressedTheSurvivor = true;
       }
     }
@@ -1517,7 +1517,7 @@ static void test_delete_while_in_flight_attributes_nothing(void) {
   for (; t <= 5000 && !polled; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+      if (sent.mt == 'P' && sent.wireUA == 5 + kWireUAOffset) {
         polled = true;
       }
     }
@@ -1647,11 +1647,11 @@ static void test_delete_frees_a_slot_in_a_full_table(void) {
   TEST_ASSERT_EQUAL_size_t(CMRIHost::kMaxNodes, host.nodeCount());
   TEST_ASSERT_NOT_NULL(host.node(overflow));
 
-  // Address 0 is the trap here: a cleaned tombstone holds address_ == 0,
-  // and 0 is a perfectly legal node address. A lookup that tested the
-  // address before occupancy would hand this tombstone back.
+  // Address 0 is the trap here: a cleaned tombstone holds UA_ == 0,
+  // and 0 is a perfectly legal node UA. A lookup that tested the
+  // UA before occupancy would hand this tombstone back.
   TEST_ASSERT_NULL_MESSAGE(host.node(0),
-                           "a cleaned tombstone answered to address 0");
+                           "a cleaned tombstone answered to UA 0");
 }
 
 // Slot reuse must produce a genuinely new subject. The hazard is quiet:
@@ -1662,7 +1662,7 @@ static void test_reused_slot_is_a_new_subject(void) {
   CMRIHost host(transport);
   host.addRemoteNode(5, 2, 0);
   host.begin();
-  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+  transport.onSendReplyPacket(5 + kWireUAOffset, 'P',
                               makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
                               0, MockCMRITransport::kRepeatForever);
   runUntil(host, 0, 1000);
@@ -1675,10 +1675,10 @@ static void test_reused_slot_is_a_new_subject(void) {
   TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.deleteRemoteNode(5));
 
   // A handle cached across the delete must be detectable as stale.
-  // address() is that self-check, and it works only because the slot is
+  // UA() is that self-check, and it works only because the slot is
   // cleaned at delete rather than at reuse.
-  TEST_ASSERT_NOT_EQUAL_MESSAGE(5, before->address(),
-                                "a deleted node still answered to its address");
+  TEST_ASSERT_NOT_EQUAL_MESSAGE(5, before->UA(),
+                                "a deleted node still answered to its UA");
 
   TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, 2, 0));
   RemoteNodeHandle* fresh = host.node(5);
@@ -1705,7 +1705,7 @@ static void test_reused_slot_is_a_new_subject(void) {
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, host.node(5)->state());
 }
 
-// Geometry change is in place and identity-preserving: same address,
+// Geometry change is in place and identity-preserving: same UA,
 // same counters, same handle. What it must invalidate is the cached
 // image, because the NI/NO announced in the I body just changed.
 static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
@@ -1713,7 +1713,7 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
   CMRIHost host(transport);
   host.addRemoteNode(5, 2, 1);
   host.begin();
-  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+  transport.onSendReplyPacket(5 + kWireUAOffset, 'P',
                               makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
                               0, MockCMRITransport::kRepeatForever);
   runUntil(host, 0, 1000);
@@ -1731,11 +1731,11 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
   TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
                     host.setRemoteNodeGeometry(5, 4, 3));
 
-  // Identity preserved: same handle, same address, same running totals.
+  // Identity preserved: same handle, same UA, same running totals.
   // This is the same logical device with its IO cards rearranged, so its
   // observation substrate keeps counting.
   TEST_ASSERT_EQUAL_PTR(node, host.node(5));
-  TEST_ASSERT_EQUAL_UINT8(5, node->address());
+  TEST_ASSERT_EQUAL_UINT8(5, node->UA());
   TEST_ASSERT_EQUAL_UINT32(exchangesBefore, node->statistics().exchanges);
 
   // Belief cleared: the cached bytes described the old shape.
@@ -1754,7 +1754,7 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
   for (uint32_t t = 1001; t <= 3000; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.ua != 5 + kUaOffset) {
+      if (sent.wireUA != 5 + kWireUAOffset) {
         continue;
       }
       if (sent.mt == 'I') {
@@ -1774,7 +1774,7 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
 
 // The whole lifecycle in one pass, in the order a layout actually
 // evolves: a section is built, taken out of service, rewired,
-// recommissioned, retired, and its address handed to a new device.
+// recommissioned, retired, and its UA handed to a new device.
 static void test_full_mutation_lifecycle(void) {
   using CS = CMRIHost::ConfigStatus;
   MockCMRITransport transport;
@@ -1810,7 +1810,7 @@ static void test_full_mutation_lifecycle(void) {
   for (uint32_t t = 701; t <= 3000 && !addressed; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.ua == 5 + kUaOffset) {
+      if (sent.wireUA == 5 + kWireUAOffset) {
         addressed = true;
       }
     }
@@ -1823,7 +1823,7 @@ static void test_full_mutation_lifecycle(void) {
   TEST_ASSERT_NULL(host.node(5));
   TEST_ASSERT_EQUAL_size_t(1, host.nodeCount());
 
-  // add again: the address is reusable, and the new device inherits
+  // add again: the UA is reusable, and the new device inherits
   // nothing -- not the geometry, not the disable, not the counters.
   TEST_ASSERT_EQUAL(CS::kOk, host.addRemoteNode(5, 1, 1));
   RemoteNodeHandle* reborn = host.node(5);
@@ -1837,7 +1837,7 @@ static void test_full_mutation_lifecycle(void) {
 
   // The bystander was never disturbed by any of it.
   TEST_ASSERT_NOT_NULL(host.node(9));
-  TEST_ASSERT_EQUAL_UINT8(9, host.node(9)->address());
+  TEST_ASSERT_EQUAL_UINT8(9, host.node(9)->UA());
   TEST_ASSERT_EQUAL_size_t(2, host.nodeCount());
 }
 
@@ -1867,7 +1867,7 @@ static void test_delete_event_names_the_departing_node(void) {
   TEST_ASSERT_NULL_MESSAGE(log.lastNode,
                            "kNodeDeleted carried a non-null node pointer");
   TEST_ASSERT_EQUAL_UINT8_MESSAGE(5, log.lastDepartedAddress,
-                                  "kNodeDeleted named the wrong address");
+                                  "kNodeDeleted named the wrong UA");
   TEST_ASSERT_EQUAL_UINT32_MESSAGE(
       1000, log.lastEventMs,
       "delete event did not stamp the last-tick clock");
@@ -1890,7 +1890,7 @@ static void test_add_event_fires_for_runtime_add(void) {
                                 "add did not fire kNodeAdded");
   TEST_ASSERT_NOT_NULL_MESSAGE(log.lastNode,
                                 "kNodeAdded carried a null node pointer");
-  TEST_ASSERT_EQUAL_UINT8_MESSAGE(6, log.lastNode->address(),
+  TEST_ASSERT_EQUAL_UINT8_MESSAGE(6, log.lastNode->UA(),
                                   "kNodeAdded named the wrong node");
   TEST_ASSERT_EQUAL_UINT32_MESSAGE(
       500, log.lastEventMs,
@@ -1946,8 +1946,8 @@ static void test_rejected_mutation_fires_no_event(void) {
   log.nodeDeleted = 0;
   log.geometryChanged = 0;
 
-  // Duplicate address.
-  TEST_ASSERT_EQUAL(CS::kAddressInUse, host.addRemoteNode(5, 1, 1));
+  // Duplicate UA.
+  TEST_ASSERT_EQUAL(CS::kUAInUse, host.addRemoteNode(5, 1, 1));
   // No such node.
   TEST_ASSERT_EQUAL(CS::kNoSuchNode, host.deleteRemoteNode(99));
   TEST_ASSERT_EQUAL(CS::kNoSuchNode, host.setRemoteNodeGeometry(99, 1, 1));
@@ -2018,7 +2018,7 @@ static void test_dirty_output_cannot_starve_poll_forever(void) {
 
   // Node 5 always replies to a poll; node 6 never does (no script
   // entry -> silent, exactly like an unconfigured phantom node).
-  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+  transport.onSendReplyPacket(5 + kWireUAOffset, 'P',
                               makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
                               0, MockCMRITransport::kRepeatForever);
 
@@ -2070,7 +2070,7 @@ static void test_anti_starvation_does_not_starve_transmit(void) {
   CMRIPacket sent;
   while (transport.takeSent(sent)) { }
 
-  transport.onSendReplyPacket(5 + kUaOffset, 'P',
+  transport.onSendReplyPacket(5 + kWireUAOffset, 'P',
                               makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)),
                               0, MockCMRITransport::kRepeatForever);
 
@@ -2124,9 +2124,9 @@ static void test_poll_backoff_doubles_and_clears_on_reply(void) {
   for (uint32_t t = 1021; t <= 4020; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+      if (sent.mt == 'P' && sent.wireUA == 5 + kWireUAOffset) {
         transport.injectPacketAt(makePacket(5, 'R'), t);
-      } else if (sent.mt == 'P' && sent.ua == 6 + kUaOffset) {
+      } else if (sent.mt == 'P' && sent.wireUA == 6 + kWireUAOffset) {
         // Equal-length windows (1000 ms each) with a gap between them,
         // so a genuinely thinning rate shows up even though backoff
         // needs time to ramp up -- comparing raw counts over unequal
@@ -2148,14 +2148,14 @@ static void test_poll_backoff_doubles_and_clears_on_reply(void) {
 
   // Now let node 6 answer: backoff must clear immediately rather than
   // waiting out whatever multi-second window it had reached.
-  transport.onSendReplyPacket(6 + kUaOffset, 'P', makePacket(6, 'R'), 0,
+  transport.onSendReplyPacket(6 + kWireUAOffset, 'P', makePacket(6, 'R'), 0,
                               MockCMRITransport::kRepeatForever);
   const uint32_t exchangesBefore = dead->statistics().exchanges;
   bool recovered = false;
   for (uint32_t t = 4001; t <= 12000 && !recovered; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+      if (sent.mt == 'P' && sent.wireUA == 5 + kWireUAOffset) {
         transport.injectPacketAt(makePacket(5, 'R'), t);
       }
     }
@@ -2170,7 +2170,7 @@ static void test_poll_backoff_doubles_and_clears_on_reply(void) {
   for (uint32_t t = 12001; t <= 12300; ++t) {
     host.tick(t);
     while (transport.takeSent(sent)) {
-      if (sent.mt == 'P' && sent.ua == 5 + kUaOffset) {
+      if (sent.mt == 'P' && sent.wireUA == 5 + kWireUAOffset) {
         transport.injectPacketAt(makePacket(5, 'R'), t);
       }
     }
@@ -2198,9 +2198,9 @@ struct FaultyNode {
 
   FaultyNode() = default;
   FaultyNode(uint8_t addr, Kind k, uint16_t actual)
-      : address(addr), kind(k), actualIn(actual) {}
+      : UA(addr), kind(k), actualIn(actual) {}
 
-  uint8_t address = 0;
+  uint8_t UA = 0;
   Kind kind = kConforming;
   /// What the Node really sends. The Host's *declared* geometry is not
   /// mirrored here on purpose: the host table already holds it, and a
@@ -2225,18 +2225,18 @@ static void pumpFaultyBus(CMRIHost& host, MockCMRITransport& transport,
       if (sent.mt != 'P') {
         continue;  // I and T expect no reply (interop E8)
       }
-      if (sent.ua < kUaOffset) {
+      if (sent.wireUA < kWireUAOffset) {
         continue;
       }
-      const uint8_t address = static_cast<uint8_t>(sent.ua - kUaOffset);
+      const uint8_t UA = static_cast<uint8_t>(sent.wireUA - kWireUAOffset);
       for (size_t i = 0; i < count; ++i) {
-        if (nodes[i].address != address) {
+        if (nodes[i].UA != UA) {
           continue;
         }
         ++nodes[i].polls;
         if (nodes[i].kind != FaultyNode::kSilent) {
           transport.injectPacketAt(
-              makePacket(address, 'R', kFiller, nodes[i].actualIn), t);
+              makePacket(UA, 'R', kFiller, nodes[i].actualIn), t);
         }
         break;
       }

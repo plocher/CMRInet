@@ -40,7 +40,7 @@ size_t encodeFrame(const CMRIPacket& packet, uint8_t* out, size_t capacity) {
   out[n++] = kSyn;  // exactly two SYN/0xFF (rule 2.1.1)
   out[n++] = kSyn;
   out[n++] = kStx;
-  out[n++] = packet.ua;
+  out[n++] = packet.wireUA;
   out[n++] = packet.mt;
   for (uint16_t i = 0; i < packet.length; ++i) {
     const uint8_t b = packet.body[i];
@@ -93,7 +93,7 @@ bool CMRIFrameDecoder::feed(uint8_t byte, uint32_t nowMs) {
     if (state_ == State::kBody) {
       return commitFrame_();
     }
-    if (state_ == State::kUa || state_ == State::kMt) {
+    if (state_ == State::kWireUA || state_ == State::kMt) {
       // Frame ended before UA and MT arrived: malformed, discard.
       statistics_.headerAborts++;
       state_ = State::kHunt;
@@ -139,7 +139,7 @@ void CMRIFrameDecoder::reset() {
 
 void CMRIFrameDecoder::startFrame_() {
   staging_.clear();
-  state_ = State::kUa;
+  state_ = State::kWireUA;
   escaped_ = false;
 }
 
@@ -176,8 +176,8 @@ void CMRIFrameDecoder::handleData_(uint8_t byte) {
     case State::kHunt:
       // Pre-STX bytes are never stored (rule 2.2.4).
       break;
-    case State::kUa:
-      staging_.ua = byte;
+    case State::kWireUA:
+      staging_.wireUA = byte;
       state_ = State::kMt;
       break;
     case State::kMt:

@@ -48,8 +48,8 @@ void test_slowwalker_optional_ua() {
   char args[] = "ua 31 period 750 byte 2";
   ParsedGeneratorParams p = parseGeneratorParams(args, "slowwalker");
   TEST_ASSERT_NULL(p.error_code);
-  TEST_ASSERT_TRUE(p.has_ua);
-  TEST_ASSERT_EQUAL_UINT8(31, p.ua);
+  TEST_ASSERT_TRUE(p.has_UA);
+  TEST_ASSERT_EQUAL_UINT8(31, p.UA);
   TEST_ASSERT_TRUE(p.has_period);
   TEST_ASSERT_EQUAL_UINT32(750, p.period_ms);
   TEST_ASSERT_TRUE(p.has_byte);
@@ -60,8 +60,8 @@ void test_loopback_src_dst_mode() {
   char args[] = "ua 31 src_byte 2 src_bit 1 dst_byte 2 dst_bit 1 mode write_read";
   ParsedGeneratorParams p = parseGeneratorParams(args, "toggleoutfrominput");
   TEST_ASSERT_NULL(p.error_code);
-  TEST_ASSERT_TRUE(p.has_ua);
-  TEST_ASSERT_EQUAL_UINT8(31, p.ua);
+  TEST_ASSERT_TRUE(p.has_UA);
+  TEST_ASSERT_EQUAL_UINT8(31, p.UA);
   TEST_ASSERT_TRUE(p.has_src_byte);
   TEST_ASSERT_TRUE(p.has_src_bit);
   TEST_ASSERT_EQUAL_UINT8(2, p.src_byte);

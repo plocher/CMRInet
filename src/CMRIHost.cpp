@@ -30,14 +30,14 @@ constexpr uint32_t kMaxRefillSpanMs = 60000u;
 CMRIHost::CMRIHost(CMRITransport& transport, const CMRIHostConfig& config)
     : transport_(transport), config_(config) {}
 
-/// Find the slot holding a live node at `address`.
+/// Find the slot holding a live node at `UA`.
 ///
-/// Occupancy is tested before the address, and that order matters: a
-/// cleaned tombstone holds address_ == 0, and 0 is a legal node address.
-/// Testing the address first would hand out tombstones to node(0).
-bool CMRIHost::findSlot_(uint8_t address, size_t& slot) const {
+/// Occupancy is tested before the UA, and that order matters: a
+/// cleaned tombstone holds UA_ == 0, and 0 is a legal node UA.
+/// Testing the UA first would hand out tombstones to node(0).
+bool CMRIHost::findSlot_(uint8_t UA, size_t& slot) const {
   for (size_t i = 0; i < kMaxNodes; ++i) {
-    if (occupied_[i] && nodes_[i].address_ == address) {
+    if (occupied_[i] && nodes_[i].UA_ == UA) {
       slot = i;
       return true;
     }
@@ -113,14 +113,14 @@ void CMRIHost::detachExchangeFrom_(size_t slot) {
 // VALIDATION: Design v1.2 D5: add is legal before and after begin();
 // begin() does not lock the node table.
 CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
-    uint8_t address, const RemoteNodeConfig& config,
+    uint8_t UA, const RemoteNodeConfig& config,
     const RemoteNodePolicy& policy) {
   // Validation at intake: reject, never remap.
   // VALIDATION: Interop v1.1 E9: Nodes must reject, not remap,
   // out-of-range addresses. The same rule applies to the Host's own
   // configuration.
-  if (address > 127u) {
-    return ConfigStatus::kAddressOutOfRange;
+  if (UA > 127u) {
+    return ConfigStatus::kUAOutOfRange;
   }
   if (config.inputBytes > RemoteNodeHandle::kMaxInputBytes) {
     return ConfigStatus::kInputBytesTooLarge;
@@ -137,8 +137,8 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   size_t free = kMaxNodes;
   for (size_t i = 0; i < kMaxNodes; ++i) {
     if (occupied_[i]) {
-      if (nodes_[i].address_ == address) {
-        return ConfigStatus::kAddressInUse;
+      if (nodes_[i].UA_ == UA) {
+        return ConfigStatus::kUAInUse;
       }
     } else if (free == kMaxNodes) {
       free = i;  // first free slot; keep scanning for a duplicate
@@ -154,8 +154,8 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   // every path that could have left it otherwise.
   resetSlot_(free);
   RemoteNodeHandle& node = nodes_[free];
-  node.address_ = address;
-  node.ua_ = static_cast<uint8_t>(address + kUaOffset);
+  node.UA_ = UA;
+  node.wireUA_ = static_cast<uint8_t>(UA + kWireUAOffset);
   node.config_ = config;
   policies_[free] = policy;
   occupied_[free] = true;
@@ -175,9 +175,9 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   return ConfigStatus::kOk;
 }
 
-CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
+CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t UA) {
   size_t slot = 0;
-  if (!findSlot_(address, slot)) {
+  if (!findSlot_(UA, slot)) {
     return ConfigStatus::kNoSuchNode;
   }
 
@@ -186,8 +186,8 @@ CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
   detachExchangeFrom_(slot);
 
   // Tombstone in place. No compaction, so every surviving handle keeps
-  // its address. Cleaning now rather than at reuse is what makes a
-  // stale handle detectable: address() reads 0 instead of continuing to
+  // its UA. Cleaning now rather than at reuse is what makes a
+  // stale handle detectable: UA() reads 0 instead of continuing to
   // report the node it used to serve.
   occupied_[slot] = false;
   resetSlot_(slot);
@@ -195,7 +195,7 @@ CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
 
   // A listener sees the node leave. The slot is already cleaned, so
   // event.node is null by design and the departing identity rides by
-  // value in departedAddress (issue #91). Firing AFTER the clean is
+  // value in departedUA (issue #91). Firing AFTER the clean is
   // deliberate: the roster rendered at event time reflects the
   // post-delete membership, so a reader sees the event and the shrunk
   // table it produced. No event fires on a rejected delete (kNoSuchNode
@@ -203,13 +203,13 @@ CMRIHost::ConfigStatus CMRIHost::deleteRemoteNode(uint8_t address) {
   CMRIHostEvent deleteEvent;
   deleteEvent.type = CMRIHostEventType::kNodeDeleted;
   deleteEvent.node = nullptr;
-  deleteEvent.departedAddress = address;
+  deleteEvent.departedUA = UA;
   deleteEvent.nowMs = lastTickMs_;
   fire_(deleteEvent);
   return ConfigStatus::kOk;
 }
 
-CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
+CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t UA,
                                                        uint16_t inputBytes,
                                                        uint16_t outputBytes) {
   if (inputBytes > RemoteNodeHandle::kMaxInputBytes) {
@@ -219,7 +219,7 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
     return ConfigStatus::kOutputBytesTooLarge;
   }
   size_t slot = 0;
-  if (!findSlot_(address, slot)) {
+  if (!findSlot_(UA, slot)) {
     return ConfigStatus::kNoSuchNode;
   }
 
@@ -283,7 +283,7 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   // conforming reply or a runtime change to the declared geometry.
   resetBreaker_(node);
 
-  // Observation is untouched: same address, same logical device, so the
+  // Observation is untouched: same UA, same logical device, so the
   // counters keep running -- and observedInputBytes_ in particular
   // survives deliberately. What changed is the Host's *claim*, not the
   // Node's physical card complement, so the last demonstrated length is
@@ -291,7 +291,7 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
   // operator correct a declaration and see observed and declared agree
   // (D14: declared is a claim, observed is evidence).
 
-  // A listener sees the geometry change in place: same address, same
+  // A listener sees the geometry change in place: same UA, same
   // handle, same counters, but the declared NI/NO just changed. The
   // event carries the previous NI/NO by value; the new values are on
   // node->inputLength()/outputLength() (the handle already holds them).
@@ -308,22 +308,22 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t address,
 }
 
 CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
-    uint8_t address, const RemoteNodeConfig& config) {
-  return addRemoteNode(address, config, RemoteNodePolicy());
+    uint8_t UA, const RemoteNodeConfig& config) {
+  return addRemoteNode(UA, config, RemoteNodePolicy());
 }
 
-CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t address,
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA,
                                                uint16_t inputBytes,
                                                uint16_t outputBytes) {
   RemoteNodeConfig config;
   config.inputBytes = inputBytes;
   config.outputBytes = outputBytes;
-  return addRemoteNode(address, config);
+  return addRemoteNode(UA, config);
 }
 
-RemoteNodeHandle* CMRIHost::node(uint8_t address) {
+RemoteNodeHandle* CMRIHost::node(uint8_t UA) {
   size_t slot = 0;
-  return findSlot_(address, slot) ? &nodes_[slot] : nullptr;
+  return findSlot_(UA, slot) ? &nodes_[slot] : nullptr;
 }
 
 void CMRIHost::begin() {
@@ -405,7 +405,7 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     //   polling would charge one device for another's behavior.
     // - An MT mismatch looks attributable and is not. On 2-wire media
     //   the Host sees its own frames (see this function's header), so
-    //   its own P echoes back with rx.ua == node.ua_ and mt == 'P' and
+    //   its own P echoes back with rx.wireUA == node.wireUA_ and mt == 'P' and
     //   lands right here. Wiring that to the axis would park every node
     //   on every 2-wire Host in DEGRADED permanently.
     //
@@ -416,12 +416,12 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     // VALIDATION: Design v1.4 D14: only image-rung faults are evidence
     // about a Node's conformance; packet-rung observations are named
     // and reported without moving the stored verdict.
-    if (rx.ua != node.ua_) {
+    if (rx.wireUA != node.wireUA_) {
       ++statistics_.repliesRejected;
       emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
                  RemoteNodeState::kUninitialized,
                  RemoteNodeState::kUninitialized,
-                 ReplyRejectReason::kUaMismatch, rx.length, rx.ua, rx.mt);
+                 ReplyRejectReason::kWireUAMismatch, rx.length, rx.wireUA, rx.mt);
       continue;
     }
     if (rx.mt != MessageType::kReceiveData) {
@@ -429,7 +429,7 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
       emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
                  RemoteNodeState::kUninitialized,
                  RemoteNodeState::kUninitialized,
-                 ReplyRejectReason::kMtMismatch, rx.length, rx.ua, rx.mt);
+                 ReplyRejectReason::kMtMismatch, rx.length, rx.wireUA, rx.mt);
       continue;
     }
     acceptReply_(rx, nowMs);
@@ -489,7 +489,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
     emitEvent_(CMRIHostEventType::kReplyRejected, node, nowMs,
                RemoteNodeState::kUninitialized,
                RemoteNodeState::kUninitialized,
-               ReplyRejectReason::kGeometryMismatch, reply.length, reply.ua,
+               ReplyRejectReason::kGeometryMismatch, reply.length, reply.wireUA,
                reply.mt);
     emitEvent_(CMRIHostEventType::kPollBackoffChanged, node, nowMs,
                RemoteNodeState::kUninitialized,
@@ -1086,7 +1086,7 @@ void CMRIHost::buildInitPacket_(size_t nodeIndex) {
   RemoteNodeHandle& node = nodes_[nodeIndex];
   const RemoteNodePolicy& policy = policies_[nodeIndex];
   outbound_.clear();
-  outbound_.ua = node.ua_;
+  outbound_.wireUA = node.wireUA_;
   outbound_.mt = MessageType::kInit;
   uint8_t body[13];
   body[0] = 'C';
@@ -1110,7 +1110,7 @@ void CMRIHost::buildInitPacket_(size_t nodeIndex) {
 void CMRIHost::buildTransmitPacket_(size_t nodeIndex) {
   RemoteNodeHandle& node = nodes_[nodeIndex];
   outbound_.clear();
-  outbound_.ua = node.ua_;
+  outbound_.wireUA = node.wireUA_;
   outbound_.mt = MessageType::kTransmitData;
   outbound_.setBody(node.outputs_, node.config_.outputBytes);
 }
@@ -1118,7 +1118,7 @@ void CMRIHost::buildTransmitPacket_(size_t nodeIndex) {
 /// Build a P (poll) packet: UA + MT, empty body.
 void CMRIHost::buildPollPacket_(size_t nodeIndex) {
   outbound_.clear();
-  outbound_.ua = nodes_[nodeIndex].ua_;
+  outbound_.wireUA = nodes_[nodeIndex].wireUA_;
   outbound_.mt = MessageType::kPoll;
 }
 
@@ -1200,7 +1200,7 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                           uint32_t nowMs, RemoteNodeState previousState,
                           RemoteNodeState newState,
                           ReplyRejectReason rejectReason,
-                          uint16_t replyLength, uint8_t replyUa,
+                          uint16_t replyLength, uint8_t replyWireUA,
                           uint8_t replyMt,
                           PollBackoffChangeReason pollBackoffReason,
                           uint32_t previousPollBackoffMs,
@@ -1216,7 +1216,7 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.newState = newState;
   event.rejectReason = rejectReason;
   event.replyLength = replyLength;
-  event.replyUa = replyUa;
+  event.replyWireUA = replyWireUA;
   event.replyMt = replyMt;
   // Classification is derived here rather than passed in, so the fault
   // and the reason cannot disagree at any call site.
@@ -1257,8 +1257,8 @@ const char* configStatusString(CMRIHost::ConfigStatus status) {
   switch (status) {
     case CMRIHost::ConfigStatus::kOk:                 return "ok";
     case CMRIHost::ConfigStatus::kTooManyNodes:       return "too many nodes";
-    case CMRIHost::ConfigStatus::kAddressOutOfRange:  return "address out of range";
-    case CMRIHost::ConfigStatus::kAddressInUse:       return "address in use";
+    case CMRIHost::ConfigStatus::kUAOutOfRange:  return "UA out of range";
+    case CMRIHost::ConfigStatus::kUAInUse:       return "UA in use";
     case CMRIHost::ConfigStatus::kNoSuchNode:         return "no such node";
     case CMRIHost::ConfigStatus::kInputBytesTooLarge: return "input bytes too large";
     case CMRIHost::ConfigStatus::kOutputBytesTooLarge:return "output bytes too large";
@@ -1270,8 +1270,8 @@ ConformanceFault conformanceFaultFor(ReplyRejectReason reason) {
   switch (reason) {
     case ReplyRejectReason::kNone:
       return ConformanceFault::kNone;
-    case ReplyRejectReason::kUaMismatch:
-      return ConformanceFault::kPacketUnexpectedAddress;
+    case ReplyRejectReason::kWireUAMismatch:
+      return ConformanceFault::kPacketUnexpectedUA;
     case ReplyRejectReason::kMtMismatch:
       return ConformanceFault::kPacketUnexpectedType;
     case ReplyRejectReason::kGeometryMismatch:
@@ -1283,7 +1283,7 @@ ConformanceFault conformanceFaultFor(ReplyRejectReason reason) {
 const char* replyRejectReasonString(ReplyRejectReason reason) {
   switch (reason) {
     case ReplyRejectReason::kNone:              return "none";
-    case ReplyRejectReason::kUaMismatch:        return "ua mismatch";
+    case ReplyRejectReason::kWireUAMismatch:        return "wire UA mismatch";
     case ReplyRejectReason::kMtMismatch:        return "mt mismatch";
     case ReplyRejectReason::kGeometryMismatch:  return "geometry mismatch";
   }

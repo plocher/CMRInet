@@ -201,14 +201,14 @@ class HostStatusPanel {
   /// "ON ", "OFF", "---"). `turnaroundMs` is the node's
   /// statistics().lastTurnaroundMs.
   void nodeRowText(char* buf, size_t len, uint32_t nowMs, size_t nodeIndex,
-                   uint8_t address, const char* stateTag,
+                   uint8_t UA, const char* stateTag,
                    uint32_t turnaroundMs) const {
     char lat[8];
     latencyText(lat, sizeof(lat), turnaroundMs);
     const uint32_t recentErrs = (nodeIndex < kMaxNodes)
         ? nodeErrors_[nodeIndex].countInLastMs(nowMs, kErrorWindowMs)
         : 0;
-    snprintf(buf, len, "UA%u:%s %s %2uerr", address,
+    snprintf(buf, len, "UA%u:%s %s %2uerr", UA,
              stateTag ? stateTag : "---", lat, static_cast<unsigned>(recentErrs));
   }
 

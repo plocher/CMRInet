@@ -54,7 +54,7 @@ namespace CMRInet {
 enum class ConformanceLayer : uint8_t {
   kNone,     ///< only for ConformanceFault::kNone
   kImage,    ///< geometry, NI/NO — survives every strategy
-  kPacket,   ///< address, message type, body structure — polled strategy
+  kPacket,   ///< UA, message type, body structure — polled strategy
   kFraming,  ///< escaping, truncation, inter-byte abort — serial carrier
 };
 
@@ -116,7 +116,7 @@ enum class ConformanceFault : uint8_t {
   /// a valid frame. A geometry mismatch is not valid data.
   kImageGeometryMismatch,
 
-  /// A reply carried an address other than the one addressed.
+  /// A reply carried a UA other than the one addressed.
   ///
   /// Attributed as a disagreement rather than a defect. The Host cannot
   /// distinguish a mis-addressed Node from another Node answering out
@@ -124,7 +124,7 @@ enum class ConformanceFault : uint8_t {
   /// addressing mismatch between a DIP-switched Node and the Host's
   /// table — and the remedy in both readings is to go check addressing,
   /// not to change firmware.
-  kPacketUnexpectedAddress,
+  kPacketUnexpectedUA,
 
   /// A reply carried a message type the exchange does not permit there.
   /// Unsolicited traffic outside an exchange is a separate, legitimate
@@ -139,7 +139,7 @@ inline ConformanceLayer layerOf(ConformanceFault fault) {
       return ConformanceLayer::kNone;
     case ConformanceFault::kImageGeometryMismatch:
       return ConformanceLayer::kImage;
-    case ConformanceFault::kPacketUnexpectedAddress:
+    case ConformanceFault::kPacketUnexpectedUA:
     case ConformanceFault::kPacketUnexpectedType:
       return ConformanceLayer::kPacket;
   }
@@ -152,7 +152,7 @@ inline FaultAttribution attributionOf(ConformanceFault fault) {
     case ConformanceFault::kNone:
       return FaultAttribution::kNone;
     case ConformanceFault::kImageGeometryMismatch:
-    case ConformanceFault::kPacketUnexpectedAddress:
+    case ConformanceFault::kPacketUnexpectedUA:
       return FaultAttribution::kDisagreement;
     case ConformanceFault::kPacketUnexpectedType:
       return FaultAttribution::kDefect;
@@ -165,7 +165,7 @@ inline const char* conformanceFaultString(ConformanceFault fault) {
   switch (fault) {
     case ConformanceFault::kNone:                   return "none";
     case ConformanceFault::kImageGeometryMismatch:  return "image geometry mismatch";
-    case ConformanceFault::kPacketUnexpectedAddress:return "packet unexpected address";
+    case ConformanceFault::kPacketUnexpectedUA:return "packet unexpected UA";
     case ConformanceFault::kPacketUnexpectedType:   return "packet unexpected type";
   }
   return "unknown";

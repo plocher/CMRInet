@@ -60,7 +60,9 @@ In Part 2, MUST means: required to interoperate with fielded equipment.
 
 Protocol characters: SYN/0xFF, STX/0x02, ETX/0x03, DLE/0x10. This
 paper always names a protocol character together with its hex value.
-UA = Node address plus 65.
+A node's Unit Address (UA) is an ordinal in the range 0..127. The
+wire UA is the byte transmitted on the serial line: UA + 65 (range
+65..192).
 
 # Part 1 — Errata
 

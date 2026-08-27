@@ -68,7 +68,7 @@ size_t encodeFrame(const CMRIPacket& packet, uint8_t* out, size_t capacity);
 ///   (rule 2.2.9).
 ///
 /// UA filtering and MT validation are deliberately NOT here.
-/// VALIDATION: Design v1.1 "Transport contract (packet seam)": address
+/// VALIDATION: Design v1.1 "Transport contract (packet seam)": UA
 /// filtering is not the transport's job.
 class CMRIFrameDecoder {
  public:
@@ -150,7 +150,7 @@ class CMRIFrameDecoder {
  private:
   enum class State : uint8_t {
     kHunt,  ///< between frames: waiting for a bare STX/0x02
-    kUa,    ///< STX seen: next data byte is UA
+    kWireUA,    ///< STX seen: next data byte is UA
     kMt,    ///< UA seen: next data byte is MT
     kBody,  ///< collecting body bytes until ETX/0x03
   };

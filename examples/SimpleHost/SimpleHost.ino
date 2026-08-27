@@ -24,8 +24,8 @@
 // you call host.tick() every loop to make the gears turn.
 //
 // You read inputs / write outputs through the host's node handle using
-// host.node(address)->inputBit(n) and 
-// host.node(address)->setOutputBit(n, [0,1])
+// host.node(UA)->inputBit(n) and 
+// host.node(UA)->setOutputBit(n, [0,1])
 
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
 //   D7 - RX    CMRI RS485 receive
@@ -110,7 +110,7 @@ constexpr size_t kToggleOutBit = bitOf(4, 0);  // output on a different IOX expa
 // ---- Per-node info: everything the sketch knows about each node ------
 // Add or remove rows to match your layout. 
 struct NodeInfo {
-  uint8_t  address;
+  uint8_t  UA;
   uint16_t inputBytes;
   uint16_t outputBytes;
 };
@@ -172,7 +172,7 @@ void drawHostStatus() {
   const uint32_t pollsSent = host.statistics().pollsSent;
   uint32_t nodeErrs[kNodeCount] = {};
   for (size_t i = 0; i < kNodeCount; ++i) {
-    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].address);
+    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
     nodeErrs[i] = (n != nullptr) ? n->statistics().errors : 0;
   }
   panel.sample(now, pollsSent, nodeErrs, kNodeCount);
@@ -195,14 +195,14 @@ void drawHostStatus() {
   // One row per node: UA, state, latency, recent-error count -- all
   // right-justified so the columns align.
   for (size_t i = 0; i < kNodeCount; ++i) {
-    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].address);
+    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
     const char* tag =
         (n != nullptr) ? CMRInet::remoteNodeStateTag(n->state()) : "---";
     const uint32_t latMs = (n != nullptr)
         ? n->statistics().lastTurnaroundMs : 0;
     char row[24];
     panel.nodeRowText(row, sizeof(row), now, i,
-                      nodeTable[i].address, tag, latMs);
+                      nodeTable[i].UA, tag, latMs);
     display.setTextSize(1);
     display.setCursor(0, 20 + i * 10);
     display.print(row);
@@ -233,11 +233,11 @@ void onHostEvent(void* /*context*/, const CMRInet::CMRIHostEvent& event) {
       Serial.print(F(" input bytes, got "));
       Serial.print(event.replyLength);
       break;
-    case CMRInet::ReplyRejectReason::kUaMismatch:
+    case CMRInet::ReplyRejectReason::kWireUAMismatch:
       Serial.print(F(" — polled UA "));
-      Serial.print(event.node->ua());
+      Serial.print(event.node->wireUA());
       Serial.print(F(", got UA "));
-      Serial.print(event.replyUa);
+      Serial.print(event.replyWireUA);
       break;
     case CMRInet::ReplyRejectReason::kMtMismatch:
       Serial.print(F(" — expected MT 'R', got MT 0x"));
@@ -274,7 +274,7 @@ void setup() {
       CMRInet::CMRIHost::ConfigStatus::kOk;
   for (size_t i = 0; i < kNodeCount; ++i) {
     const CMRInet::CMRIHost::ConfigStatus st =
-        host.addRemoteNode(nodeTable[i].address,
+        host.addRemoteNode(nodeTable[i].UA,
                            nodeTable[i].inputBytes,
                            nodeTable[i].outputBytes);
     if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&

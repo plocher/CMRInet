@@ -86,7 +86,7 @@ uint32_t lastDisplayMs = 0;
 struct Tally {
   uint32_t total = 0;
   uint32_t i = 0, t = 0, p = 0, r = 0, other = 0;
-  uint8_t lastUa = 0;
+  uint8_t lastWireUA = 0;
   char lastMt = '-';
 };
 Tally tally;
@@ -130,7 +130,7 @@ void emitEpoch() {
 
 void countFrame(const CMRInet::CMRIPacket& p) {
   ++tally.total;
-  tally.lastUa = p.ua;
+  tally.lastWireUA = p.wireUA;
   tally.lastMt = (p.mt >= 0x20 && p.mt <= 0x7E) ? static_cast<char>(p.mt)
                                                  : '?';
   switch (p.mt) {
@@ -164,7 +164,7 @@ void emitFrame(const CMRInet::CMRIPacket& p) {
            "\"mt\":\"%s\",\"body\":\"%s\"}",
            static_cast<unsigned>(++seq),
            static_cast<unsigned>(millis() - epochMs),
-           static_cast<unsigned>(p.ua), mtBuf, bodyHex);
+           static_cast<unsigned>(p.wireUA), mtBuf, bodyHex);
   emitLine();
 }
 
@@ -242,12 +242,12 @@ void drawStatus() {
                  static_cast<unsigned>(s.framesRestarted));
   display.setCursor(0, 54);
   if (tally.total != 0) {
-    // Show the node address (wire UA minus the 'A' offset = 65), not the
+    // Show the node UA (wire UA minus the 'A' offset = 65), not the
     // raw wire byte — matches the convention every other display uses (the
     // Host's event/trace listeners, the issue reports, the findings doc).
     // The JSON trace stream still carries the raw wire UA for tooling.
     const unsigned nodeId =
-        (tally.lastUa >= 'A') ? (tally.lastUa - 'A') : tally.lastUa;
+        (tally.lastWireUA >= 'A') ? (tally.lastWireUA - 'A') : tally.lastWireUA;
     display.printf(F("last: %c id=%3u"), tally.lastMt, nodeId);
   } else {
     display.print(F("last: -"));

@@ -23,18 +23,18 @@ using CMRInet::kMaxBody;
 using CMRInet::kMaxWireFrame;
 using CMRInet::kStx;
 using CMRInet::kSyn;
-using CMRInet::kUaOffset;
+using CMRInet::kWireUAOffset;
 
 void setUp(void) {}
 void tearDown(void) {}
 
 // ---------------------------------------------------------------- helpers
 
-/// Build a packet for node address `addr` (UA = addr + 65).
+/// Build a packet for node UA `addr` (UA = addr + 65).
 static CMRIPacket makePacket(uint8_t addr, uint8_t mt, const uint8_t* body,
                              size_t len) {
   CMRIPacket p;
-  p.ua = static_cast<uint8_t>(addr + kUaOffset);
+  p.wireUA = static_cast<uint8_t>(addr + kWireUAOffset);
   p.mt = mt;
   TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
   return p;
@@ -56,7 +56,7 @@ static int feedAll(CMRIFrameDecoder& d, const uint8_t* bytes, size_t len,
 
 // VALIDATION: Interop v1.1 2.1.1: a frame is two SYN/0xFF, then
 // STX/0x02, UA, MT, body, ETX/0x03. Golden vector: poll of node
-// address 5.
+// UA 5.
 static void test_encode_poll_golden_vector(void) {
   const CMRIPacket p = makePacket(5, 'P', nullptr, 0);
   uint8_t wire[16] = {0};
@@ -168,7 +168,7 @@ static void test_decode_roundtrip(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, wire, n, 0));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(sent.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(sent.wireUA, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('R', got.mt);
   TEST_ASSERT_EQUAL_UINT16(sizeof(body), got.length);
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));
@@ -182,7 +182,7 @@ static void test_decode_accepts_frame_without_syns(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, wire, sizeof(wire), 0));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x46, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('P', got.mt);
   TEST_ASSERT_EQUAL_UINT16(0, got.length);
 }
@@ -253,7 +253,7 @@ static void test_decode_unescaped_stx_restarts_frame(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, wire, sizeof(wire), 0));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('P', got.mt);
   TEST_ASSERT_EQUAL_UINT16(0, got.length);
   TEST_ASSERT_EQUAL_UINT32(1, d.statistics().framesRestarted);
@@ -288,7 +288,7 @@ static void test_decode_hunt_is_dle_aware(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, frame, sizeof(frame), 1));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
 }
 
 // VALIDATION: Interop v1.1 2.2.6, 2.2.7: a frame that dies in a
@@ -310,7 +310,7 @@ static void test_decode_dangling_dle_timeout_discards(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, frame, sizeof(frame), 1200));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
 }
 
 // VALIDATION: Interop v1.1 2.2.6: a truncated frame is abandoned when
@@ -326,7 +326,7 @@ static void test_decode_truncated_frame_recovers_via_gap(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, frame, sizeof(frame), 2000));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
   TEST_ASSERT_EQUAL_UINT16(0, got.length);
   TEST_ASSERT_EQUAL_UINT32(1, d.statistics().timeoutAborts);
 }
@@ -372,7 +372,7 @@ static void test_decode_oversized_body_aborts_and_recovers(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, frame, sizeof(frame), 1));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
 }
 
 // Anti-checklist (off-by-one overrun guards): bodies at kMaxBody-1 and
@@ -436,11 +436,11 @@ static void test_decode_back_to_back_frames(void) {
 
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, a, sizeof(a), 0));
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x46, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);
 
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, b, sizeof(b), 0));
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x47, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x47, got.wireUA);
   TEST_ASSERT_EQUAL_UINT16(1, got.length);
   TEST_ASSERT_EQUAL_UINT32(2, d.statistics().framesDecoded);
 }
@@ -457,7 +457,7 @@ static void test_decode_ready_slot_overrun_keeps_oldest(void) {
   TEST_ASSERT_EQUAL_UINT32(1, d.statistics().droppedPackets);
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0x46, got.ua);  // the oldest survived
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);  // the oldest survived
   TEST_ASSERT_FALSE(d.take(got));
 }
 
@@ -472,7 +472,7 @@ static void test_decode_high_value_bytes(void) {
   TEST_ASSERT_EQUAL_INT(1, feedAll(d, wire, n, 0));
   CMRIPacket got;
   TEST_ASSERT_TRUE(d.take(got));
-  TEST_ASSERT_EQUAL_HEX8(0xC0, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0xC0, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));
 }
 

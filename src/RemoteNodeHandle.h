@@ -300,9 +300,9 @@ struct ConformanceFaultRecord {
 /// Obtain one from CMRIHost::node(addr) at the point of use. It is valid
 /// until that node is deleted; the storage outlives the node, but the
 /// slot may be reused by a different logical device, so a handle cached
-/// across a mutation can silently describe somebody else. address() is
+/// across a mutation can silently describe somebody else. UA() is
 /// the self-check for code that caches one anyway -- a deleted node
-/// reads back as address 0.
+/// reads back as UA 0.
 // VALIDATION: Design v1.2 D5: host.node(addr) is the canonical access
 // path; caching a handle across a mutation is not a supported pattern.
 ///
@@ -321,11 +321,11 @@ class RemoteNodeHandle {
 
   RemoteNodeHandle() = default;
 
-  /// The node address (0..127) as configured.
-  uint8_t address() const { return address_; }
+  /// The node UA (0..127) as configured.
+  uint8_t UA() const { return UA_; }
 
-  /// The unit address byte as transmitted (address + 65).
-  uint8_t ua() const { return ua_; }
+  /// The unit UA byte as transmitted (UA + 65).
+  uint8_t wireUA() const { return wireUA_; }
 
   /// Last good input bit. Bit 0 is the least significant bit of input
   /// byte 0. Out-of-range bits read false.
@@ -515,8 +515,8 @@ class RemoteNodeHandle {
  private:
   friend class CMRIHost;
 
-  uint8_t address_ = 0;
-  uint8_t ua_ = 0;
+  uint8_t UA_ = 0;
+  uint8_t wireUA_ = 0;
   RemoteNodeConfig config_;
 
   // Output image: sketch-written via the setters above, engine-read when
