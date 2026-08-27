@@ -399,21 +399,66 @@ static void test_host_status_reports_the_table_not_one_node(void) {
       "host status roster missing or not keyed by the UA");
 }
 
-// The wire byte never leaves the wire. UA 5 rides as 70 on the medium;
-// no reader should ever see 70.
+// The trace line now carries a uniform field set: wireUA, legal,
+// and UA. For a legal packet (UA 5, wire UA 70), the line shows
+// the decoded ordinal and the raw wire byte alongside it, with
+// legal=true. The old lowercase "ua" field name is gone from trace
+// lines (it stays on status/roster lines, which are a different
+// surface).
 static void test_telemetry_speaks_the_ua_not_the_wire_byte(void) {
   TracerRig rig;
   rig.tick(0);  // emits the I trace
   const std::string* line = findContaining(rig.lines, "\"event\":\"trace\"");
   TEST_ASSERT_NOT_NULL_MESSAGE(line, "no trace line emitted");
-  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"ua\":5,"),
+  // The decoded semantic UA is in the "UA" field.
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"UA\":5,"),
                            "trace line does not report the semantic UA");
-  char wire[16];
-  snprintf(wire, sizeof(wire), "\"ua\":%u", 5u + kWireUAOffset);
-  TEST_ASSERT_FALSE_MESSAGE(contains(*line, wire),
-                            "trace line leaked the wire byte as the UA");
+  // The wire byte is now explicitly carried in "wireUA".
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"wireUA\":70,"),
+                           "trace line missing the wireUA field");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"legal\":true"),
+                           "trace line missing the legal flag");
+  // The old lowercase "ua" field name is gone from trace lines.
+  TEST_ASSERT_FALSE_MESSAGE(contains(*line, "\"ua\":"),
+                            "trace line still carries the old ua field name");
   TEST_ASSERT_FALSE_MESSAGE(contains(*line, "\"address\":"),
                             "trace line still carries the retired address key");
+}
+
+// An illegal wire-UA byte produces a trace line with legal=false and
+// UA=null. The raw wire byte is carried in wireUA for diagnosis.
+// Per ADR-0001: raw views are not decoded telemetry.
+static void test_trace_line_for_illegal_wire_ua(void) {
+  TracerRig rig;
+  rig.run(0, 3);  // I, T, settle past the preamble
+  rig.lines.clear();
+
+  // Encode a frame with an illegal wire-UA byte (10 < 65).
+  CMRIPacket illegal;
+  illegal.wireUA = 10;
+  illegal.mt = 'R';
+  static const uint8_t kBody[] = {0xA5, 0x01};
+  illegal.setBody(kBody, sizeof(kBody));
+  uint8_t wire[CMRInet::kMaxWireFrame];
+  const size_t n = encodeFrame(illegal, wire, sizeof(wire));
+  TEST_ASSERT_TRUE_MESSAGE(n > 0, "encodeFrame rejected the illegal-UA packet");
+  rig.port.queueRx(wire, n);
+
+  // Tick enough for the transport to pump the bytes through the
+  // decoder and hand the packet up. The trace listener fires before
+  // the gate, so the trace line is emitted regardless.
+  rig.run(4, 10);
+
+  const std::string* line =
+      findContaining(rig.lines, "\"legal\":false");
+  TEST_ASSERT_NOT_NULL_MESSAGE(line,
+                              "no illegal-UA trace line emitted");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"wireUA\":10,"),
+                           "illegal trace line missing the wireUA field");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"UA\":null"),
+                           "illegal trace line should have UA:null");
+  TEST_ASSERT_FALSE_MESSAGE(contains(*line, "\"legal\":true"),
+                            "illegal trace line marked legal=true");
 }
 
 // --------------------------------------------- runtime mutation verbs (D5)
@@ -730,6 +775,7 @@ int main(void) {
   RUN_TEST(test_node_status_line_carries_outputs_hex);
   RUN_TEST(test_host_status_reports_the_table_not_one_node);
   RUN_TEST(test_telemetry_speaks_the_ua_not_the_wire_byte);
+  RUN_TEST(test_trace_line_for_illegal_wire_ua);
   RUN_TEST(test_verb_on_unknown_ua_reports_no_such_node);
   RUN_TEST(test_node_add_and_delete_verbs_move_the_roster);
   RUN_TEST(test_node_geometry_verb_reannounces_ni_no);
