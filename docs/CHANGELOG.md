@@ -4,6 +4,35 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- Packet-layer illegal wire-UA detection (issue #96, Design v1.6 D14):
+  illegal wire-UA bytes (outside [65, 192]) are now detected at the
+  Host's packet-verify boundary, before the solicited/unsolicited split,
+  and classified as the first absolute packet-rung fault.
+  - New `ConformanceFault::kPacketIllegalWireUA` (layer=packet,
+    attribution=defect). Distinct from `kPacketUnexpectedUA` (a
+    legal-but-wrong UA, a disagreement): illegal is not "wrong," it is
+    "not a UA."
+  - New `isLegalWireUA(uint8_t)` predicate in `CMRIPacket.h`: pure,
+    stateless, shared by the Host gate, the tracer, and the tests.
+  - New `CMRIHostStatistics::illegalWireUAFaults`: host-scope,
+    monotonic. An illegal UA names no node to charge, so this counter is
+    the only surface on which a chronic illegal-UA emitter becomes
+    visible.
+  - New `CMRIHostEventType::kIllegalWireUA`: fires with `node = null`
+    and the raw wire byte, the same null-node pattern `kNodeDeleted` uses.
+  - The 4b miss behavior: an illegal UA during an outstanding POLL's
+    reply gate does not satisfy the poll. The gate stays armed, times
+    out, and the polled node takes the miss. `illegalWireUAFaults` and
+    the miss ladder climb together at the poll rate, which localizes a
+    chronic offset-omission emitter no per-node attribution can name.
+  - Tracer trace lines now carry a uniform field set:
+    `wireUA`, `legal`, `UA` (decoded ordinal or null). No variable
+    stream that swaps between telemetry and raw.
+  - Generator parser keys are now case-insensitive (folded from #102).
+  - 10 new tests across `test_conformance_fault`, `test_host`, and
+    `test_tracer`.
+
 ### Changed
 - UA terminology rename (issue #102, breaking): the library's
   `ua`/`address` vocabulary was inverted relative to the field norm.

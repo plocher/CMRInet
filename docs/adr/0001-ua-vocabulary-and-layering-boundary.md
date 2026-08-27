@@ -1,7 +1,7 @@
 # ADR-0001: UA vocabulary and layering boundary for node vs packet surfaces
 Date: 2026-08-25
 Status: Deferred
-Related: #90, #9, #102
+Related: #90, #9, #96, #102
 Cross-links: `docs/DESIGN.md` D1, D11, D12, D14
 ## Context
 The current issue is not only naming drift. It is a boundary leak between product-layer node identity and strategy-specific packet encoding.
@@ -40,6 +40,12 @@ Interim stance:
 Immediate:
 - Tooling and telemetry contracts can be made unambiguous in #90.
 - Bench acceptance logic in #88 is less likely to repeat address-vocabulary false positives.
+- #96 advances the packet-side boundary: the tracer's `emitTrace_`
+  now uses `isLegalWireUA()` to emit a uniform `wireUA`/`legal`/`UA`
+  field set, so an illegal wire-UA byte is no longer silently converted
+  into a plausible-looking semantic UA. The deeper product-surface
+  question (should `wireUA()` exist on `RemoteNodeHandle` at all)
+  remains deferred to #9.
 Deferred:
 - Product API cleanup remains open until #9 settles cross-role and cross-strategy vocabulary at once.
 ## Revisit trigger
