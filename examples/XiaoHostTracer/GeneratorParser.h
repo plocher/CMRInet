@@ -46,6 +46,21 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
   char* token = strtok_r(args, " ", &saveptr);
   if (!token) return p;
 
+  // Case-insensitive comparison for user-typed C&C keys and values.
+  // A user typing "UA 31" or "Period 750" should parse the same as
+  // "ua 31" or "period 750" — the keys are not case-significant.
+  // gen_name is kept case-sensitive: it is dispatched programmatically
+  // by the verb handler, not typed by the user.
+  auto iequals = [](const char* a, const char* b) -> bool {
+    while (*a && *b) {
+      if (tolower(static_cast<unsigned char>(*a)) !=
+          tolower(static_cast<unsigned char>(*b)))
+        return false;
+      ++a; ++b;
+    }
+    return *a == *b;
+  };
+
   if (strcmp(gen_name, "stall") == 0) {
     if (isdigit(token[0])) {
       p.has_stall_ms = true;
@@ -67,7 +82,7 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         (strcmp(gen_name, "fastwalker") == 0 ||
          strcmp(gen_name, "slowwalker") == 0 ||
          strcmp(gen_name, "toggleoutfrominput") == 0);
-    if (node_scoped_gen && strcmp(key, "ua") == 0) {
+    if (node_scoped_gen && iequals(key, "ua")) {
       const unsigned long UA_val = strtoul(val_str, nullptr, 10);
       if (UA_val > 127UL) {
         p.error_code = "badValue";
@@ -81,10 +96,10 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
     }
 
     if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
-      if (strcmp(key, "period") == 0) {
+      if (iequals(key, "period")) {
         p.has_period = true;
         p.period_ms = strtoul(val_str, nullptr, 10);
-      } else if (strcmp(key, "byte") == 0) {
+      } else if (iequals(key, "byte")) {
         p.has_byte = true;
         p.byte_idx = strtoul(val_str, nullptr, 10);
       } else {
@@ -93,13 +108,13 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         return p;
       }
     } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
-      if (strcmp(key, "in") == 0) {
+      if (iequals(key, "in")) {
         p.has_in = true;
         p.in_bit = strtoul(val_str, nullptr, 10);
-      } else if (strcmp(key, "out") == 0) {
+      } else if (iequals(key, "out")) {
         p.has_out = true;
         p.out_bit = strtoul(val_str, nullptr, 10);
-      } else if (strcmp(key, "src_byte") == 0) {
+      } else if (iequals(key, "src_byte")) {
         const unsigned long parsed = strtoul(val_str, nullptr, 10);
         if (parsed > 255UL) {
           p.error_code = "badValue";
@@ -108,7 +123,7 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         }
         p.has_src_byte = true;
         p.src_byte = static_cast<uint8_t>(parsed);
-      } else if (strcmp(key, "src_bit") == 0) {
+      } else if (iequals(key, "src_bit")) {
         const unsigned long parsed = strtoul(val_str, nullptr, 10);
         if (parsed > 7UL) {
           p.error_code = "badValue";
@@ -117,7 +132,7 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         }
         p.has_src_bit = true;
         p.src_bit = static_cast<uint8_t>(parsed);
-      } else if (strcmp(key, "dst_byte") == 0) {
+      } else if (iequals(key, "dst_byte")) {
         const unsigned long parsed = strtoul(val_str, nullptr, 10);
         if (parsed > 255UL) {
           p.error_code = "badValue";
@@ -126,7 +141,7 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         }
         p.has_dst_byte = true;
         p.dst_byte = static_cast<uint8_t>(parsed);
-      } else if (strcmp(key, "dst_bit") == 0) {
+      } else if (iequals(key, "dst_bit")) {
         const unsigned long parsed = strtoul(val_str, nullptr, 10);
         if (parsed > 7UL) {
           p.error_code = "badValue";
@@ -135,11 +150,11 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         }
         p.has_dst_bit = true;
         p.dst_bit = static_cast<uint8_t>(parsed);
-      } else if (strcmp(key, "mode") == 0) {
+      } else if (iequals(key, "mode")) {
         p.has_loopback_mode = true;
-        if (strcmp(val_str, "toggle") == 0) {
+        if (iequals(val_str, "toggle")) {
           p.loopback_mode_write_read = false;
-        } else if (strcmp(val_str, "write_read") == 0) {
+        } else if (iequals(val_str, "write_read")) {
           p.loopback_mode_write_read = true;
         } else {
           p.error_code = "badValue";
@@ -152,13 +167,13 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
         return p;
       }
     } else if (strcmp(gen_name, "stall") == 0) {
-      if (strcmp(key, "period") == 0) {
+      if (iequals(key, "period")) {
         p.has_period = true;
         p.period_ms = strtoul(val_str, nullptr, 10);
-      } else if (strcmp(key, "mode") == 0) {
+      } else if (iequals(key, "mode")) {
         p.has_mode = true;
-        if (strcmp(val_str, "yield") == 0) p.mode_busy = false;
-        else if (strcmp(val_str, "busy") == 0) p.mode_busy = true;
+        if (iequals(val_str, "yield")) p.mode_busy = false;
+        else if (iequals(val_str, "busy")) p.mode_busy = true;
         else {
           p.error_code = "badValue";
           p.error_val = val_str;
