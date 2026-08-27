@@ -6,8 +6,8 @@
 #include <ctype.h>
 
 struct ParsedGeneratorParams {
-  bool has_ua = false;
-  uint8_t ua = 0;
+  bool has_UA = false;
+  uint8_t UA = 0;
   bool has_period = false;
   uint32_t period_ms = 0;
 
@@ -68,14 +68,14 @@ inline ParsedGeneratorParams parseGeneratorParams(char* args, const char* gen_na
          strcmp(gen_name, "slowwalker") == 0 ||
          strcmp(gen_name, "toggleoutfrominput") == 0);
     if (node_scoped_gen && strcmp(key, "ua") == 0) {
-      const unsigned long ua_val = strtoul(val_str, nullptr, 10);
-      if (ua_val > 127UL) {
+      const unsigned long UA_val = strtoul(val_str, nullptr, 10);
+      if (UA_val > 127UL) {
         p.error_code = "badValue";
         p.error_val = val_str;
         return p;
       }
-      p.has_ua = true;
-      p.ua = static_cast<uint8_t>(ua_val);
+      p.has_UA = true;
+      p.UA = static_cast<uint8_t>(UA_val);
       token = strtok_r(nullptr, " ", &saveptr);
       continue;
     }

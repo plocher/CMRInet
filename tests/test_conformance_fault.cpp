@@ -32,7 +32,7 @@ void tearDown(void) {}
 static const ConformanceFault kAllFaults[] = {
     ConformanceFault::kNone,
     ConformanceFault::kImageGeometryMismatch,
-    ConformanceFault::kPacketUnexpectedAddress,
+    ConformanceFault::kPacketUnexpectedUA,
     ConformanceFault::kPacketUnexpectedType,
 };
 
@@ -83,7 +83,7 @@ static void test_geometry_mismatch_is_an_image_layer_disagreement(void) {
 
 static void test_packet_faults_sit_on_the_packet_layer(void) {
   TEST_ASSERT_EQUAL(ConformanceLayer::kPacket,
-                    layerOf(ConformanceFault::kPacketUnexpectedAddress));
+                    layerOf(ConformanceFault::kPacketUnexpectedUA));
   TEST_ASSERT_EQUAL(ConformanceLayer::kPacket,
                     layerOf(ConformanceFault::kPacketUnexpectedType));
 }

@@ -27,8 +27,10 @@ constexpr uint8_t kStx = 0x02u;  // STX/0x02 — frame start
 constexpr uint8_t kEtx = 0x03u;  // ETX/0x03 — frame end
 constexpr uint8_t kDle = 0x10u;  // DLE/0x10 — escape prefix
 
-// VALIDATION: Interop v1.1 "Terms": UA = Node address + 65.
-constexpr uint8_t kUaOffset = 65u;
+// VALIDATION: Interop v1.1 "Terms": wire UA = UA + 65.
+// A node's Unit Address (UA) is an ordinal in the range 0..127. The
+// wire UA is the byte transmitted on the serial line: UA + 65.
+constexpr uint8_t kWireUAOffset = 65u;
 
 // Message types the polled strategy speaks.
 // VALIDATION: Interop v1.1 E9: the codec never validates MT — fielded
@@ -55,14 +57,14 @@ constexpr size_t kMaxWireFrame = 6u + 2u * kMaxBody;
 /// includes the +65 offset). The body holds logical data bytes — no SYN,
 /// no framing, no DLE stuffing.
 struct CMRIPacket {
-  uint8_t ua = 0;       ///< unit address byte as transmitted (address + 65)
+  uint8_t wireUA = 0;   ///< wire unit-UA byte as transmitted (UA + 65)
   uint8_t mt = 0;       ///< message type byte ('I','P','T','R', extensions)
   uint16_t length = 0;  ///< logical body bytes in use, <= kMaxBody
   uint8_t body[kMaxBody] = {0};
 
   /// Reset to an empty packet (UA 0, MT 0, zero-length body).
   void clear() {
-    ua = 0;
+    wireUA = 0;
     mt = 0;
     length = 0;
   }

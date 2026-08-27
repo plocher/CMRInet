@@ -28,13 +28,13 @@
 // C&C: verbs on the CDC stream, JSON lines back. Every verb that acts
 // on a node names its UA — the shell holds no bound node (Design v1.2
 // D5), so there is no implicit target:
-//   status | status <ua>
-//   quiesce <ua> | resume <ua> | forcetx <ua>
-//   setbit <ua> <bit> <0|1> | writeoutputs <ua> <hex>
-//   node add <ua> <in> <out> | node delete <ua>
-//   node geometry <ua> <in> <out>
-//   node enable <ua> | node disable <ua>
-//   enable|disable|configure <generator> [ua <n>] ...
+//   status | status <UA>
+//   quiesce <UA> | resume <UA> | forcetx <UA>
+//   setbit <UA> <bit> <0|1> | writeoutputs <UA> <hex>
+//   node add <UA> <in> <out> | node delete <UA>
+//   node geometry <UA> <in> <out>
+//   node enable <UA> | node disable <UA>
+//   enable|disable|configure <generator> [UA <n>] ...
 //   run <secs> | dump | reset | reboot | display <1|2> <text> | quit
 // After quit the image emits "final" and parks; reset the board to run
 // again.
@@ -126,13 +126,13 @@ void updateDisplayIncremental() {
 
 // Build-time knobs, overridable from a CLI build — e.g. the wrong-UA
 // negative test:
-//   --build-property "build.defines=-DTRACER_ADDRESS=31"
+//   --build-property "build.defines=-DTRACER_UA=31"
 // (build.defines, NOT build.extra_flags: the esp32 core composes
 // build.extra_flags itself, and overriding it clobbers the board's
 // -DARDUINO_USB_CDC_ON_BOOT=1 — which would silently move Serial off
 // the USB CDC console this image depends on.)
-#ifndef TRACER_ADDRESS
-#define TRACER_ADDRESS 30     // node address; wire UA = address + 65
+#ifndef TRACER_UA
+#define TRACER_UA 30     // node UA; wire UA = UA + 65
 #endif
 #ifndef TRACER_INPUT_BYTES
 #define TRACER_INPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX IN
@@ -146,8 +146,8 @@ void updateDisplayIncremental() {
 #ifndef TRACER_INTER_BYTE_TIMEOUT_MS
 #define TRACER_INTER_BYTE_TIMEOUT_MS 50  // 0 disables (interop 2.2.6 exception)
 #endif
-#ifndef TRACER_PHANTOM_ADDRESS
-#define TRACER_PHANTOM_ADDRESS 32
+#ifndef TRACER_PHANTOM_UA
+#define TRACER_PHANTOM_UA 32
 #endif
 #ifndef TRACER_PHANTOM_INPUT_BYTES
 #define TRACER_PHANTOM_INPUT_BYTES 4
@@ -177,7 +177,7 @@ constexpr const char* kImage = "xiao_host_tracer";
 // into the shared shell so both tracer images speak one vocabulary. New
 // `node delete` / `node geometry`; `node add` works after begin() now
 // that D5 unlocked the table. `status` reports host scope plus a roster;
-// `status <ua>` reports one node. Telemetry carries the UA and never the
+// `status <UA>` reports one node. Telemetry carries the UA and never the
 // wire byte, so the roster is keyed the way its readers key it (#90).
 // 0.8.0 (#90): ring-dump PKT lines now emit semantic UA (0..127), never
 // the CMRI wire byte. This keeps decoded telemetry uniform: framing and
@@ -206,7 +206,7 @@ bool finished = false;  // quit latched: "final" emitted, polling parked
 // ---- RAM Ring Buffer ----------------------------------------------------
 struct RingRecord {
   uint32_t t_ms;
-  uint8_t ua;
+  uint8_t UA;
   uint8_t mt;
   uint8_t flags; // bit 0 = TX, bit 1 = invalid wire-UA at capture
   uint8_t len;
@@ -224,16 +224,16 @@ uint32_t run_it_frames = 0;
 uint32_t run_invalid_ua_records = 0;
 constexpr uint8_t kRingFlagTx = 0x01u;
 constexpr uint8_t kRingFlagInvalidUa = 0x02u;
-constexpr uint8_t kMaxWireUa = static_cast<uint8_t>(CMRInet::kUaOffset + 127u);
-bool isLegalWireUa(uint8_t wireUa) {
-  return wireUa >= CMRInet::kUaOffset && wireUa <= kMaxWireUa;
+constexpr uint8_t kMaxWireUA = static_cast<uint8_t>(CMRInet::kWireUAOffset + 127u);
+bool isLegalWireUA(uint8_t wireUA) {
+  return wireUA >= CMRInet::kWireUAOffset && wireUA <= kMaxWireUA;
 }
 
 /// Convert a legal CMRI wire-UA byte to semantic UA (0..127).
-/// PRECONDITION: `wireUa` must satisfy isLegalWireUa(wireUa).
+/// PRECONDITION: `wireUA` must satisfy isLegalWireUA(wireUA).
 
-uint8_t toSemanticUa(uint8_t wireUa) {
-  return static_cast<uint8_t>(wireUa - CMRInet::kUaOffset);
+uint8_t toSemanticUA(uint8_t wireUA) {
+  return static_cast<uint8_t>(wireUA - CMRInet::kWireUAOffset);
 }
 
 void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet) {
@@ -243,9 +243,9 @@ void ourOnTrace(void* context, bool transmit, const CMRInet::CMRIPacket& packet)
     }
     if (ring_used < kRingCap) {
       RingRecord& r = ring[ring_used++];
-      const bool legalUa = isLegalWireUa(packet.ua);
+      const bool legalUa = isLegalWireUA(packet.wireUA);
       r.t_ms = millis();
-      r.ua = legalUa ? toSemanticUa(packet.ua) : packet.ua;
+      r.UA = legalUa ? toSemanticUA(packet.wireUA) : packet.wireUA;
       r.mt = packet.mt;
       r.flags = transmit ? kRingFlagTx : 0u;
       if (!legalUa) {
@@ -324,13 +324,13 @@ bool readVerb(char* out, size_t len) {
 }  // namespace
 // ---- Generator definitions (Issue #55) -----------------------------------
 #include "GeneratorParser.h"
-constexpr uint8_t kGeneratorDefaultUa = TRACER_ADDRESS;
-constexpr uint8_t kBenchNodeUa = 31;
+constexpr uint8_t kGeneratorDefaultUA = TRACER_UA;
+constexpr uint8_t kBenchNodeUA = 31;
 constexpr uint8_t kBenchLoopbackByte = 2;
 constexpr uint8_t kBenchLoopbackBit = 1;
 constexpr uint16_t kBenchLoopbackBitIndex =
     static_cast<uint16_t>(kBenchLoopbackByte) * 8u + kBenchLoopbackBit;
-constexpr size_t kGeneratorUaCount = 128;
+constexpr size_t kGeneratorUACount = 128;
 
 struct FastWalkerGenerator {
   bool enabled = false;
@@ -420,67 +420,67 @@ struct StallGenerator {
   }
 };
 
-FastWalkerGenerator fastwalkerByUa[kGeneratorUaCount];
-SlowWalkerGenerator slowwalkerByUa[kGeneratorUaCount];
-ToggleOutFromInputGenerator toggleoutfrominputByUa[kGeneratorUaCount];
-bool generatorDefaultsInitialized[kGeneratorUaCount] = {false};
+FastWalkerGenerator fastwalkerByUA[kGeneratorUACount];
+SlowWalkerGenerator slowwalkerByUA[kGeneratorUACount];
+ToggleOutFromInputGenerator toggleoutfrominputByUA[kGeneratorUACount];
+bool generatorDefaultsInitialized[kGeneratorUACount] = {false};
 StallGenerator stall;
 
-void initializeGeneratorDefaults(uint8_t ua) {
-  if (ua >= kGeneratorUaCount || generatorDefaultsInitialized[ua]) return;
-  fastwalkerByUa[ua] = FastWalkerGenerator{};
-  slowwalkerByUa[ua] = SlowWalkerGenerator{};
-  toggleoutfrominputByUa[ua] = ToggleOutFromInputGenerator{};
-  if (ua == kBenchNodeUa) {
-    slowwalkerByUa[ua].byte = kBenchLoopbackByte;
-    toggleoutfrominputByUa[ua].in_bit = kBenchLoopbackBitIndex;
-    toggleoutfrominputByUa[ua].out_bit = kBenchLoopbackBitIndex;
-    toggleoutfrominputByUa[ua].mode = ToggleOutFromInputGenerator::Mode::kWriteRead;
+void initializeGeneratorDefaults(uint8_t UA) {
+  if (UA >= kGeneratorUACount || generatorDefaultsInitialized[UA]) return;
+  fastwalkerByUA[UA] = FastWalkerGenerator{};
+  slowwalkerByUA[UA] = SlowWalkerGenerator{};
+  toggleoutfrominputByUA[UA] = ToggleOutFromInputGenerator{};
+  if (UA == kBenchNodeUA) {
+    slowwalkerByUA[UA].byte = kBenchLoopbackByte;
+    toggleoutfrominputByUA[UA].in_bit = kBenchLoopbackBitIndex;
+    toggleoutfrominputByUA[UA].out_bit = kBenchLoopbackBitIndex;
+    toggleoutfrominputByUA[UA].mode = ToggleOutFromInputGenerator::Mode::kWriteRead;
   }
-  generatorDefaultsInitialized[ua] = true;
+  generatorDefaultsInitialized[UA] = true;
 }
 
 void disableAllNodeScopedGenerators() {
-  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
-    if (!generatorDefaultsInitialized[ua]) continue;
-    fastwalkerByUa[ua].enabled = false;
-    slowwalkerByUa[ua].enabled = false;
-    toggleoutfrominputByUa[ua].enabled = false;
+  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
+    if (!generatorDefaultsInitialized[UA]) continue;
+    fastwalkerByUA[UA].enabled = false;
+    slowwalkerByUA[UA].enabled = false;
+    toggleoutfrominputByUA[UA].enabled = false;
   }
 }
 
 size_t countEnabledFastwalker() {
   size_t count = 0;
-  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
-    if (generatorDefaultsInitialized[ua] && fastwalkerByUa[ua].enabled) ++count;
+  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
+    if (generatorDefaultsInitialized[UA] && fastwalkerByUA[UA].enabled) ++count;
   }
   return count;
 }
 
 size_t countEnabledSlowwalker() {
   size_t count = 0;
-  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
-    if (generatorDefaultsInitialized[ua] && slowwalkerByUa[ua].enabled) ++count;
+  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
+    if (generatorDefaultsInitialized[UA] && slowwalkerByUA[UA].enabled) ++count;
   }
   return count;
 }
 
 size_t countEnabledLoopback() {
   size_t count = 0;
-  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
-    if (generatorDefaultsInitialized[ua] && toggleoutfrominputByUa[ua].enabled) ++count;
+  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
+    if (generatorDefaultsInitialized[UA] && toggleoutfrominputByUA[UA].enabled) ++count;
   }
   return count;
 }
 
 void tickNodeScopedGenerators(uint32_t now_ms) {
-  for (size_t ua = 0; ua < kGeneratorUaCount; ++ua) {
-    if (!generatorDefaultsInitialized[ua]) continue;
-    FastWalkerGenerator& fast = fastwalkerByUa[ua];
-    SlowWalkerGenerator& slow = slowwalkerByUa[ua];
-    ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[ua];
+  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
+    if (!generatorDefaultsInitialized[UA]) continue;
+    FastWalkerGenerator& fast = fastwalkerByUA[UA];
+    SlowWalkerGenerator& slow = slowwalkerByUA[UA];
+    ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[UA];
     if (!fast.enabled && !slow.enabled && !loopback.enabled) continue;
-    CMRInet::RemoteNodeHandle* target = host.node(static_cast<uint8_t>(ua));
+    CMRInet::RemoteNodeHandle* target = host.node(static_cast<uint8_t>(UA));
     fast.tick(now_ms, target);
     slow.tick(now_ms, target);
     loopback.tick(now_ms, target);
@@ -488,14 +488,14 @@ void tickNodeScopedGenerators(uint32_t now_ms) {
 }
 
 void emitGeneratorEvent(const char* event, const char* generator,
-                        bool include_ua, uint8_t ua) {
+                        bool include_ua, uint8_t UA) {
   Serial.print("{\"event\":\"");
   Serial.print(event);
   Serial.print("\",\"generator\":\"");
   Serial.print(generator);
   if (include_ua) {
     Serial.print("\",\"ua\":");
-    Serial.print(ua);
+    Serial.print(UA);
     Serial.println("}");
   } else {
     Serial.println("\"}");
@@ -549,14 +549,14 @@ bool handleGeneratorControl(char* cmd) {
     }
   }
 
-  uint8_t target_ua = kGeneratorDefaultUa;
-  if (node_scoped_gen && p.has_ua) target_ua = p.ua;
+  uint8_t target_ua = kGeneratorDefaultUA;
+  if (node_scoped_gen && p.has_UA) target_ua = p.wireUA;
   if (node_scoped_gen) initializeGeneratorDefaults(target_ua);
 
   if (is_disable) {
-    if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].enabled = false;
-    else if (strcmp(gen_name, "slowwalker") == 0) slowwalkerByUa[target_ua].enabled = false;
-    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominputByUa[target_ua].enabled = false;
+    if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].enabled = false;
+    else if (strcmp(gen_name, "slowwalker") == 0) slowwalkerByUA[target_ua].enabled = false;
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominputByUA[target_ua].enabled = false;
     else if (strcmp(gen_name, "stall") == 0) stall.enabled = false;
     emitGeneratorEvent("disable", gen_name, node_scoped_gen, target_ua);
     return true;
@@ -565,17 +565,17 @@ bool handleGeneratorControl(char* cmd) {
   if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
     if (args != nullptr) {
       if (p.has_period) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].period_ms = p.period_ms;
-        else slowwalkerByUa[target_ua].period_ms = p.period_ms;
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].period_ms = p.period_ms;
+        else slowwalkerByUA[target_ua].period_ms = p.period_ms;
       }
       if (p.has_byte) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUa[target_ua].byte = p.byte_idx;
-        else slowwalkerByUa[target_ua].byte = p.byte_idx;
+        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].byte = p.byte_idx;
+        else slowwalkerByUA[target_ua].byte = p.byte_idx;
       }
     }
   } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
     if (args != nullptr) {
-      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[target_ua];
+      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[target_ua];
       if (p.has_in) loopback.in_bit = p.in_bit;
       if (p.has_out) loopback.out_bit = p.out_bit;
       if (p.has_src_byte && p.has_src_bit) {
@@ -605,17 +605,17 @@ bool handleGeneratorControl(char* cmd) {
   if (is_enable) {
     lazyBegin();
     if (strcmp(gen_name, "fastwalker") == 0) {
-      FastWalkerGenerator& fast = fastwalkerByUa[target_ua];
+      FastWalkerGenerator& fast = fastwalkerByUA[target_ua];
       fast.enabled = true;
       fast.last_ms = 0;
       fast.step = 0;
     } else if (strcmp(gen_name, "slowwalker") == 0) {
-      SlowWalkerGenerator& slow = slowwalkerByUa[target_ua];
+      SlowWalkerGenerator& slow = slowwalkerByUA[target_ua];
       slow.enabled = true;
       slow.last_ms = 0;
       slow.step = 0;
     } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
-      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUa[target_ua];
+      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[target_ua];
       loopback.enabled = true;
       CMRInet::RemoteNodeHandle* target = host.node(target_ua);
       const size_t in_bits = target ? (target->inputLength() * 8u) : 0u;
@@ -640,15 +640,15 @@ bool handleGeneratorControl(char* cmd) {
 /// This used to also emit a `nodes` array, which the shell now owns as
 /// `roster`. Two reasons it had to move: the shell can keep it in step
 /// with runtime membership changes, and the copy here keyed each entry by
-/// `n->ua()` -- the *wire byte* (95), not the UA (30) -- so
+/// `n->wireUA()` -- the *wire byte* (95), not the UA (30) -- so
 /// analyze_bench_validation.py built its map on 95 and looked it up on
 /// 30, missed every time, and left its UNINITIALIZED/OFFLINE check dead.
 /// See #90.
 void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity) {
-  initializeGeneratorDefaults(kGeneratorDefaultUa);
-  const FastWalkerGenerator& defaultFastwalker = fastwalkerByUa[kGeneratorDefaultUa];
-  const SlowWalkerGenerator& defaultSlowwalker = slowwalkerByUa[kGeneratorDefaultUa];
-  const ToggleOutFromInputGenerator& defaultLoopback = toggleoutfrominputByUa[kGeneratorDefaultUa];
+  initializeGeneratorDefaults(kGeneratorDefaultUA);
+  const FastWalkerGenerator& defaultFastwalker = fastwalkerByUA[kGeneratorDefaultUA];
+  const SlowWalkerGenerator& defaultSlowwalker = slowwalkerByUA[kGeneratorDefaultUA];
+  const ToggleOutFromInputGenerator& defaultLoopback = toggleoutfrominputByUA[kGeneratorDefaultUA];
   const char* loopbackMode =
       (defaultLoopback.mode == ToggleOutFromInputGenerator::Mode::kWriteRead)
           ? "write_read"
@@ -661,17 +661,17 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
     "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,\"mode\":\"%s\",\"enabled_count\":%u},"
     "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
     "}",
-    static_cast<unsigned>(kGeneratorDefaultUa),
+    static_cast<unsigned>(kGeneratorDefaultUA),
     defaultFastwalker.enabled ? "true" : "false",
     (unsigned long)defaultFastwalker.period_ms,
     defaultFastwalker.byte,
     static_cast<unsigned>(countEnabledFastwalker()),
-    static_cast<unsigned>(kGeneratorDefaultUa),
+    static_cast<unsigned>(kGeneratorDefaultUA),
     defaultSlowwalker.enabled ? "true" : "false",
     (unsigned long)defaultSlowwalker.period_ms,
     defaultSlowwalker.byte,
     static_cast<unsigned>(countEnabledSlowwalker()),
-    static_cast<unsigned>(kGeneratorDefaultUa),
+    static_cast<unsigned>(kGeneratorDefaultUA),
     defaultLoopback.enabled ? "true" : "false",
     defaultLoopback.in_bit,
     defaultLoopback.out_bit,
@@ -685,14 +685,14 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
 /// Draw the host status panel (shared HostStatusPanel, same layout as
 /// SimpleHost): header with alternating cadence, one per-node row with
 /// state / latency / recent errors. Defined after the anonymous
-/// namespace so it can see host, node, and TRACER_ADDRESS.
+/// namespace so it can see host, node, and TRACER_UA.
 void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
   // Resolved at the point of use, not cached: the operator can delete
   // this node at runtime now, and a cached handle would keep drawing a
   // tombstone -- or a different device that reused its slot (D5).
-  CMRInet::RemoteNodeHandle* node = host.node(TRACER_ADDRESS);
+  CMRInet::RemoteNodeHandle* node = host.node(TRACER_UA);
   const uint32_t pollsSent = host.statistics().pollsSent;
   uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
   panel.sample(now, pollsSent, nodeErrs, 1);
@@ -714,7 +714,7 @@ void drawHostStatus() {
       ? node->statistics().lastTurnaroundMs : 0;
   char row[24];
   panel.nodeRowText(row, sizeof(row), now, 0,
-                    TRACER_ADDRESS, tag, latMs);
+                    TRACER_UA, tag, latMs);
   display.setTextSize(1);
   display.setCursor(0, 20);
   display.print(row);
@@ -777,12 +777,12 @@ void setup() {
   nodeConfig.inputBytes = TRACER_INPUT_BYTES;
   nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
   const CMRInet::CMRIHost::ConfigStatus realStatus =
-      host.addRemoteNode(TRACER_ADDRESS, nodeConfig);
+      host.addRemoteNode(TRACER_UA, nodeConfig);
   CMRInet::RemoteNodeConfig phantomNodeConfig;
   phantomNodeConfig.inputBytes = TRACER_PHANTOM_INPUT_BYTES;
   phantomNodeConfig.outputBytes = TRACER_PHANTOM_OUTPUT_BYTES;
   const CMRInet::CMRIHost::ConfigStatus phantomStatus =
-      host.addRemoteNode(TRACER_PHANTOM_ADDRESS, phantomNodeConfig);
+      host.addRemoteNode(TRACER_PHANTOM_UA, phantomNodeConfig);
   setupStatus = (realStatus != CMRInet::CMRIHost::ConfigStatus::kOk)
       ? realStatus
       : phantomStatus;
@@ -906,9 +906,9 @@ void loop() {
         const RingRecord& r = ring[i];
         Serial.print("PKT t="); Serial.print(r.t_ms);
         Serial.print((r.flags & kRingFlagTx) != 0u ? " TX " : " RX ");
-        Serial.print("ua="); Serial.print(r.ua);
+        Serial.print("UA="); Serial.print(r.UA);
         if ((r.flags & kRingFlagInvalidUa) != 0u) {
-          Serial.print(" ua_invalid=1");
+          Serial.print(" wireUA_invalid=1");
         }
         Serial.print(" mt="); Serial.print((char)r.mt);
         Serial.print(" len="); Serial.print(r.len);

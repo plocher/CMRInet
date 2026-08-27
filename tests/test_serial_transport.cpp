@@ -17,7 +17,7 @@ using CMRInet::CMRIPacket;
 using CMRInet::CMRISerialPort;
 using CMRInet::encodeFrame;
 using CMRInet::kMaxBody;
-using CMRInet::kUaOffset;
+using CMRInet::kWireUAOffset;
 using CMRInet::SerialCMRITransport;
 
 void setUp(void) {}
@@ -122,11 +122,11 @@ class FakeCMRISerialPort : public CMRISerialPort {
 
 // ---------------------------------------------------------------- helpers
 
-/// Build a packet for node address `addr` (UA = addr + 65).
+/// Build a packet for node UA `addr` (UA = addr + 65).
 static CMRIPacket makePacket(uint8_t addr, uint8_t mt,
                              const uint8_t* body = nullptr, size_t len = 0) {
   CMRIPacket p;
-  p.ua = static_cast<uint8_t>(addr + kUaOffset);
+  p.wireUA = static_cast<uint8_t>(addr + kWireUAOffset);
   p.mt = mt;
   TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
   return p;
@@ -280,7 +280,7 @@ static void test_rx_decodes_whole_validated_frame(void) {
   t.tick(0);
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(sent.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(sent.wireUA, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('R', got.mt);
   TEST_ASSERT_EQUAL_UINT16(sizeof(body), got.length);
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));
@@ -314,7 +314,7 @@ static void test_rx_truncated_frame_never_delivers(void) {
   port.queueRx(wire, n);
   t.tick(102);
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(ok.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(ok.wireUA, got.wireUA);
 }
 
 static void test_rx_works_while_transmit_drains(void) {
@@ -335,7 +335,7 @@ static void test_rx_works_while_transmit_drains(void) {
   TEST_ASSERT_FALSE(t.sendComplete());
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(reply.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(reply.wireUA, got.wireUA);
 }
 
 static void test_rx_queue_overflow_keeps_oldest_drops_newest(void) {
@@ -352,7 +352,7 @@ static void test_rx_queue_overflow_keeps_oldest_drops_newest(void) {
   CMRIPacket got;
   for (uint8_t i = 0; i < SerialCMRITransport::kRxQueueCapacity; ++i) {
     TEST_ASSERT_TRUE(t.receivePacket(got));
-    TEST_ASSERT_EQUAL_HEX8(i + kUaOffset, got.ua);  // arrival order held
+    TEST_ASSERT_EQUAL_HEX8(i + kWireUAOffset, got.wireUA);  // arrival order held
   }
   TEST_ASSERT_FALSE(t.receivePacket(got));
 }
@@ -412,7 +412,7 @@ static void test_timeout_override_and_disable(void) {
   t.tick(60001);
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(0x46, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);
   TEST_ASSERT_EQUAL_UINT32(0, t.stats().decodeErrors);
 }
 
@@ -490,7 +490,7 @@ static void test_slow_gap_observed_end_to_end_through_transport(void) {
 
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(sent.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(sent.wireUA, got.wireUA);
   TEST_ASSERT_EQUAL_UINT32(1, t.decoderStatistics().slowGaps);
   TEST_ASSERT_EQUAL_UINT32(50, t.decoderStatistics().maxGapMs);
   TEST_ASSERT_EQUAL_UINT32(0, t.decoderStatistics().timeoutAborts);

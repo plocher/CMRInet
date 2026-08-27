@@ -3,7 +3,7 @@
 // bench-exercisable, the outputs hex field, and error lines.
 //
 // The engine is driven against a minimal FakePort + SerialCMRITransport
-// + CMRIHost (address 5, 2 input / 3 output bytes). The fake port's
+// + CMRIHost (UA 5, 2 input / 3 output bytes). The fake port's
 // character time is 1 us so wire-time drains in ~1 ms and the I->T->P
 // schedule advances in single-millisecond ticks. Every assertion runs
 // on the injected clock; no test sleeps. JSON lines are captured through
@@ -26,7 +26,7 @@ using CMRInet::CMRIHostConfig;
 using CMRInet::CMRIPacket;
 using CMRInet::CMRISerialPort;
 using CMRInet::encodeFrame;
-using CMRInet::kUaOffset;
+using CMRInet::kWireUAOffset;
 using CMRInet::RemoteNodeConfig;
 using CMRInet::RemoteNodeHandle;
 using CMRInet::SerialCMRITransport;
@@ -226,7 +226,7 @@ static void test_trace_emits_rx_reply(void) {
   const uint8_t body[] = {0xA5, 0x01};
   const CMRIPacket reply = [&] {
     CMRIPacket p;
-    p.ua = 5 + kUaOffset;
+    p.wireUA = 5 + kWireUAOffset;
     p.mt = 'R';
     p.setBody(body, sizeof(body));
     return p;
@@ -409,7 +409,7 @@ static void test_telemetry_speaks_the_ua_not_the_wire_byte(void) {
   TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"ua\":5,"),
                            "trace line does not report the semantic UA");
   char wire[16];
-  snprintf(wire, sizeof(wire), "\"ua\":%u", 5u + kUaOffset);
+  snprintf(wire, sizeof(wire), "\"ua\":%u", 5u + kWireUAOffset);
   TEST_ASSERT_FALSE_MESSAGE(contains(*line, wire),
                             "trace line leaked the wire byte as the UA");
   TEST_ASSERT_FALSE_MESSAGE(contains(*line, "\"address\":"),
@@ -452,7 +452,7 @@ static void test_node_add_and_delete_verbs_move_the_roster(void) {
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"nodes\":2"),
                            "roster did not grow");
 
-  // Adding the same address again is a reported rejection, not a no-op.
+  // Adding the same UA again is a reported rejection, not a no-op.
   rig.lines.clear();
   rig.verb("node add 9 1 2");
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"addFailed\""),
@@ -642,7 +642,7 @@ static void test_node_status_line_reports_the_geometry_disagreement(void) {
   const uint8_t threeBytes[] = {0x11, 0x22, 0x33};
   const CMRIPacket reply = [&] {
     CMRIPacket p;
-    p.ua = 5 + kUaOffset;
+    p.wireUA = 5 + kWireUAOffset;
     p.mt = 'R';
     p.setBody(threeBytes, sizeof(threeBytes));
     return p;

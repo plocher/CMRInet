@@ -30,7 +30,7 @@
 //
 // ---- Two rules this file exists to keep straight ----
 //
-// 1. THE SHELL HOLDS NO NODE. It resolves host.node(ua) at the point of
+// 1. THE SHELL HOLDS NO NODE. It resolves host.node(UA) at the point of
 //    use. Caching a RemoteNodeHandle is exactly the pattern Design v1.2
 //    D5 deprecates: the storage survives a delete, but the slot may be
 //    reused by a different logical device, so a cached handle silently
@@ -41,10 +41,10 @@
 //    outcome, not an exceptional one.
 //
 // 2. TELEMETRY SPEAKS THE UA, NEVER THE WIRE BYTE. Per the spec the UA
-//    is the semantic address 0..127; the wire payload carries
+//    is the semantic UA 0..127; the wire payload carries
 //    UA + ord('A'). The wire byte is an encoding detail of the transport
 //    and no reader should see or key on it. This file used to emit both
-//    ("address":30,"ua":95), which is backwards and useless. See #90 for
+//    ("UA":30,"UA":95), which is backwards and useless. See #90 for
 //    the consumers still speaking the old vocabulary.
 
 #pragma once
@@ -105,16 +105,16 @@ inline const char* eventName(CMRIHostEventType type) {
 /// Verb vocabulary. Every verb acting on a node names its UA:
 ///
 ///   status                          host counters plus the node roster
-///   status <ua>                     one node's image, health, counters
-///   quiesce <ua> | resume <ua>      out of / back into the rotation
-///   forcetx <ua>                    re-send a full T with no change
-///   setbit <ua> <bit> <0|1>         one output bit
-///   writeoutputs <ua> <hex>         whole output image
-///   node add <ua> <in> <out>        runtime add (Design v1.2 D5)
-///   node delete <ua>                runtime delete
-///   node geometry <ua> <in> <out>   runtime geometry change
-///   node enable <ua>                alias of resume (bench probes)
-///   node disable <ua>               alias of quiesce (bench probes)
+///   status <UA>                     one node's image, health, counters
+///   quiesce <UA> | resume <UA>      out of / back into the rotation
+///   forcetx <UA>                    re-send a full T with no change
+///   setbit <UA> <bit> <0|1>         one output bit
+///   writeoutputs <UA> <hex>         whole output image
+///   node add <UA> <in> <out>        runtime add (Design v1.2 D5)
+///   node delete <UA>                runtime delete
+///   node geometry <UA> <in> <out>   runtime geometry change
+///   node enable <UA>                alias of resume (bench probes)
+///   node disable <UA>               alias of quiesce (bench probes)
 ///   quit                            the main owns its own exit
 ///
 /// Lifecycle: bind() may run before or after host.begin(), since
@@ -142,7 +142,7 @@ class TracerShell {
   /// wrapping main on identity lines (`epoch` and `status`); both
   /// strings must outlive the shell.
   ///
-  /// Takes no node: the shell resolves host.node(ua) at the point of use
+  /// Takes no node: the shell resolves host.node(UA) at the point of use
   /// (Design v1.2 D5).
   void bind(CMRIHost& host, SerialCMRITransport& transport,
             const char* image, const char* version,
@@ -179,7 +179,7 @@ class TracerShell {
   /// anchor pair carries the image's absolute time reference.
   void emitEpoch(const char* anchorKey, const char* anchorValue) {
     epochMs_ = nowMs_;
-    emitHostLine_(nowMs_, "epoch", kNoUa, anchorKey, anchorValue,
+    emitHostLine_(nowMs_, "epoch", kNoUA, anchorKey, anchorValue,
                   /*identity=*/true, /*config=*/true, /*roster=*/true);
   }
 
@@ -187,7 +187,7 @@ class TracerShell {
   void emitLine(const char* event, const char* extraKey = nullptr,
                 const char* extraValue = nullptr) {
     const bool isStatus = (strcmp(event, "status") == 0);
-    emitHostLine_(nowMs_, event, kNoUa, extraKey, extraValue,
+    emitHostLine_(nowMs_, event, kNoUA, extraKey, extraValue,
                   /*identity=*/isStatus, /*config=*/false,
                   /*roster=*/isStatus);
   }
@@ -236,9 +236,9 @@ class TracerShell {
 
  private:
   /// Sentinel for "this line is not about one node".
-  static constexpr int kNoUa = -1;
+  static constexpr int kNoUA = -1;
 
-  /// One roster entry: ua, geometry, state, enabled.
+  /// One roster entry: UA, geometry, state, enabled.
   static constexpr size_t kRosterEntryBytes = 80;
 
   // Whichever line is longest bounds the buffer. A node line carries
@@ -335,7 +335,7 @@ class TracerShell {
     return VerbResult::kHandled;
   }
 
-  /// "setbit <ua> <bit> <0|1>"
+  /// "setbit <UA> <bit> <0|1>"
   VerbResult actSetbit_(const char*, const char* args,
                         RemoteNodeHandle& node) {
     unsigned long bit = 0;
@@ -361,7 +361,7 @@ class TracerShell {
     return VerbResult::kHandled;
   }
 
-  /// "writeoutputs <ua> <hex>"
+  /// "writeoutputs <UA> <hex>"
   VerbResult actWriteoutputs_(const char*, const char* args,
                               RemoteNodeHandle& node) {
     while (*args == ' ') {
@@ -427,16 +427,16 @@ class TracerShell {
   // error line on rejection. On success the engine fires kNodeAdded,
   // which onHostEvent_ renders through the same emitNodeLine_ this used
   // to call, so the line shape is unchanged. The mutator validates the
-  // UA range; the shell's old ua > 127 pre-check was redundant with it.
+  // UA range; the shell's old UA > 127 pre-check was redundant with it.
   VerbResult handleNodeAdd_(const char* args) {
-    unsigned long ua = 0, in = 0, out = 0;
-    if (!parseUint_(args, ua) || !parseUint_(args, in) ||
+    unsigned long UA = 0, in = 0, out = 0;
+    if (!parseUint_(args, UA) || !parseUint_(args, in) ||
         !parseUint_(args, out)) {
-      emitLine("error", "badVerb", "node add: want <ua> <in> <out>");
+      emitLine("error", "badVerb", "node add: want <UA> <in> <out>");
       return VerbResult::kHandled;
     }
     const CMRIHost::ConfigStatus status = host_->addRemoteNode(
-        static_cast<uint8_t>(ua), static_cast<uint16_t>(in),
+        static_cast<uint8_t>(UA), static_cast<uint16_t>(in),
         static_cast<uint16_t>(out));
     if (status != CMRIHost::ConfigStatus::kOk) {
       emitLine("error", "addFailed", configStatusString(status));
@@ -451,13 +451,13 @@ class TracerShell {
   // post-delete roster -- the same line this used to emit. The mutator
   // validates the UA range.
   VerbResult handleNodeDelete_(const char* args) {
-    unsigned long ua = 0;
-    if (!parseUint_(args, ua)) {
-      emitLine("error", "badVerb", "node delete: want <ua>");
+    unsigned long UA = 0;
+    if (!parseUint_(args, UA)) {
+      emitLine("error", "badVerb", "node delete: want <UA>");
       return VerbResult::kHandled;
     }
     const CMRIHost::ConfigStatus status =
-        host_->deleteRemoteNode(static_cast<uint8_t>(ua));
+        host_->deleteRemoteNode(static_cast<uint8_t>(UA));
     if (status != CMRIHost::ConfigStatus::kOk) {
       emitLine("error", "deleteFailed", configStatusString(status));
       return VerbResult::kHandled;
@@ -471,14 +471,14 @@ class TracerShell {
   // previous and new NI/NO -- a strict superset of the line this used to
   // emit. The mutator validates the UA range and byte ceilings.
   VerbResult handleNodeGeometry_(const char* args) {
-    unsigned long ua = 0, in = 0, out = 0;
-    if (!parseUint_(args, ua) || !parseUint_(args, in) ||
+    unsigned long UA = 0, in = 0, out = 0;
+    if (!parseUint_(args, UA) || !parseUint_(args, in) ||
         !parseUint_(args, out)) {
-      emitLine("error", "badVerb", "node geometry: want <ua> <in> <out>");
+      emitLine("error", "badVerb", "node geometry: want <UA> <in> <out>");
       return VerbResult::kHandled;
     }
     const CMRIHost::ConfigStatus status = host_->setRemoteNodeGeometry(
-        static_cast<uint8_t>(ua), static_cast<uint16_t>(in),
+        static_cast<uint8_t>(UA), static_cast<uint16_t>(in),
         static_cast<uint16_t>(out));
     if (status != CMRIHost::ConfigStatus::kOk) {
       emitLine("error", "geometryFailed", configStatusString(status));
@@ -507,7 +507,7 @@ class TracerShell {
     // (issue #91).
     if (event.type == CMRIHostEventType::kNodeDeleted) {
       self.emitHostLine_(event.nowMs, "node_delete",
-                         static_cast<int>(event.departedAddress), nullptr,
+                         static_cast<int>(event.departedUA), nullptr,
                          nullptr, /*identity=*/false, /*config=*/false,
                          /*roster=*/true);
       return;
@@ -546,13 +546,13 @@ class TracerShell {
   }
 
   /// The packet's own semantic UA, decoded back from the wire byte. A
-  /// frame whose address byte sits below the offset is not carrying a UA
+  /// frame whose UA byte sits below the offset is not carrying a UA
   /// at all, so report the raw byte rather than wrapping it into a
   /// plausible-looking small number.
-  static unsigned uaOf_(const CMRIPacket& packet) {
-    return (packet.ua >= kUaOffset)
-               ? static_cast<unsigned>(packet.ua - kUaOffset)
-               : static_cast<unsigned>(packet.ua);
+  static unsigned wireUAOf_(const CMRIPacket& packet) {
+    return (packet.wireUA >= kWireUAOffset)
+               ? static_cast<unsigned>(packet.wireUA - kWireUAOffset)
+               : static_cast<unsigned>(packet.wireUA);
   }
 
   void emitTrace_(bool transmit, const CMRIPacket& packet) {
@@ -567,7 +567,7 @@ class TracerShell {
         "{\"seq\":%u,\"ts\":%u,\"event\":\"trace\",\"role\":\"host\","
         "\"ua\":%u,\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
         static_cast<unsigned>(++seq_),
-        static_cast<unsigned>(nowMs_ - epochMs_), uaOf_(packet),
+        static_cast<unsigned>(nowMs_ - epochMs_), wireUAOf_(packet),
         transmit ? "tx" : "rx", mtBuf, bodyHex);
     finish_(written);
   }
@@ -592,7 +592,7 @@ class TracerShell {
         "\"deadline_action\":\"%s\",\"now_ms\":%lu",
         static_cast<unsigned>(++seq_),
         static_cast<unsigned>(event.nowMs - epochMs_),
-        event.node->address(),
+        event.node->UA(),
         static_cast<unsigned long>(event.previousPollBackoffMs),
         static_cast<unsigned long>(event.newPollBackoffMs),
         pollBackoffChangeReasonString(event.pollBackoffReason),
@@ -608,7 +608,7 @@ class TracerShell {
   // flat line was only possible while the shell pretended there was
   // exactly one node.
 
-  void emitHostLine_(uint32_t nowMs, const char* event, int ua,
+  void emitHostLine_(uint32_t nowMs, const char* event, int UA,
                      const char* extraKey, const char* extraValue,
                      bool identity, bool config, bool roster) {
     const CMRIHostStatistics& host = host_->statistics();
@@ -624,10 +624,10 @@ class TracerShell {
       written = appendf_(written, ",\"image\":\"%s\",\"version\":\"%s\"",
                          image_, version_);
     }
-    if (ua != kNoUa) {
+    if (UA != kNoUA) {
       // Named, but no longer present: the distinction a reader needs
       // after a delete.
-      written = appendf_(written, ",\"ua\":%d,\"present\":false", ua);
+      written = appendf_(written, ",\"ua\":%d,\"present\":false", UA);
     }
     written = appendf_(
         written,
@@ -734,7 +734,7 @@ class TracerShell {
         ",\"exchanges\":%u,\"misses\":%u,\"errors\":%u,\"recoveries\":%u"
         ",\"consecutiveMisses\":%u,\"lastTurnaroundMs\":%u"
         ",\"inputs\":\"%s\",\"outputs\":\"%s\"",
-        node.address(), stateName(node.state()),
+        node.UA(), stateName(node.state()),
         node.enabled() ? "true" : "false",
         static_cast<unsigned>(inputLength),
         static_cast<unsigned>(outputLength),
@@ -813,15 +813,15 @@ class TracerShell {
   int appendRoster_(int written) {
     written = appendf_(written, ",\"roster\":[");
     bool first = true;
-    for (unsigned ua = 0; ua <= 127u; ++ua) {
-      const RemoteNodeHandle* node = host_->node(static_cast<uint8_t>(ua));
+    for (unsigned UA = 0; UA <= 127u; ++UA) {
+      const RemoteNodeHandle* node = host_->node(static_cast<uint8_t>(UA));
       if (node == nullptr) {
         continue;
       }
       written = appendf_(
           written,
           "%s{\"ua\":%u,\"in\":%u,\"out\":%u,\"state\":\"%s\",\"enabled\":%s}",
-          first ? "" : ",", node->address(),
+          first ? "" : ",", node->UA(),
           static_cast<unsigned>(node->inputLength()),
           static_cast<unsigned>(node->outputLength()),
           stateName(node->state()), node->enabled() ? "true" : "false");

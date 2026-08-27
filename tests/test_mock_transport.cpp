@@ -14,7 +14,7 @@ using CMRInet::CMRIPacket;
 using CMRInet::encodeFrame;
 using CMRInet::kMaxBody;
 using CMRInet::kMaxWireFrame;
-using CMRInet::kUaOffset;
+using CMRInet::kWireUAOffset;
 using CMRInet::MockCMRITransport;
 
 void setUp(void) {}
@@ -22,11 +22,11 @@ void tearDown(void) {}
 
 // ---------------------------------------------------------------- helpers
 
-/// Build a packet for node address `addr` (UA = addr + 65).
+/// Build a packet for node UA `addr` (UA = addr + 65).
 static CMRIPacket makePacket(uint8_t addr, uint8_t mt,
                              const uint8_t* body = nullptr, size_t len = 0) {
   CMRIPacket p;
-  p.ua = static_cast<uint8_t>(addr + kUaOffset);
+  p.wireUA = static_cast<uint8_t>(addr + kWireUAOffset);
   p.mt = mt;
   TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
   return p;
@@ -51,7 +51,7 @@ static void test_send_accepts_and_logs(void) {
   TEST_ASSERT_EQUAL_size_t(1, t.sentCount());
   CMRIPacket sent;
   TEST_ASSERT_TRUE(t.takeSent(sent));
-  TEST_ASSERT_EQUAL_HEX8(0x46, sent.ua);
+  TEST_ASSERT_EQUAL_HEX8(0x46, sent.wireUA);
   TEST_ASSERT_EQUAL_HEX8('P', sent.mt);
   TEST_ASSERT_EQUAL_UINT32(1, t.stats().packetsSent);
 }
@@ -114,9 +114,9 @@ static void test_inject_packet_delivers_in_fifo_order(void) {
   t.tick(0);
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(1 + kUaOffset, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(1 + kWireUAOffset, got.wireUA);
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(2 + kUaOffset, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(2 + kWireUAOffset, got.wireUA);
   TEST_ASSERT_FALSE(t.receivePacket(got));  // at most one per call, then empty
   TEST_ASSERT_EQUAL_UINT32(2, t.stats().packetsReceived);
 }
@@ -145,7 +145,7 @@ static void test_rx_overflow_keeps_oldest_drops_newest(void) {
   CMRIPacket got;
   for (uint8_t i = 0; i < MockCMRITransport::kRxQueueCapacity; ++i) {
     TEST_ASSERT_TRUE(t.receivePacket(got));
-    TEST_ASSERT_EQUAL_HEX8(i + kUaOffset, got.ua);  // arrival order held
+    TEST_ASSERT_EQUAL_HEX8(i + kWireUAOffset, got.wireUA);  // arrival order held
   }
   TEST_ASSERT_FALSE(t.receivePacket(got));
 }
@@ -162,9 +162,9 @@ static void test_event_order_is_injection_order(void) {
   TEST_ASSERT_FALSE(t.receivePacket(got));  // head (due 100) gates both
   t.tick(100);
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(1 + kUaOffset, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(1 + kWireUAOffset, got.wireUA);
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(2 + kUaOffset, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(2 + kWireUAOffset, got.wireUA);
 }
 
 // ---------------------------------------------------------- byte injection
@@ -181,7 +181,7 @@ static void test_inject_bytes_decodes_whole_frame(void) {
   t.tick(0);
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
-  TEST_ASSERT_EQUAL_HEX8(sent.ua, got.ua);
+  TEST_ASSERT_EQUAL_HEX8(sent.wireUA, got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('R', got.mt);
   TEST_ASSERT_EQUAL_UINT16(sizeof(body), got.length);
   TEST_ASSERT_EQUAL_HEX8_ARRAY(body, got.body, sizeof(body));

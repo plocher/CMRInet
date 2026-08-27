@@ -4,6 +4,31 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Changed
+- UA terminology rename (issue #102, breaking): the library's
+  `ua`/`address` vocabulary was inverted relative to the field norm.
+  Bruce Chubb's QBASIC reference code and NMRA LCS-9.10.1 both name the
+  ordinal (0..127) `UA`; the on-the-wire byte is `UA + 65` and unnamed.
+  The library labelled the wire byte `ua` and the ordinal `address` —
+  swapped relative to the field, while the arithmetic was correct. The
+  rename makes the names honest, and capitalizes `UA` in all
+  identifiers to match the field convention:
+  - `ua`/`ua_`/`ua()` → `wireUA`/`wireUA_`/`wireUA()` (the wire byte,
+    `UA + 65`)
+  - `address`/`address_`/`address()` → `UA`/`ua_`/`ua()` (the ordinal,
+    0..127)
+  - `kUaOffset` → `kWireUAOffset`, `kAddressOutOfRange` →
+    `kUAOutOfRange`, `kAddressInUse` → `kUAInUse`, `departedAddress` →
+    `departedUA`, `kPacketUnexpectedAddress` → `kPacketUnexpectedUA`,
+    `replyUa` → `replyWireUA`, `TRACER_ADDRESS` → `TRACER_UA`.
+  - JSON telemetry field names (`"ua"`) are unchanged — they already
+    spoke the semantic UA. The CLI option `--address` is unchanged for
+    backward compat.
+  - ADR-0001 stays Deferred; this advances the naming half of its
+    boundary. The deeper question — should `RemoteNodeHandle::wireUA()`
+    exist on a strategy-neutral product surface at all — still waits on
+    #9.
+
 ### Added
 - Testable CDC line writer (issue #99): the chunked `writeCdcLine`
   logic is pulled out of `examples/XiaoHostTracer/XiaoHostTracer.ino`

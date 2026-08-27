@@ -40,7 +40,7 @@ constexpr const char* kVersion = "0.3.0";
 struct Options {
   const char* device = nullptr;
   uint32_t baud = 28800;
-  uint8_t address = 30;        // wire UA = address + 65
+  uint8_t UA = 30;        // wire UA = UA + 65
   uint16_t inputBytes = 7;     // bench node: 2 phantom + 5 IOX IN bytes
   uint16_t outputBytes = 7;    // bench node: 2 phantom + 5 IOX OUT bytes
   uint32_t replyTimeoutMs = 0; // 0 = engine default (250 ms)
@@ -89,12 +89,12 @@ void usage(const char* argv0) {
           "          [--conformance-strict]\n"
           "          [--exchanges N] [--duration-s N]\n"
           "verbs on stdin (every node verb names its UA):\n"
-          "  status | status <ua>\n"
-          "  quiesce <ua> | resume <ua> | forcetx <ua>\n"
-          "  setbit <ua> <bit> <0|1> | writeoutputs <ua> <hex>\n"
-          "  node add <ua> <in> <out> | node delete <ua>\n"
-          "  node geometry <ua> <in> <out>\n"
-          "  node enable <ua> | node disable <ua>\n"
+          "  status | status <UA>\n"
+          "  quiesce <UA> | resume <UA> | forcetx <UA>\n"
+          "  setbit <UA> <bit> <0|1> | writeoutputs <UA> <hex>\n"
+          "  node add <UA> <in> <out> | node delete <UA>\n"
+          "  node geometry <UA> <in> <out>\n"
+          "  node enable <UA> | node disable <UA>\n"
           "  quit\n",
           argv0);
 }
@@ -113,7 +113,7 @@ bool parseOptions(int argc, char** argv, Options& opt) {
         fprintf(stderr, "error: --address must be 0..127\n");
         return false;
       }
-      opt.address = static_cast<uint8_t>(v);
+      opt.UA = static_cast<uint8_t>(v);
     } else if (strcmp(arg, "--input-bytes") == 0 && hasValue) {
       opt.inputBytes = static_cast<uint16_t>(strtoul(argv[++i], nullptr, 10));
     } else if (strcmp(arg, "--output-bytes") == 0 && hasValue) {
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
   // The add reports its own outcome (Design v1.2 D5), so bail before
   // binding rather than inspecting a deferred host-wide status.
   const CMRInet::CMRIHost::ConfigStatus configStatus =
-      host.addRemoteNode(opt.address, nodeConfig);
+      host.addRemoteNode(opt.UA, nodeConfig);
   if (configStatus != CMRInet::CMRIHost::ConfigStatus::kOk) {
     fprintf(stderr, "error: addRemoteNode rejected the configuration: %s\n",
             CMRInet::configStatusString(configStatus));
@@ -283,11 +283,11 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Resolved every pass rather than cached: `node delete <ua>` is a
+    // Resolved every pass rather than cached: `node delete <UA>` is a
     // verb now, so the handle can legitimately go away underneath us
     // (Design v1.2 D5). A deleted node ends the run -- there is nothing
     // left to count exchanges against.
-    const CMRInet::RemoteNodeHandle* node = host.node(opt.address);
+    const CMRInet::RemoteNodeHandle* node = host.node(opt.UA);
     if (node == nullptr) {
       break;
     }

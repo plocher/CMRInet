@@ -126,14 +126,14 @@ bool MockCMRITransport::takeSent(CMRIPacket& out) {
   return true;
 }
 
-bool MockCMRITransport::onSendReplyPacket(int ua, int mt,
+bool MockCMRITransport::onSendReplyPacket(int wireUA, int mt,
                                           const CMRIPacket& reply,
                                           uint32_t delayMs, uint16_t repeat) {
   if (reply.length > kMaxBody) {
     return false;
   }
   ReplayStep step;
-  step.matchUa = ua;
+  step.matchWireUA = wireUA;
   step.matchMt = mt;
   step.repeat = repeat;
   step.kind = ActionKind::kPacket;
@@ -142,7 +142,7 @@ bool MockCMRITransport::onSendReplyPacket(int ua, int mt,
   return appendStep_(step);
 }
 
-bool MockCMRITransport::onSendReplyBytes(int ua, int mt, const uint8_t* bytes,
+bool MockCMRITransport::onSendReplyBytes(int wireUA, int mt, const uint8_t* bytes,
                                          size_t len, uint32_t delayMs,
                                          uint16_t repeat,
                                          uint32_t interByteGapMs) {
@@ -150,7 +150,7 @@ bool MockCMRITransport::onSendReplyBytes(int ua, int mt, const uint8_t* bytes,
     return false;
   }
   ReplayStep step;
-  step.matchUa = ua;
+  step.matchWireUA = wireUA;
   step.matchMt = mt;
   step.repeat = repeat;
   step.kind = ActionKind::kBytes;
@@ -163,9 +163,9 @@ bool MockCMRITransport::onSendReplyBytes(int ua, int mt, const uint8_t* bytes,
   return appendStep_(step);
 }
 
-bool MockCMRITransport::onSendStaySilent(int ua, int mt, uint16_t repeat) {
+bool MockCMRITransport::onSendStaySilent(int wireUA, int mt, uint16_t repeat) {
   ReplayStep step;
-  step.matchUa = ua;
+  step.matchWireUA = wireUA;
   step.matchMt = mt;
   step.repeat = repeat;
   step.kind = ActionKind::kSilence;
@@ -254,11 +254,11 @@ void MockCMRITransport::matchScript_(const CMRIPacket& sent,
     return;  // no expectations: silence, uncounted
   }
   ReplayStep& step = script_.steps[script_.head];
-  const bool uaMatches = (step.matchUa == kMatchAny) ||
-                         (static_cast<int>(sent.ua) == step.matchUa);
+  const bool wireUAMatches = (step.matchWireUA == kMatchAny) ||
+                         (static_cast<int>(sent.wireUA) == step.matchWireUA);
   const bool mtMatches = (step.matchMt == kMatchAny) ||
                          (static_cast<int>(sent.mt) == step.matchMt);
-  if (!uaMatches || !mtMatches) {
+  if (!wireUAMatches || !mtMatches) {
     // The head step is not consumed. The test reads the count.
     scriptMismatches_++;
     return;

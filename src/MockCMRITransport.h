@@ -175,22 +175,22 @@ class MockCMRITransport : public CMRITransport {
   // ------------------------------------------------ scripted replay (test)
 
   /// Append a step: when the head-of-script step sees a completed send
-  /// matching (ua, mt) — kMatchAny wildcards either — reply with `reply`
+  /// matching (UA, mt) — kMatchAny wildcards either — reply with `reply`
   /// after `delayMs`. `repeat` is how many matches the step consumes
   /// before retiring (kRepeatForever = every match, never retires).
   /// Returns false if the script is full or the reply is oversized.
-  bool onSendReplyPacket(int ua, int mt, const CMRIPacket& reply,
+  bool onSendReplyPacket(int wireUA, int mt, const CMRIPacket& reply,
                          uint32_t delayMs = 0, uint16_t repeat = 1);
 
   /// Append a step that replies with raw wire bytes through the decoder,
   /// metered by `interByteGapMs` (see injectBytesAt). Bytes are copied.
-  bool onSendReplyBytes(int ua, int mt, const uint8_t* bytes, size_t len,
+  bool onSendReplyBytes(int wireUA, int mt, const uint8_t* bytes, size_t len,
                         uint32_t delayMs = 0, uint16_t repeat = 1,
                         uint32_t interByteGapMs = 0);
 
   /// Append a step that consumes a matching send and deliberately answers
   /// nothing — a dead or mute Node for `repeat` exchanges.
-  bool onSendStaySilent(int ua, int mt, uint16_t repeat = 1);
+  bool onSendStaySilent(int wireUA, int mt, uint16_t repeat = 1);
 
   /// Steps not yet retired (a kRepeatForever step never retires).
   size_t scriptRemaining() const;
@@ -220,7 +220,7 @@ class MockCMRITransport : public CMRITransport {
 
   /// One script step: matcher plus the delivery it schedules.
   struct ReplayStep {
-    int matchUa = kMatchAny;
+    int matchWireUA = kMatchAny;
     int matchMt = kMatchAny;
     uint16_t repeat = 1;  ///< matches left; kRepeatForever = infinite
     ActionKind kind = ActionKind::kSilence;

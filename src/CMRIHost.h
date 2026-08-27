@@ -202,7 +202,7 @@ enum class CMRIHostEventType : uint8_t {
   // C&C verb or a direct API call — the gap that left a mid-run topology
   // change invisible in the trace stream (only the roster hinted at it).
   kNodeAdded,         ///< a node was added to the table (node is the new handle)
-  kNodeDeleted,       ///< a node was deleted (node is null; departedAddress carries identity)
+  kNodeDeleted,       ///< a node was deleted (node is null; departedUA carries identity)
   kGeometryChanged,   ///< a node's declared NI/NO changed in place (old + new carried)
 };
 
@@ -218,7 +218,7 @@ enum class CMRIHostEventType : uint8_t {
 /// reply (Design v1.3 D14).
 enum class ReplyRejectReason : uint8_t {
   kNone,              ///< not a rejection event
-  kUaMismatch,        ///< reply UA != the polled node's UA
+  kWireUAMismatch,        ///< reply UA != the polled node's UA
   kMtMismatch,        ///< reply MT != 'R' (kReceiveData)
   kGeometryMismatch,  ///< reply length != configured inputBytes
 };
@@ -259,7 +259,7 @@ struct CMRIHostEvent {
   /// Reject details. Meaningful only when type == kReplyRejected.
   ReplyRejectReason rejectReason = ReplyRejectReason::kNone;
   uint16_t replyLength = 0;  ///< body byte count of the rejected reply
-  uint8_t  replyUa = 0;      ///< UA byte of the rejected reply
+  uint8_t  replyWireUA = 0;      ///< UA byte of the rejected reply
   uint8_t  replyMt = 0;      ///< MT byte of the rejected reply
 
   /// `rejectReason` classified into the shared taxonomy. Derived from
@@ -286,11 +286,11 @@ struct CMRIHostEvent {
 
   /// Identity for kNodeDeleted. The slot is cleaned before the event
   /// fires (D5: delete tombstones and resets in place), so `node` is
-  /// null by the time a listener runs and the departing node's address
+  /// null by the time a listener runs and the departing node's UA
   /// rides by value here. A handle cached across the delete would read
-  /// address 0; this is the value the listener needs to name the node
+  /// UA 0; this is the value the listener needs to name the node
   /// that just left.
-  uint8_t departedAddress = 0;
+  uint8_t departedUA = 0;
 
   /// Geometry carried by kGeometryChanged, in data bytes. `previous*`
   /// is the declared NI/NO before the in-place change; the new values
@@ -417,9 +417,9 @@ class CMRIHost {
   enum class ConfigStatus : uint8_t {
     kOk,
     kTooManyNodes,        ///< every slot is occupied (CMRINET_HOST_MAX_NODES)
-    kAddressOutOfRange,   ///< address > 127
-    kAddressInUse,        ///< a live node already holds that address
-    kNoSuchNode,          ///< no live node holds that address
+    kUAOutOfRange,   ///< UA > 127
+    kUAInUse,        ///< a live node already holds that UA
+    kNoSuchNode,          ///< no live node holds that UA
     kInputBytesTooLarge,  ///< inputBytes > RemoteNodeHandle::kMaxInputBytes
     kOutputBytesTooLarge, ///< outputBytes > RemoteNodeHandle::kMaxOutputBytes
   };
@@ -432,9 +432,9 @@ class CMRIHost {
   /// reason this call was rejected. The result of one add never affects
   /// another.
   ///
-  /// `address` is the node address (0..127). The wire UA is
-  /// address + 65. Legal before and after begin(). A call is rejected
-  /// when no slot is free, when the address is out of range or already
+  /// `UA` is the node UA (0..127). The wire UA is
+  /// UA + 65. Legal before and after begin(). A call is rejected
+  /// when no slot is free, when the UA is out of range or already
   /// held by a live node, or when config.inputBytes exceeds
   /// RemoteNodeHandle::kMaxInputBytes.
   ///
@@ -458,29 +458,29 @@ class CMRIHost {
   // VALIDATION: Design v1.2 D5: slot reuse resets all three substrates
   // (D15) -- freshness especially, or a newly added node reports data
   // it never sent.
-  ConfigStatus addRemoteNode(uint8_t address,
+  ConfigStatus addRemoteNode(uint8_t UA,
                              const RemoteNodeConfig& config,
                              const RemoteNodePolicy& policy);
 
   /// As above, with the host-wide policy defaults.
-  ConfigStatus addRemoteNode(uint8_t address,
+  ConfigStatus addRemoteNode(uint8_t UA,
                              const RemoteNodeConfig& config);
 
-  /// Convenience: register a node from its address and input/output byte
+  /// Convenience: register a node from its UA and input/output byte
   /// counts, with host-wide policy defaults and default staleness/enabled.
   /// Equivalent to building a RemoteNodeConfig and calling the overload
   /// above. The flat form keeps simple sketches readable (issue #31).
-  ConfigStatus addRemoteNode(uint8_t address,
+  ConfigStatus addRemoteNode(uint8_t UA,
                              uint16_t inputBytes,
                              uint16_t outputBytes);
 
-  /// Delete the node at `address`. Returns kNoSuchNode when no live node
+  /// Delete the node at `UA`. Returns kNoSuchNode when no live node
   /// holds it. Legal before and after begin().
   ///
   /// The slot is tombstoned and cleaned, never compacted: no surviving
   /// handle relocates. Cleaning at delete rather than at reuse is what
-  /// makes address() a working self-check -- a handle cached across the
-  /// delete reports 0, not the address it used to serve.
+  /// makes UA() a working self-check -- a handle cached across the
+  /// delete reports 0, not the UA it used to serve.
   ///
   /// Deleting the node of the outstanding exchange is legal. If the
   /// packet has not yet been accepted by the transport the exchange is
@@ -491,15 +491,15 @@ class CMRIHost {
   // VALIDATION: Design v1.2 D5: delete tombstones the slot; a later add
   // may reuse a cleaned tombstone. Never compaction, so handles never
   // relocate.
-  // VALIDATION: Design v1.2 D5: address is identity, so changing a
-  // node's address is delete + add, never an in-place mutation.
-  ConfigStatus deleteRemoteNode(uint8_t address);
+  // VALIDATION: Design v1.2 D5: UA is identity, so changing a
+  // node's UA is delete + add, never an in-place mutation.
+  ConfigStatus deleteRemoteNode(uint8_t UA);
 
-  /// Change the declared geometry of the node at `address`, in place.
+  /// Change the declared geometry of the node at `UA`, in place.
   /// Returns kNoSuchNode when no live node holds it, or the same byte-
   /// ceiling rejections addRemoteNode() applies.
   ///
-  /// Identity is preserved -- same address, same wire UA, same
+  /// Identity is preserved -- same UA, same wire UA, same
   /// statistics -- because this is the same logical device with its IO
   /// cards rearranged. The cached input image is invalidated and a
   /// re-init is forced (I, then a full T), because the NI/NO announced
@@ -516,7 +516,7 @@ class CMRIHost {
   // VALIDATION: Design v1.2 D5: geometry change is in place, identity
   // preserved; it invalidates the cached input image and forces a
   // re-init because the NI/NO announced in the I body has changed.
-  ConfigStatus setRemoteNodeGeometry(uint8_t address,
+  ConfigStatus setRemoteNodeGeometry(uint8_t UA,
                                      uint16_t inputBytes,
                                      uint16_t outputBytes);
 
@@ -574,16 +574,16 @@ class CMRIHost {
   /// nodeCount() <= kMaxNodes always holds.
   size_t nodeCount() const { return nodeCount_; }
 
-  /// Look up a live node by address. Returns nullptr when no live node
-  /// holds that address. Valid before and after begin().
+  /// Look up a live node by UA. Returns nullptr when no live node
+  /// holds that UA. Valid before and after begin().
   ///
   /// This is the canonical access path and is cheap enough to call at
   /// the point of use. A handle stays valid until that node is deleted;
   /// caching one across a mutation is not a supported pattern, and
-  /// address() is the self-check for code that does it anyway.
+  /// UA() is the self-check for code that does it anyway.
   // VALIDATION: Design v1.2 D5: host.node(addr) is the canonical access
   // path; a handle is valid until that node is deleted.
-  RemoteNodeHandle* node(uint8_t address);
+  RemoteNodeHandle* node(uint8_t UA);
 
  private:
   enum class Phase : uint8_t {
@@ -602,10 +602,10 @@ class CMRIHost {
     kTransmit, ///< T — full output image, no reply expected (interop E8)
   };
 
-  /// Find the slot holding a live node at `address`. Occupancy is
-  /// checked first: a cleaned tombstone has address_ == 0, which is a
-  /// perfectly valid address for some other node.
-  bool findSlot_(uint8_t address, size_t& slot) const;
+  /// Find the slot holding a live node at `UA`. Occupancy is
+  /// checked first: a cleaned tombstone has UA_ == 0, which is a
+  /// perfectly valid UA for some other node.
+  bool findSlot_(uint8_t UA, size_t& slot) const;
 
   /// Return a slot to pristine state across all three substrates (D15).
   /// Assignment from a default-constructed handle is deliberate: it is
@@ -679,7 +679,7 @@ class CMRIHost {
                   RemoteNodeState newState = RemoteNodeState::kUninitialized,
                   ReplyRejectReason rejectReason = ReplyRejectReason::kNone,
                   uint16_t replyLength = 0,
-                  uint8_t replyUa = 0,
+                  uint8_t replyWireUA = 0,
                   uint8_t replyMt = 0,
                   PollBackoffChangeReason pollBackoffReason =
                       PollBackoffChangeReason::kNone,
