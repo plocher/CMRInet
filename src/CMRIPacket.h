@@ -32,6 +32,16 @@ constexpr uint8_t kDle = 0x10u;  // DLE/0x10 — escape prefix
 // wire UA is the byte transmitted on the serial line: UA + 65.
 constexpr uint8_t kWireUAOffset = 65u;
 
+/// True when `wireUA` is a legal on-the-wire unit-address byte: in the
+/// range [kWireUAOffset, kWireUAOffset + 127] = [65, 192]. A byte
+/// outside this range is not carrying a UA at all — no conforming
+/// station can emit it. Pure and stateless, shared by the Host's
+/// packet-verify gate, the tracer, and the tests.
+inline bool isLegalWireUA(uint8_t wireUA) {
+  return wireUA >= kWireUAOffset &&
+         wireUA <= static_cast<uint8_t>(kWireUAOffset + 127u);
+}
+
 // Message types the polled strategy speaks.
 // VALIDATION: Interop v1.1 E9: the codec never validates MT — fielded
 // networks carry JMRI extensions (E/Q/D/W/A/C/M) and the codec must not

@@ -126,6 +126,17 @@ enum class ConformanceFault : uint8_t {
   /// not to change firmware.
   kPacketUnexpectedUA,
 
+  /// A reply or packet carried a wire-UA byte outside the legal range
+  /// [65, 192]. The byte is not carrying a UA at all — no conforming
+  /// station can emit it — so this is an absolute defect, not a
+  /// disagreement about configuration. Attributed to no node: an
+  /// illegal UA names no node to charge.
+  /// VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+  /// absolute member of the packet rung. Illegality is absolute, so
+  /// the admission test is satisfied: the name encodes the assumption
+  /// comparison (no conforming station emits it).
+  kPacketIllegalWireUA,
+
   /// A reply carried a message type the exchange does not permit there.
   /// Unsolicited traffic outside an exchange is a separate, legitimate
   /// case (interop E8) and is not a fault.
@@ -141,6 +152,7 @@ inline ConformanceLayer layerOf(ConformanceFault fault) {
       return ConformanceLayer::kImage;
     case ConformanceFault::kPacketUnexpectedUA:
     case ConformanceFault::kPacketUnexpectedType:
+    case ConformanceFault::kPacketIllegalWireUA:
       return ConformanceLayer::kPacket;
   }
   return ConformanceLayer::kNone;
@@ -155,6 +167,7 @@ inline FaultAttribution attributionOf(ConformanceFault fault) {
     case ConformanceFault::kPacketUnexpectedUA:
       return FaultAttribution::kDisagreement;
     case ConformanceFault::kPacketUnexpectedType:
+    case ConformanceFault::kPacketIllegalWireUA:
       return FaultAttribution::kDefect;
   }
   return FaultAttribution::kNone;
@@ -165,8 +178,9 @@ inline const char* conformanceFaultString(ConformanceFault fault) {
   switch (fault) {
     case ConformanceFault::kNone:                   return "none";
     case ConformanceFault::kImageGeometryMismatch:  return "image geometry mismatch";
-    case ConformanceFault::kPacketUnexpectedUA:return "packet unexpected UA";
+    case ConformanceFault::kPacketUnexpectedUA:  return "packet unexpected ua";
     case ConformanceFault::kPacketUnexpectedType:   return "packet unexpected type";
+    case ConformanceFault::kPacketIllegalWireUA:    return "packet illegal wire ua";
   }
   return "unknown";
 }

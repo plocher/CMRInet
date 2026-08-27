@@ -11,6 +11,7 @@
 
 #include <string.h>
 
+#include "CMRIPacket.h"
 #include "ConformanceFault.h"
 #include "unity.h"
 
@@ -21,6 +22,8 @@ using CMRInet::ConformanceFault;
 using CMRInet::ConformanceLayer;
 using CMRInet::FaultAttribution;
 using CMRInet::faultAttributionString;
+using CMRInet::isLegalWireUA;
+using CMRInet::kWireUAOffset;
 using CMRInet::layerOf;
 
 void setUp(void) {}
@@ -34,6 +37,7 @@ static const ConformanceFault kAllFaults[] = {
     ConformanceFault::kImageGeometryMismatch,
     ConformanceFault::kPacketUnexpectedUA,
     ConformanceFault::kPacketUnexpectedType,
+    ConformanceFault::kPacketIllegalWireUA,
 };
 
 static const size_t kFaultCount =
@@ -93,6 +97,51 @@ static void test_packet_faults_sit_on_the_packet_layer(void) {
 static void test_unexpected_type_is_a_defect(void) {
   TEST_ASSERT_EQUAL(FaultAttribution::kDefect,
                     attributionOf(ConformanceFault::kPacketUnexpectedType));
+}
+
+// An illegal wire-UA is an absolute defect: the byte is not carrying a
+// UA at all, so no configuration fix can remedy it. It is not a
+// disagreement (unlike kPacketUnexpectedUA, which is a legal-but-wrong
+// UA). And it sits on the packet rung alongside the other packet faults.
+static void test_illegal_wire_ua_is_a_packet_layer_defect(void) {
+  TEST_ASSERT_EQUAL(ConformanceLayer::kPacket,
+                    layerOf(ConformanceFault::kPacketIllegalWireUA));
+  TEST_ASSERT_EQUAL(FaultAttribution::kDefect,
+                    attributionOf(ConformanceFault::kPacketIllegalWireUA));
+}
+
+// An illegal wire-UA is distinct from an unexpected UA: the first is
+// absolute (no conforming station can emit it), the second is
+// comparative (a legal UA, just the wrong one). They must not share an
+// attribution.
+static void test_illegal_wire_ua_is_a_defect_not_a_disagreement(void) {
+  TEST_ASSERT_EQUAL(
+      FaultAttribution::kDefect,
+      attributionOf(ConformanceFault::kPacketIllegalWireUA));
+  TEST_ASSERT_EQUAL(
+      FaultAttribution::kDisagreement,
+      attributionOf(ConformanceFault::kPacketUnexpectedUA));
+}
+
+// isLegalWireUA: the boundary is [65, 192] = [kWireUAOffset,
+// kWireUAOffset + 127]. One below and one above are illegal; the
+// endpoints themselves are legal.
+static void test_is_legal_wire_ua_boundaries(void) {
+  TEST_ASSERT_FALSE(isLegalWireUA(0));
+  TEST_ASSERT_FALSE(isLegalWireUA(kWireUAOffset - 1));   // 64
+  TEST_ASSERT_TRUE(isLegalWireUA(kWireUAOffset));          // 65
+  TEST_ASSERT_TRUE(isLegalWireUA(kWireUAOffset + 127));   // 192
+  TEST_ASSERT_FALSE(isLegalWireUA(kWireUAOffset + 128));  // 193
+  TEST_ASSERT_FALSE(isLegalWireUA(255));
+}
+
+// Every UA ordinal 0..127 maps to a legal wire byte.
+static void test_every_ordinal_maps_to_a_legal_wire_ua(void) {
+  for (uint8_t ua = 0; ua <= 127; ++ua) {
+    TEST_ASSERT_TRUE_MESSAGE(
+        isLegalWireUA(static_cast<uint8_t>(ua + kWireUAOffset)),
+        "a valid UA ordinal produced an illegal wire byte");
+  }
 }
 
 // The taxonomy is only useful if both attributions actually occur;
@@ -171,6 +220,10 @@ int main(void) {
   RUN_TEST(test_geometry_mismatch_is_an_image_layer_disagreement);
   RUN_TEST(test_packet_faults_sit_on_the_packet_layer);
   RUN_TEST(test_unexpected_type_is_a_defect);
+  RUN_TEST(test_illegal_wire_ua_is_a_packet_layer_defect);
+  RUN_TEST(test_illegal_wire_ua_is_a_defect_not_a_disagreement);
+  RUN_TEST(test_is_legal_wire_ua_boundaries);
+  RUN_TEST(test_every_ordinal_maps_to_a_legal_wire_ua);
   RUN_TEST(test_both_attributions_are_populated);
   RUN_TEST(test_every_fault_has_a_distinct_name);
   RUN_TEST(test_layer_and_attribution_names_are_present);
