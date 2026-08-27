@@ -41,11 +41,23 @@ void tearDown(void) {}
 
 // ---------------------------------------------------------------- helpers
 
-/// Build a packet for node UA `addr` (UA = addr + 65).
+/// Build a packet for node UA `addr` (wire UA = addr + 65).
 static CMRIPacket makePacket(uint8_t addr, uint8_t mt,
                              const uint8_t* body = nullptr, size_t len = 0) {
   CMRIPacket p;
   p.wireUA = static_cast<uint8_t>(addr + kWireUAOffset);
+  p.mt = mt;
+  TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
+  return p;
+}
+
+/// Build a packet with an explicit raw wire-UA byte (for illegal-UA
+/// tests where the byte is outside [65, 192]).
+static CMRIPacket makePacketWithWireUA(uint8_t wireUA, uint8_t mt,
+                                        const uint8_t* body = nullptr,
+                                        size_t len = 0) {
+  CMRIPacket p;
+  p.wireUA = wireUA;
   p.mt = mt;
   TEST_ASSERT_TRUE_MESSAGE(p.setBody(body, len), "setBody rejected test body");
   return p;
@@ -130,6 +142,9 @@ struct ListenerLog {
   uint8_t lastDepartedAddress = 0;
   uint16_t lastPreviousInputBytes = 0;
   uint16_t lastPreviousOutputBytes = 0;
+  /// Illegal wire-UA events (issue #96).
+  int illegalWireUA = 0;
+  uint8_t lastIllegalWireUA = 0;
 };
 
 static void recordEvent(void* context, const CMRIHostEvent& event) {
@@ -161,6 +176,11 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
       ++log.geometryChanged;
       log.lastPreviousInputBytes = event.previousInputBytes;
       log.lastPreviousOutputBytes = event.previousOutputBytes;
+      break;
+    case CMRIHostEventType::kIllegalWireUA:
+      ++log.illegalWireUA;
+      log.lastIllegalWireUA = event.replyWireUA;
+      log.lastFault = event.fault;
       break;
   }
   log.lastNode = event.node;
@@ -2655,6 +2675,126 @@ static void test_geometry_correction_closes_the_breaker(void) {
   TEST_ASSERT_TRUE(node->isHealthy());
 }
 
+// ------------------------------------- illegal wire-UA detection (#96)
+//
+// An illegal wire-UA byte (outside [65, 192]) is not carrying a UA at
+// all. The gate in drainReceive_ catches it before the
+// solicited/unsolicited split, bumps the host-scope counter, and fires
+// kIllegalWireUA with node = null. No node is charged.
+
+// An illegal UA arriving during an outstanding poll is detected,
+// counted at host scope, and attributed to no node. The polled node
+// takes no error, no reject event fires, and the illegal-UA event
+// carries the raw byte.
+static void test_illegal_wire_ua_during_poll_is_counted_not_attributed(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  uint32_t base = primeToPoll(rig);
+
+  const CMRIHostStatistics before = rig.host.statistics();
+  // Inject a reply with an illegal wire-UA byte (10 < 65).
+  rig.transport.injectPacketAt(
+      makePacketWithWireUA(10, 'R', kInputsA5, sizeof(kInputsA5)), base);
+  runUntil(rig.host, base, base + 2);
+
+  const CMRIHostStatistics after = rig.host.statistics();
+  TEST_ASSERT_EQUAL_UINT32(before.illegalWireUAFaults + 1,
+                           after.illegalWireUAFaults);
+  // No node counter moved.
+  TEST_ASSERT_EQUAL_UINT32(before.repliesRejected, after.repliesRejected);
+  TEST_ASSERT_EQUAL_UINT32(before.unsolicitedPackets, after.unsolicitedPackets);
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().errors);
+  // The illegal-UA event fired, not a reject.
+  TEST_ASSERT_EQUAL_INT(1, log.illegalWireUA);
+  TEST_ASSERT_EQUAL_INT(0, log.rejected);
+  TEST_ASSERT_EQUAL_HEX8(10, log.lastIllegalWireUA);
+  // No node was named.
+  TEST_ASSERT_NULL(log.lastNode);
+  // The event carries the classified fault.
+  TEST_ASSERT_EQUAL(ConformanceFault::kPacketIllegalWireUA, log.lastFault);
+}
+
+// An illegal UA arriving while no poll is outstanding (unsolicited) is
+// still counted at host scope, not lumped into unsolicitedPackets.
+static void test_illegal_wire_ua_while_unsolicited_is_counted(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  rig.host.begin();
+  runUntil(rig.host, 0, 507);  // I + T preamble, no poll outstanding
+  CMRIPacket scratch;
+  while (rig.transport.takeSent(scratch)) { }
+
+  const CMRIHostStatistics before = rig.host.statistics();
+  // Inject during the post-T gap (idle, no poll outstanding).
+  rig.transport.injectPacketAt(makePacketWithWireUA(200, 'R'), 508);
+  runUntil(rig.host, 508, 510);
+
+  const CMRIHostStatistics after = rig.host.statistics();
+  TEST_ASSERT_EQUAL_UINT32(before.illegalWireUAFaults + 1,
+                           after.illegalWireUAFaults);
+  // unsolicitedPackets did not move — the gate caught it first.
+  TEST_ASSERT_EQUAL_UINT32(before.unsolicitedPackets, after.unsolicitedPackets);
+  TEST_ASSERT_EQUAL_INT(1, log.illegalWireUA);
+}
+
+// A legal UA during a poll passes through the gate transparently — no
+// illegal-UA counter increment, normal reply processing.
+static void test_legal_wire_ua_passes_through_gate(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  uint32_t base = primeToPoll(rig);
+
+  const CMRIHostStatistics before = rig.host.statistics();
+  rig.transport.onSendReplyPacket(
+      5 + kWireUAOffset, 'P', makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)));
+  runUntil(rig.host, base, base + 2);
+
+  const CMRIHostStatistics after = rig.host.statistics();
+  TEST_ASSERT_EQUAL_UINT32(before.illegalWireUAFaults,
+                           after.illegalWireUAFaults);
+  TEST_ASSERT_EQUAL_UINT32(before.repliesAccepted + 1, after.repliesAccepted);
+  TEST_ASSERT_EQUAL_INT(0, log.illegalWireUA);
+  TEST_ASSERT_EQUAL_INT(1, log.accepted);
+}
+
+// The 4b miss behavior: an illegal UA during the reply gate does not
+// satisfy the poll. The gate stays armed, times out, and the polled
+// node takes the miss. The illegal-UA counter and the miss ladder
+// climb together at the poll rate — the correlation that localizes a
+// chronic offset-omission emitter.
+static void test_illegal_wire_ua_during_reply_gate_takes_the_miss(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  uint32_t base = primeToPoll(rig);
+
+  const CMRIHostStatistics before = rig.host.statistics();
+  const uint32_t missesBefore = rig.node->consecutiveMisses();
+
+  // Inject an illegal-UA reply during the reply gate. The gate stays
+  // armed because the illegal packet was discarded, not accepted.
+  rig.transport.injectPacketAt(
+      makePacketWithWireUA(10, 'R', kInputsA5, sizeof(kInputsA5)), base);
+  // Run past the reply timeout (default 250 ms) so the gate expires.
+  runUntil(rig.host, base, base + 260);
+
+  // The polled node took the miss.
+  TEST_ASSERT_EQUAL_INT(1, log.timeouts);
+  TEST_ASSERT_TRUE(rig.node->consecutiveMisses() > missesBefore);
+  // And the illegal-UA counter climbed too.
+  TEST_ASSERT_EQUAL_UINT32(before.illegalWireUAFaults + 1,
+                           rig.host.statistics().illegalWireUAFaults);
+  // No reply was accepted or rejected — the illegal packet was
+  // neither a valid reply nor a match-layer reject.
+  TEST_ASSERT_EQUAL_UINT32(before.repliesAccepted,
+                           rig.host.statistics().repliesAccepted);
+  TEST_ASSERT_EQUAL_UINT32(before.repliesRejected,
+                           rig.host.statistics().repliesRejected);
+}
+
 // ----------------------------------------------------------------- runner
 
 int main(void) {
@@ -2730,5 +2870,10 @@ int main(void) {
   RUN_TEST(test_zero_configured_reinit_attempts_still_invalidates);
   RUN_TEST(test_breaker_trips_then_recovers_after_reflash);
   RUN_TEST(test_geometry_correction_closes_the_breaker);
+  // Illegal wire-UA detection (#96)
+  RUN_TEST(test_illegal_wire_ua_during_poll_is_counted_not_attributed);
+  RUN_TEST(test_illegal_wire_ua_while_unsolicited_is_counted);
+  RUN_TEST(test_legal_wire_ua_passes_through_gate);
+  RUN_TEST(test_illegal_wire_ua_during_reply_gate_takes_the_miss);
   return UNITY_END();
 }

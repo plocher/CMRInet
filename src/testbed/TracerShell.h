@@ -92,6 +92,7 @@ inline const char* eventName(CMRIHostEventType type) {
     case CMRIHostEventType::kNodeAdded: return "node_add";
     case CMRIHostEventType::kNodeDeleted: return "node_delete";
     case CMRIHostEventType::kGeometryChanged: return "node_geometry";
+    case CMRIHostEventType::kIllegalWireUA: return "illegal_wire_ua";
   }
   return "unknown";
 }

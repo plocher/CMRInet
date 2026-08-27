@@ -375,6 +375,18 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
   CMRIPacket rx;
   while (transport_.receivePacket(rx)) {
     emitTrace_(/*transmit=*/false, rx);
+    // Absolute packet-legality gate (issue #96): an illegal wire-UA
+    // byte is not carrying a UA at all, so it names no node to charge.
+    // Detect before the solicited/unsolicited split, because
+    // illegality is content-only, not exchange-dependent — an illegal
+    // byte during an I settle or a T gap is still illegal.
+    // VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+    // absolute packet-rung fault. It is counted at host scope because
+    // no node can be attributed.
+    if (!isLegalWireUA(rx.wireUA)) {
+      rejectIllegalWireUA_(rx, nowMs);
+      continue;
+    }
     if (phase_ != Phase::kAwaitWait ||
         outboundKind_ != OutboundKind::kPoll) {
       ++statistics_.unsolicitedPackets;
@@ -434,6 +446,24 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     }
     acceptReply_(rx, nowMs);
   }
+}
+
+/// Detect and reject a packet whose wire-UA byte is outside the legal
+/// range [65, 192]. Bumps the host-scope illegalWireUAFaults counter
+/// and fires kIllegalWireUA with node = null — an illegal UA names no
+/// node to charge, so the event cannot use emitEvent_ (which takes a
+/// handle). Builds the event inline and calls fire_() directly, the
+/// same pattern kNodeDeleted uses.
+void CMRIHost::rejectIllegalWireUA_(const CMRIPacket& packet,
+                                     uint32_t nowMs) {
+  ++statistics_.illegalWireUAFaults;
+  CMRIHostEvent event;
+  event.type = CMRIHostEventType::kIllegalWireUA;
+  event.node = nullptr;
+  event.nowMs = nowMs;
+  event.replyWireUA = packet.wireUA;
+  event.fault = ConformanceFault::kPacketIllegalWireUA;
+  fire_(event);
 }
 
 /// Handle a UA- and MT-verified reply to the outstanding poll.
