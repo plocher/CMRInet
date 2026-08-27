@@ -1,7 +1,7 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.5 (bump when any decision or contract in this document
+Version: 1.6 (bump when any decision or contract in this document
 changes). A `// VALIDATION:` tag cites the version in which *that
 clause* last changed, not the current document version. Tags are
 therefore re-stamped per clause, as the clause changes and the
@@ -9,6 +9,12 @@ implementing code follows — never wholesale, because a tag naming a
 version the code does not yet satisfy asserts something false. See
 `docs/agents/validation-comments.md`.
 Change log:
+- v1.6 (2026-08-27): the packet rung gains its first absolute
+  member (issue #96). An illegal wire-UA byte is not "wrong," it is
+  "not a UA" — no conforming station can emit it — so it passes D14's
+  admission test as a defect without any comparative assumption set. It
+  is counted at host scope because an illegal UA names no node to
+  charge. D14 tags on the new fault and the Host gate move to v1.6.
 - v1.5 (2026-08-26): the breaker gets a writer, and D16's correction is
   narrowed (issue #87). D16 v1.4 removed the breaker dependency
   wholesale; that overshot in the opposite direction from the text it
@@ -502,6 +508,18 @@ mismatch" and "unexpected type" do. "Truncated" does not.
 image-rung faults move a Node's stored conformance verdict. Packet-rung
 observations are named, classified, and reported on the event stream,
 and they leave the axis alone.
+
+**An illegal wire-UA is the first absolute packet-rung fault** (v1.6).
+The packet rung's existing members are comparative: an unexpected UA
+compares the reply's UA against the polled node's, and an unexpected
+type compares the reply's MT against the exchange's permitted types.
+An illegal wire-UA needs no comparison — illegality is absolute, no
+conforming station can emit a byte outside [65, 192] — so it passes the
+admission test without a stored assumption set. It is counted at host
+scope (`illegalWireUAFaults`) because an illegal UA names no node to
+charge, and the event fires with `node = null`. This is the one
+packet-rung fault whose attribution does not collapse from its name,
+because there is no second assumption to compare against.
 
 The reason is that the packet rung cannot always tell whose behaviour
 it observed. A reply carrying an unexpected address is, definitionally,

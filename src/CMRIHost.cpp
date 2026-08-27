@@ -380,7 +380,7 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     // Detect before the solicited/unsolicited split, because
     // illegality is content-only, not exchange-dependent — an illegal
     // byte during an I settle or a T gap is still illegal.
-    // VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+    // VALIDATION: Design v1.6 D14: an illegal wire-UA is the first
     // absolute packet-rung fault. It is counted at host scope because
     // no node can be attributed.
     if (!isLegalWireUA(rx.wireUA)) {

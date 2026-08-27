@@ -366,7 +366,7 @@ struct CMRIHostStatistics {
   /// miss ladder at the poll rate localizes a static firmware defect
   /// (e.g. a node that omits the +65 offset) that no per-node
   /// attribution can name.
-  // VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+  // VALIDATION: Design v1.6 D14: an illegal wire-UA is the first
   // absolute packet-rung fault. It is counted at host scope because no
   // node can be attributed.
   uint32_t illegalWireUAFaults = 0;

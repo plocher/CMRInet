@@ -131,7 +131,7 @@ enum class ConformanceFault : uint8_t {
   /// station can emit it — so this is an absolute defect, not a
   /// disagreement about configuration. Attributed to no node: an
   /// illegal UA names no node to charge.
-  /// VALIDATION: Design v1.5 D14: an illegal wire-UA is the first
+  /// VALIDATION: Design v1.6 D14: an illegal wire-UA is the first
   /// absolute member of the packet rung. Illegality is absolute, so
   /// the admission test is satisfied: the name encodes the assumption
   /// comparison (no conforming station emits it).
