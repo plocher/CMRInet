@@ -4,6 +4,9 @@ examples/**/secrets.h
 # OS / editor noise
 .DS_Store
 
+# Local-only Chubb/JLC C/MRI book PDFs and support files (large; not part of the library)
+docs/ChubbBooks/
+
 # Build artifacts
 build/
 *.bin
