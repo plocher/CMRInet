@@ -1628,6 +1628,34 @@ static void test_rejected_add_does_not_poison_later_adds(void) {
   TEST_ASSERT_TRUE(host.statistics().pollsSent >= 1);
 }
 
+// Round-trip tripwire: addRemoteNode(a) must produce a handle
+// whose UA() returns a and whose wireUA() returns a + kWireUAOffset.
+// This is the defense against the encode line (node.wireUA_ = UA +
+// kWireUAOffset) or the offset constant drifting, since #96 adds a
+// second consumer of kWireUAOffset (isLegalWireUA). The test is
+// pure storage assertion — no bus, no transport, no clock.
+static void test_add_remote_node_ua_round_trip(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  RemoteNodeConfig config;
+  config.inputBytes = 0;
+
+  // Test across the UA range: 0, 1, 5, 63, 64, 127.
+  const uint8_t kTestUAs[] = {0, 1, 5, 63, 64, 127};
+  for (size_t i = 0; i < sizeof(kTestUAs) / sizeof(kTestUAs[0]); ++i) {
+    const uint8_t ua = kTestUAs[i];
+    TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk,
+                      host.addRemoteNode(ua, config));
+    RemoteNodeHandle* handle = host.node(ua);
+    TEST_ASSERT_NOT_NULL_MESSAGE(handle, "addRemoteNode failed");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(ua, handle->UA(),
+                                  "UA() does not return the configured UA");
+    TEST_ASSERT_EQUAL_HEX8_MESSAGE(
+        static_cast<uint8_t>(ua + kWireUAOffset), handle->wireUA(),
+        "wireUA() does not return UA + kWireUAOffset");
+  }
+}
+
 static void test_node_table_capacity_is_enforced(void) {
   MockCMRITransport transport;
   CMRIHost host(transport);
@@ -2846,6 +2874,7 @@ int main(void) {
   RUN_TEST(test_null_listeners_are_harmless);
   RUN_TEST(test_add_remote_node_validation);
   RUN_TEST(test_rejected_add_does_not_poison_later_adds);
+  RUN_TEST(test_add_remote_node_ua_round_trip);
   RUN_TEST(test_node_table_capacity_is_enforced);
   RUN_TEST(test_add_after_begin_bootstraps_the_new_node);
   RUN_TEST(test_delete_removes_the_node_from_the_rotation);
