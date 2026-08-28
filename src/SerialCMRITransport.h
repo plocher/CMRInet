@@ -145,6 +145,20 @@ class SerialCMRITransport : public CMRITransport {
   /// verb, never a compile-time or shipped default.
   uint32_t rateDerivedInterByteTimeoutMs() const;
 
+  /// Enable or disable echo cancellation (issue #104). When
+  /// enabled (the default, since the library ships 2-wire-ready),
+  /// pumpReceive_ discards RX bytes while TXEN is asserted
+  /// (txState_ != kIdle), so the Host's own TX echo is
+  /// eaten at the byte level before it assembles into a frame.
+  /// When disabled, RX bytes feed the decoder as usual — for
+  /// 4-wire deployments or explicit opt-out.
+  void setEchoCancelEnabled(bool enabled) {
+    echoCancelEnabled_ = enabled;
+  }
+
+  /// True when echo cancellation is active (the default).
+  bool echoCancelEnabled() const { return echoCancelEnabled_; }
+
   /// Override the receive gap-observability thresholds (see
   /// CMRIFrameDecoder::setSlowGapThresholdsMs). May be called before or
   /// after begin(); the override survives begin(). Without an override,
@@ -187,6 +201,10 @@ class SerialCMRITransport : public CMRITransport {
   // micros, rounded up to ms, min 1. Shared by the rate-derived abort
   // accessor and the slow-gap suspicion floor so the two cannot drift.
   uint32_t threeCharTimesMs_(uint32_t byteMicros) const;
+  // One character time (interop 2.2.6), rounded up to ms, min 1.
+  // Used by the echo-cancel guard band in sendPacket so the
+  // drain estimate holds TXEN one char time past shift-register-empty.
+  uint32_t oneCharTimeMs_() const;
   uint32_t defaultSlowGapLoMs_() const;
   uint32_t defaultSlowGapHiMs_() const;
 
@@ -223,6 +241,9 @@ class SerialCMRITransport : public CMRITransport {
   uint32_t slowGapLoMs_ = 0;   ///< observation floor; 0 = off (derived in begin)
   uint32_t slowGapHiMs_ = 0;   ///< slowGaps trigger; <= lo = watermark-only
   bool slowGapOverridden_ = false;
+  /// Echo cancellation: discard RX bytes while TXEN is asserted
+  /// (issue #104). Default on (the library ships 2-wire-ready).
+  bool echoCancelEnabled_ = true;
 };
 
 }  // namespace CMRInet
