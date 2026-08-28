@@ -29,10 +29,11 @@ void SerialCMRITransport::begin() {
     byteMicros_ = 1;  // defensive: the port contract says nonzero
   }
   hardwareErrorBaseline_ = port_.hardwareErrorCount();
+  // Echo cancellation: default on (the library ships 2-wire-ready).
+  echoCancelEnabled_ = true;
   if (!timeoutOverridden_) {
     interByteTimeoutMs_ = kShippedInterByteTimeoutMs;
   }
-  decoder_.setInterByteTimeoutMs(interByteTimeoutMs_);
   if (!slowGapOverridden_) {
     slowGapLoMs_ = defaultSlowGapLoMs_();
     slowGapHiMs_ = defaultSlowGapHiMs_();
@@ -72,7 +73,7 @@ bool SerialCMRITransport::sendPacket(const CMRIPacket& packet) {
   // Whole-frame wire-time floor: transmission starts now, and while
   // the UART is kept busy the frame occupies the wire for exactly
   // frame-length character times.
-  drainDueMs_ = lastTickMs_ + wireTimeMs_(n);
+  drainDueMs_ = lastTickMs_ + wireTimeMs_(n) + oneCharTimeMs_();
   pumpTransmit_(lastTickMs_);
   return true;
 }
@@ -124,6 +125,24 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
 }
 
 void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
+  // Echo cancellation (issue #104): while bytes are going out
+  // the wire (kWriting), the Host's own TX echo arrives on RX
+  // bit-parallel with the TX. Discard those bytes at the byte
+  // level before they assemble into a frame, so the echo never
+  // reaches drainReceive_ to be mis-classified as a reject.
+  // During kDraining (bytes on the wire, shift register
+  // draining) bytes feed the decoder normally — a 4-wire
+  // reply during drain works, and a 2-wire echo during
+  // drain is caught by the drainReceive_ frame-level cancel.
+  // When disabled, bytes feed the decoder as usual (4-wire or
+  // explicit opt-out).
+  if (echoCancelEnabled_ && txState_ == TxState::kWriting) {
+    int byte = port_.readByte();
+    while (byte >= 0) {
+      byte = port_.readByte();  // discard, do not feed the decoder
+    }
+    return;
+  }
   // Drain everything the port has buffered. Bytes arrive at line rate,
   // far below CPU rate, so this loop is bounded by the port's buffer.
   int byte = port_.readByte();
@@ -173,6 +192,16 @@ uint32_t SerialCMRITransport::threeCharTimesMs_(uint32_t byteMicros) const {
   // clock's millisecond granularity, never below 1 ms.
   const uint32_t ms = (3u * byteMicros + 999u) / 1000u;
   return (ms == 0) ? 1u : ms;
+}
+
+uint32_t SerialCMRITransport::oneCharTimeMs_() const {
+  // One character time (interop 2.2.6), rounded up to ms, min 1.
+  // The echo-cancel guard band in sendPacket adds this to the
+  // whole-frame wire-time estimate so TXEN stays asserted
+  // one char time past shift-register-empty, giving pumpReceive_
+  // a window to discard the echo's trailing ETX before the
+  // drain gate closes.
+  return threeCharTimesMs_(byteMicros_) / 3u;
 }
 
 uint32_t SerialCMRITransport::rateDerivedInterByteTimeoutMs() const {

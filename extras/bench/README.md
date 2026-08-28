@@ -77,6 +77,16 @@ Captures the XiaoHostTracer CDC stream and the dongle at the same time for 15 s.
 extras/bench/.venv/bin/python extras/bench/tracer_dongle.py [tracer_port] [dongle_port]
 ```
 
+### calibrate.py / calibrate.sh — 2-wire calibration (UNTESTED)
+
+Flashes the `XiaoBenchCal` sketch, validates boot, configures one node via C&C, and captures the CDC trace stream for N seconds. On 2-wire, RX trace lines should mirror the TX lines (self-echo). On 4-wire, only TX trace lines appear.
+
+**CAVEAT: UNTESTED on 2-wire.** The bench currently runs 4-wire (two-pair) only. The wiring, `bench.json` roles, and `calibrate.sh` all assume the 4-wire topology. The sketch compiles and the engine runs, but the 2-wire echo path is presumed broken until the bench is reconfigured for single-pair full-duplex.
+
+```shell
+extras/bench/.venv/bin/python extras/bench/calibrate.py [--port PORT] [--secs SECS] [--ua UA]
+```
+
 ### flash_and_probe.sh — build, program, and verdict in one step
 
 Flashes a host sketch, boots it, captures all three witnesses, and prints a VERDICT block. The verdict names each witness PASS or FAIL and prints a one-line overall summary. No file-content analysis needed — the verdict is in the printed text.

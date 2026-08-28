@@ -8,10 +8,17 @@
 // (splash: "CAL", status: "HOST" + cadence + node row), distinct
 // from the tracer ("TRC") and the sniffer ("SNIFFER").
 //
-// On 2-wire (full-duplex), the Host sees its own TX echoed back on
-// the RX pair. The trace lines show the echo arriving alongside
-// the outbound frames. Both sniffers on the same pair should see
-// the same frames.
+// CAVEAT: this sketch has NOT been validated on a 2-wire
+// (single-pair, full-duplex) bench. The bench currently runs
+// 4-wire (two-pair) only; the wiring, bench.json roles, and
+// calibrate.sh runner all assume the 4-wire topology. The
+// sketch compiles and the engine runs, but the 2-wire echo path
+// is presumed broken until the bench is reconfigured for one pair.
+//
+// On 2-wire (full-duplex), the Host would see its own TX echoed
+// back on the RX pair. The trace lines would show the echo
+// arriving alongside the outbound frames. Both sniffers on the
+// same pair should see the same frames.
 //
 // On 4-wire, the Host does NOT see its own TX (separate pairs), so
 // the trace shows outbound only — which itself tells you the wiring
@@ -20,6 +27,10 @@
 // No generators, no ring buffer, no C&C verbs beyond what the shell
 // provides by default. Just the engine, one node, OLED identity, and
 // JSON trace output the bench capture scripts can read.
+//
+// STATUS: UNTESTED on 2-wire. Compiles and the engine runs, but
+// the 2-wire echo path is presumed broken until the bench is
+// reconfigured for single-pair full-duplex.
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491):
 //   D7 - RX   CMRI RS485 receive
