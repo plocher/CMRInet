@@ -439,6 +439,21 @@ transmit-side doctrine this receive-side doctrine pairs with. The
 conjunction (estimate AND port drain) is kept even for hardware-truth
 ports: the estimate never outlives a real drain, so it costs nothing.
 
+Echo-cancel discard window (issue #104, ADR-0003): on a 2-wire
+(single-pair) bus with a misconfigured driver (`!RE` tied active), the
+Host's receiver hears its own transmitted frame. The byte-level
+discard runs while TXEN is asserted — through `kWriting` **and**
+`kDraining`, until deassert — not through `kWriting` alone. A Node
+cannot reply until it has received ETX (interop 2.3.15, corrected by E10),
+so no legitimate reply arrives inside the TXEN-asserted window; the
+fastest real Node (ESP32-C6) turns around in small milliseconds, far
+beyond the one-char-time guard band. The discard is serial-transport-
+scoped (SerialCMRITransport, never the base seam or the host) and is
+mitigation-of-misconfiguration, not a feature. The frame-level
+classification in drainReceive_ (saw our own UA/MT → unsolicited) is
+the content backstop and is cancel-flag-independent. See
+`docs/adr/0003-serial-transport-echo-is-misconfiguration-not-traffic.md`.
+
 ### D14. Declared geometry is a claim; observed geometry is evidence
 There are three sources of truth about a Node's geometry, and under the
 current spec only one direction flows:
