@@ -166,7 +166,7 @@ def test_resolve_sniffer_and_node_by_id(fixtures):
     assert result.returncode == 0
     assert result.stdout == "/dev/cu.usbmodem4333\n"
     result = run_cli(
-        "resolve", "--role", "Node", "--address", "30", *std_args(fixtures)
+        "resolve", "--role", "Node", "--id", "30", *std_args(fixtures)
     )
     assert result.returncode == 0
     assert result.stdout == "/dev/cu.usbmodem4444\n"

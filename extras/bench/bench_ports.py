@@ -769,8 +769,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_resolve = sub.add_parser("resolve", help="print the live device for a role")
     p_resolve.add_argument("--role", required=True,
                            help="role Type, e.g. Host, Sniffer, Node, Dongle")
-    p_resolve.add_argument("--id", "--address", dest="role_id",
-                           help="role ID, e.g. RX, TX, or a node address")
+    p_resolve.add_argument("--id", dest="role_id",
+                           help="role ID, e.g. RX, TX, or a node Unit Address (UA)")
     _add_common(p_resolve)
     p_resolve.set_defaults(func=_cmd_resolve)
 

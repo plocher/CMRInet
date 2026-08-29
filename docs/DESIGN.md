@@ -288,14 +288,14 @@ The node table is mutable at runtime within the D8 ceiling:
   NI/NO announced in the I body has changed.
 - **enable / disable** — unchanged from v1.1.
 
-Address is identity, so changing a node's address is delete + add,
+Unit Address (UA) is identity, so changing a node's UA is delete + add,
 never an in-place mutation. A handle that silently became a different
 logical device is worse than one that dangles.
 
-Handle lifetime: `host.node(addr)` is the canonical access path and is
+Handle lifetime: `host.node(UA)` is the canonical access path and is
 cheap enough to call at point of use. A handle is valid until that node
 is deleted. Caching across a mutation is not a supported pattern;
-`address()` is the self-check for code that does it anyway.
+`UA()` is the self-check for code that does it anyway.
 
 Mutating the node of the outstanding exchange is legal. A send in
 flight cannot be aborted — bytes are on the wire and TXEN is asserted,
@@ -510,7 +510,7 @@ of (Host assumption, Node assumption, observation):
 The tuple produces the attributions above rather than stipulating them.
 Geometry mismatch *means* the assumptions differed. An unexpected
 message type *means* they agreed and the content violated them. An
-unexpected address means the Node believes it holds a different address
+unexpected UA means the Node believes it holds a different UA
 — and the residual ambiguity (another Node answering out of turn) is
 not ambiguity about the fault but about *whose* assumption set is being
 compared, which the Host cannot always know.
@@ -537,8 +537,8 @@ packet-rung fault whose attribution does not collapse from its name,
 because there is no second assumption to compare against.
 
 The reason is that the packet rung cannot always tell whose behaviour
-it observed. A reply carrying an unexpected address is, definitionally,
-some other device's address. And on 2-wire media the Host sees its own
+it observed. A reply carrying an unexpected UA is, definitionally,
+some other device's UA. And on 2-wire media the Host sees its own
 frames: its own P comes back carrying the polled Node's UA with MT 'P',
 which at this rung is indistinguishable from that Node answering with
 the wrong type. Wiring either to the axis would park every Node on
@@ -954,7 +954,7 @@ and touches only `CMRINode` and its own `CMRINode*` types.
 Note the strawman above predates the implementation: `addRemoteNode()`
 returns the host for chaining and never hands back a handle. Under D5
 that chaining idiom is retired in favor of per-call status, and handles
-come from `node(addr)` at point of use.
+come from `node(UA)` at point of use.
 
 Open items to settle during tracer-bullet implementation:
 1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
