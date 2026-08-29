@@ -550,7 +550,7 @@ bool handleGeneratorControl(char* cmd) {
   }
 
   uint8_t target_ua = kGeneratorDefaultUA;
-  if (node_scoped_gen && p.has_UA) target_ua = p.wireUA;
+  if (node_scoped_gen && p.has_UA) target_ua = p.UA;
   if (node_scoped_gen) initializeGeneratorDefaults(target_ua);
 
   if (is_disable) {

@@ -154,9 +154,17 @@ def main() -> int:
     parser.add_argument("--ua-b", type=int, default=31)
     parser.add_argument("--ua-a-in", type=int, default=7)
     parser.add_argument("--ua-a-out", type=int, default=7)
-    parser.add_argument("--ua-b-in", type=int, default=4)
-    parser.add_argument("--ua-b-out", type=int, default=4)
-    parser.add_argument("--ua-a-walker-byte", type=int, default=3)
+    parser.add_argument("--ua-b-in", type=int, default=3)
+    parser.add_argument("--ua-b-out", type=int, default=3)
+    # Walker bytes per docs/testbed-physical-notes.md jumper map:
+    # UA30 byte 5 (cross-byte jumper OUT(5,1)->IN(6,1));
+    # UA31 byte 2 (same-byte loopback). Loopback defaults follow the
+    # physical jumpers. NOTE: a loopback and a walker on the same node
+    # both write outputs — if they share a byte the walker pattern is
+    # visually confusing (two bits change per step, not one). That is a
+    # readability concern, not a defect; the combination is a valid
+    # stimulus. See the dual_node README.
+    parser.add_argument("--ua-a-walker-byte", type=int, default=5)
     parser.add_argument("--ua-b-walker-byte", type=int, default=2)
     parser.add_argument("--walker-period-ms", type=int, default=1000)
     parser.add_argument("--ua-a-loopback-byte", type=int, default=3)
