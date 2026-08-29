@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import Optional
 
 PKT_RE = re.compile(
-    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)\s+mt=(?P<mt>[A-Z])"
+    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+[uU][aA]=(?P<ua>\d+)\s+mt=(?P<mt>[A-Z])"
 )
 
 
 @dataclass
 class NodeEvidence:
-    """Validation evidence for one node address."""
+    """Validation evidence for one node UA."""
 
-    address: int
+    ua: int
     expected_input_bytes: Optional[int] = None
     tx_i_or_t: int = 0
     tx_polls: int = 0
@@ -88,11 +88,11 @@ def _analyze_lines(
     """Analyze capture lines for required initialization and poll/reply activity."""
     evidence = {
         ua_a: NodeEvidence(
-            address=ua_a,
+            ua=ua_a,
             expected_input_bytes=(expected_inputs or {}).get(ua_a),
         ),
         ua_b: NodeEvidence(
-            address=ua_b,
+            ua=ua_b,
             expected_input_bytes=(expected_inputs or {}).get(ua_b),
         ),
     }
@@ -153,6 +153,10 @@ def _analyze_lines(
             failures.append(f"UA{addr}: no TX I/T frames captured")
         if node.tx_polls == 0:
             failures.append(f"UA{addr}: no TX poll frames captured")
+        # Secondary wire-activity floor, not the primary scorer: the
+        # semantic path (accepted_exchanges below) is what #88 required.
+        # This catches "no traffic on the wire at all" as an independent
+        # signal; it can no longer carry a node by itself.
         if node.rx_replies == 0:
             failures.append(f"UA{addr}: no RX reply frames captured")
         if node.status_state is None:
@@ -247,13 +251,13 @@ def main() -> int:
 
     print(f"Capture: {capture_path}")
     print(
-        f"UA{result.ua_a.address} -> I/T TX={result.ua_a.tx_i_or_t}, "
+        f"UA{result.ua_a.ua} -> I/T TX={result.ua_a.tx_i_or_t}, "
         f"P TX={result.ua_a.tx_polls}, R RX={result.ua_a.rx_replies}, "
         f"state={result.ua_a.status_state}, exchanges={result.ua_a.accepted_exchanges}, "
         f"observedIn={result.ua_a.observed_input_bytes}"
     )
     print(
-        f"UA{result.ua_b.address} -> I/T TX={result.ua_b.tx_i_or_t}, "
+        f"UA{result.ua_b.ua} -> I/T TX={result.ua_b.tx_i_or_t}, "
         f"P TX={result.ua_b.tx_polls}, R RX={result.ua_b.rx_replies}, "
         f"state={result.ua_b.status_state}, exchanges={result.ua_b.accepted_exchanges}, "
         f"observedIn={result.ua_b.observed_input_bytes}"
