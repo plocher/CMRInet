@@ -29,8 +29,11 @@ void SerialCMRITransport::begin() {
     byteMicros_ = 1;  // defensive: the port contract says nonzero
   }
   hardwareErrorBaseline_ = port_.hardwareErrorCount();
-  // Echo cancellation: default on (the library ships 2-wire-ready).
-  echoCancelEnabled_ = true;
+  // Echo cancellation: default Auto (ADR-0003). Survives a
+  // setEchoCancelMode() override like the inter-byte timeout.
+  if (!echoCancelOverridden_) {
+    echoCancelMode_ = EchoCancelMode::kAuto;
+  }
   if (!timeoutOverridden_) {
     interByteTimeoutMs_ = kShippedInterByteTimeoutMs;
   }
@@ -43,8 +46,18 @@ void SerialCMRITransport::begin() {
 
 void SerialCMRITransport::tick(uint32_t nowMs) {
   lastTickMs_ = nowMs;
+  // Tick consistency (ADR-0003): pumpTransmit_ may detect
+  // drain-complete mid-tick and latch pendingIdle_ without
+  // flipping txState_, so pumpReceive_ sees the pre-flip
+  // state (kDraining) for the whole tick and the echo
+  // discard stays active. The flip commits after
+  // pumpReceive_ — one truth, no mid-tick race.
+  pendingIdle_ = false;
   pumpTransmit_(nowMs);
   pumpReceive_(nowMs);
+  if (pendingIdle_) {
+    txState_ = TxState::kIdle;
+  }
   // Expire stale partial frames: elapsed line silence is the only
   // evidence of a truncated frame a receiver has (interop 2.2.6).
   decoder_.expireIdle(nowMs);
@@ -117,34 +130,74 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
     // detectors must agree: the wire-time estimate covers ports that
     // only know their buffer; the port's own answer covers late
     // chunks still sitting in its FIFO (see header).
+    //
+    // TXEN drops now (wire discipline), but the txState_ flip is
+    // deferred via pendingIdle_ so pumpReceive_ sees kDraining
+    // for the whole tick and the echo discard stays active (ADR-0003).
     if (timeReached(nowMs, drainDueMs_) && port_.transmitDrained()) {
       port_.setTransmitEnable(false);
-      txState_ = TxState::kIdle;
+      pendingIdle_ = true;  // commit the flip after pumpReceive_
     }
   }
 }
 
 void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
-  // Echo cancellation (issue #104): while bytes are going out
-  // the wire (kWriting), the Host's own TX echo arrives on RX
-  // bit-parallel with the TX. Discard those bytes at the byte
-  // level before they assemble into a frame, so the echo never
-  // reaches drainReceive_ to be mis-classified as a reject.
-  // During kDraining (bytes on the wire, shift register
-  // draining) bytes feed the decoder normally — a 4-wire
-  // reply during drain works, and a 2-wire echo during
-  // drain is caught by the drainReceive_ frame-level cancel.
-  // When disabled, bytes feed the decoder as usual (4-wire or
-  // explicit opt-out).
-  if (echoCancelEnabled_ && txState_ == TxState::kWriting) {
+  // Echo cancellation (issue #104, ADR-0003): on a 2-wire
+  // bus with a misconfigured driver (!RE tied active), the
+  // Host's receiver hears its own TX echo. The byte-level
+  // discard runs while TXEN is asserted — through kWriting
+  // AND kDraining, until deassert — because a Node cannot
+  // reply until it has received ETX (interop 2.3.15, E10), so
+  // no legitimate reply arrives inside the TXEN-asserted
+  // window. This is mitigation-of-misconfiguration, not a
+  // feature.
+  //
+  // Three-state mode (ADR-0003):
+  // - AlwaysOn: discard RX while TXEN asserted.
+  // - Auto (default): watch for RX during TX; on the first
+  //   observation, count it (rxDuringTx_), arm the discard
+  //   permanently. The host/shell reads rxDuringTx() to
+  //   surface the misconfiguration diagnostic.
+  // - AlwaysOff: never discard; feed the decoder (4-wire
+  //   or fixed 2-wire explicit opt-out).
+  const bool txAsserted = (txState_ != TxState::kIdle);
+  if (txAsserted) {
+    const bool discardActive =
+        (echoCancelMode_ == EchoCancelMode::kAlwaysOn) ||
+        (echoCancelMode_ == EchoCancelMode::kAuto && echoCancelArmed_);
+    if (discardActive) {
+      // Discard the echo for the whole TXEN-asserted window.
+      // The echo never reaches the decoder.
+      int byte = port_.readByte();
+      while (byte >= 0) {
+        byte = port_.readByte();  // discard, do not feed the decoder
+      }
+      return;
+    }
+    // Discard not active (AlwaysOff, or Auto not yet armed):
+    // feed the decoder so the defect is observable, and count
+    // each byte as the rxDuringTx defect signal. In Auto,
+    // the first observation arms the discard (takes effect
+    // next tick; any echo bytes that escape this tick are
+    // caught by the frame-level drainReceive_ classification).
     int byte = port_.readByte();
     while (byte >= 0) {
-      byte = port_.readByte();  // discard, do not feed the decoder
+      ++rxDuringTx_;
+      if (echoCancelMode_ == EchoCancelMode::kAuto && !echoCancelArmed_) {
+        echoCancelArmed_ = true;  // arm permanently
+      }
+      // VALIDATION: Interop v1.1 2.2.9: received bytes normalize
+      // to unsigned 8-bit values at the read.
+      if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
+        drainDecoder_();
+      }
+      byte = port_.readByte();
     }
     return;
   }
-  // Drain everything the port has buffered. Bytes arrive at line rate,
-  // far below CPU rate, so this loop is bounded by the port's buffer.
+  // kIdle: drain everything the port has buffered. Bytes arrive at
+  // line rate, far below CPU rate, so this loop is bounded by the
+  // port's buffer.
   int byte = port_.readByte();
   while (byte >= 0) {
     // VALIDATION: Interop v1.1 2.2.9: received bytes normalize to

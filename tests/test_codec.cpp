@@ -658,6 +658,68 @@ static void test_decode_gap_fatal_silence_stamps_watermark(void) {
 
 // ------------------------------------------------------------------ main
 
+// Phase B (issue #104): the trailing NULL safety characterization.
+// The 2-wire bench measured a framing-valid 0x00 arriving one char
+// time after the host's own echoed frame, in kIdle (after ETX, after
+// TXEN deassert). A prior cpNode sketch hung in an infinite loop when
+// a stray NULL triggered a decoder bug. These tests prove this decoder
+// returns to a clean kHunt with no partial frame held and no counter
+// storm — the NULL is silently dropped, and the next real frame decodes.
+
+// A complete echoed P frame (UA 5) followed by the measured stray 0x00:
+// the NULL lands in kHunt after the frame committed. It must be dropped
+// silently (pre-STX bytes are never stored, rule 2.2.4), no counter
+// increments, and a subsequent real frame decodes cleanly.
+static void test_decode_null_after_frame_is_dropped_cleanly(void) {
+  CMRIFrameDecoder d;
+  d.setInterByteTimeoutMs(10);
+  // The host's own echoed P poll: SYN SYN STX UA(5) P ETX
+  const uint8_t echo[] = {0xFF, 0xFF, 0x02, 0x46, 0x50, 0x03};
+  TEST_ASSERT_EQUAL_INT(1, feedAll(d, echo, sizeof(echo), 0));
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(d.take(got));
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);
+  TEST_ASSERT_EQUAL_HEX8('P', got.mt);
+
+  // The stray NULL, one char time later — in kHunt, silently dropped.
+  TEST_ASSERT_FALSE(d.feed(0x00, 1));
+  TEST_ASSERT_FALSE(d.hasPacket());
+  // No counter should have fired for the NULL.
+  const CMRIFrameDecoder::Statistics s = d.statistics();
+  TEST_ASSERT_EQUAL_UINT32(1, s.framesDecoded);
+  TEST_ASSERT_EQUAL_UINT32(0, s.timeoutAborts);
+  TEST_ASSERT_EQUAL_UINT32(0, s.framesRestarted);
+  TEST_ASSERT_EQUAL_UINT32(0, s.headerAborts);
+  TEST_ASSERT_EQUAL_UINT32(0, s.overflowAborts);
+  TEST_ASSERT_EQUAL_UINT32(0, s.danglingDle);
+
+  // A real node reply right after the NULL decodes normally — no hang,
+  // no stuck state, no residual from the stray byte.
+  const uint8_t reply[] = {0xFF, 0xFF, 0x02, 0x46, 0x52, 0x03};  // R reply UA 5
+  TEST_ASSERT_EQUAL_INT(1, feedAll(d, reply, sizeof(reply), 2));
+  TEST_ASSERT_TRUE(d.take(got));
+  TEST_ASSERT_EQUAL_HEX8('R', got.mt);
+  TEST_ASSERT_EQUAL_UINT32(2, d.statistics().framesDecoded);
+}
+
+// A NULL while hunting (between frames, no prior frame) is likewise
+// silently dropped — it cannot bootstrap a frame (needs STX/0x02).
+static void test_decode_null_while_hunting_does_nothing(void) {
+  CMRIFrameDecoder d;
+  TEST_ASSERT_FALSE(d.feed(0x00, 0));
+  TEST_ASSERT_FALSE(d.feed(0x00, 1));
+  TEST_ASSERT_FALSE(d.hasPacket());
+  TEST_ASSERT_EQUAL_UINT32(0, d.statistics().framesDecoded);
+
+  const uint8_t frame[] = {0x02, 0x46, 0x50, 0x03};
+  TEST_ASSERT_EQUAL_INT(1, feedAll(d, frame, sizeof(frame), 2));
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(d.take(got));
+  TEST_ASSERT_EQUAL_HEX8(0x46, got.wireUA);
+}
+
+// ------------------------------------------------------------------ main
+
 int main(void) {
   UNITY_BEGIN();
   // encoder
@@ -701,5 +763,8 @@ int main(void) {
   RUN_TEST(test_decode_gap_disabled_when_lo_zero);
   RUN_TEST(test_decode_gap_watermark_tracks_max_not_last);
   RUN_TEST(test_decode_gap_fatal_silence_stamps_watermark);
+  // Phase B (issue #104): trailing NULL safety through the decoder
+  RUN_TEST(test_decode_null_after_frame_is_dropped_cleanly);
+  RUN_TEST(test_decode_null_while_hunting_does_nothing);
   return UNITY_END();
 }
