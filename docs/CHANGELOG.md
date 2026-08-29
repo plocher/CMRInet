@@ -34,6 +34,17 @@ High-level changes, newest first.
     `test_tracer`.
 
 ### Changed
+- CLI `--address` retired end-to-end (follow-up to the #102 rename).
+  The #102 rename deliberately kept `--address` for backward compat,
+  but the rest of the bench tooling had already migrated to `--ua`,
+  so the lone `--address` was now inconsistent with its own family.
+  - `cmri_tracer --address N` is now `cmri_tracer --ua N`.
+  - `bench resolve --id|--address` drops the `--address` alias; the
+    canonical flag is `--id`. The alias was `--id`, not UA-specific:
+    the role ID is "RX"/"TX" for sniffers and a UA only for Node
+    roles, so `--ua` would have misdescribed it. `bench resolve
+    --role Node --id 30` is unchanged in behavior.
+  - Callers updated; no fielded external consumers.
 - UA terminology rename (issue #102, breaking): the library's
   `ua`/`address` vocabulary was inverted relative to the field norm.
   Bruce Chubb's QBASIC reference code and NMRA LCS-9.10.1 both name the

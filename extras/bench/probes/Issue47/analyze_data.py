@@ -32,6 +32,11 @@ VERDICT_ERROR = "ERROR"
 CYCLING_DROP_RATIO = 0.5
 CYCLING_HIGH_WATER_MS = 4000
 THRESHOLD_MS = 8000
+# Historical: the "phantom" is a deliberately-missing bench node the Host
+# polls to drive poll-backoff. In the one-real-node era the phantom was
+# UA 31; the bench later added a real node at UA 31, so the live phantom
+# moved to UA 32 (compiled as TRACER_PHANTOM_UA in XiaoHostTracer). Kept
+# at 31 here only to rescore old #47 captures; #47 is closed.
 DEFAULT_PHANTOM_UA = 31
 
 PKT_RE = re.compile(

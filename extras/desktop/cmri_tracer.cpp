@@ -82,7 +82,7 @@ struct Options {
 
 void usage(const char* argv0) {
   fprintf(stderr,
-          "usage: %s --device <path> [--baud N] [--address N]\n"
+          "usage: %s --device <path> [--baud N] [--ua N]\n"
           "          [--input-bytes N] [--output-bytes N] [--reply-timeout-ms N]\n"
           "          [--inter-byte-timeout-ms N]\n"
           "          [--slow-gap-lo-ms N] [--slow-gap-hi-ms N]\n"
@@ -107,10 +107,10 @@ bool parseOptions(int argc, char** argv, Options& opt) {
       opt.device = argv[++i];
     } else if (strcmp(arg, "--baud") == 0 && hasValue) {
       opt.baud = static_cast<uint32_t>(strtoul(argv[++i], nullptr, 10));
-    } else if (strcmp(arg, "--address") == 0 && hasValue) {
+    } else if (strcmp(arg, "--ua") == 0 && hasValue) {
       const unsigned long v = strtoul(argv[++i], nullptr, 10);
       if (v > 127) {
-        fprintf(stderr, "error: --address must be 0..127\n");
+        fprintf(stderr, "error: --ua must be 0..127\n");
         return false;
       }
       opt.UA = static_cast<uint8_t>(v);
