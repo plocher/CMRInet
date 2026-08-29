@@ -1,7 +1,7 @@
 # CMRInet as Fielded: Interop Profile and Errata for LCS-9.10.1
 
 Status: working draft for review.
-Version: 1.1 (bump when any rule or erratum changes; `// VALIDATION:`
+Version: 1.2 (bump when any rule or erratum changes; `// VALIDATION:`
 tags in code cite this version — see
 `docs/agents/validation-comments.md`).
 Audience: LCS-9.10.1 authors, JMRI maintainers, and implementers of
@@ -266,6 +266,37 @@ acknowledgment or deprecate it.
   D, W, A, C, M appear on fielded networks and are absent from the
   spec (review-JMRI-cmri-host.md, Finding 3). Document or reserve them.
 
+## E10. A Node cannot reply until it has received ETX
+
+Profile rule 2.3.15 (v1.1) read: "Expect a fast Node to begin its
+reply while the Host's ETX/0x03 still drains. Drop the driver
+promptly." That wording mis-models the wire physics.
+
+A Node cannot begin its reply until it has received the poll's ETX,
+which is the last byte the Host is draining. The reply then travels
+back over the medium, so it arrives at the Host's receiver after the
+Host's TXEN has deasserted — not while ETX drains. No real Node
+replies during the Host's drain window. The fastest bench Node
+(ESP32-C6 cpNode) turns around in small milliseconds; a one-char-time
+guard band (~0.4 ms at 28800 baud) is far below that, so even the
+fastest real Node clears the guard band with orders of magnitude to
+spare.
+
+Consequence for the receive discipline: the Host's receive path may
+discard RX bytes for the whole TXEN-asserted window (through drain,
+until deassert) without losing a legitimate reply, because no
+legitimate reply can arrive inside it. The prior v1.1 wording led the
+shipped echo-cancel (issue #104) to scope its byte-discard to the
+kWriting state alone (ending at port-acceptance, before the echo
+arrives), which a 2026-08-28 bench showed is a near-empty mitigation
+for the self-echo it claims to handle. See
+`docs/two-wire-echo-bench-findings.md` and `docs/adr/0003-*.md`.
+
+Corrected wording (applied to rule 2.3.15 below): "Drop the driver
+promptly once the last byte has left the shift register. A Node
+cannot begin its reply until it has received ETX, so its reply arrives
+after TXEN deasserts, not while ETX drains."
+
 # Part 2 — Interop profile
 
 These rules make a new implementation interoperate with the fielded
@@ -381,8 +412,12 @@ Scheduling and recovery:
 RS-485 line discipline, where the converter does not manage direction:
 14. Assert TXEN, write the frame, flush until the last byte leaves the
     shift register, then drop TXEN at once.
-15. Expect a fast Node to begin its reply while the Host's ETX/0x03
-    still drains. Drop the driver promptly.
+15. Drop the driver promptly once the last byte has left the shift
+    register. A Node cannot begin its reply until it has received ETX,
+    which is the last byte draining, so its reply arrives after the Host's
+    TXEN deasserts — not while ETX drains. (Corrected by E10; the
+    prior v1.1 wording "expect a fast Node to begin its reply while the
+    Host's ETX still drains" mis-models the wire physics.)
 
 ## 2.4 Node rules
 
