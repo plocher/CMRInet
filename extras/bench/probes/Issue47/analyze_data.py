@@ -40,7 +40,7 @@ THRESHOLD_MS = 8000
 DEFAULT_PHANTOM_UA = 31
 
 PKT_RE = re.compile(
-    r"PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
+    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+[uU][aA]=(?P<ua>\d+)(?:\s+mt=(?P<mt>[A-Z]))?"
 )
 
 

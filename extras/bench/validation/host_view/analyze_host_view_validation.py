@@ -16,7 +16,7 @@ EXPECT_GEOMETRY_MISMATCH = "geometry_mismatch"
 EXPECT_OFFLINE = "offline"
 
 PKT_RE = re.compile(
-    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+ua=(?P<ua>\d+)\s+mt=(?P<mt>[A-Z])"
+    r"^PKT\s+t=(?P<t>\d+)\s+(?P<dir>TX|RX)\s+[uU][aA]=(?P<ua>\d+)\s+mt=(?P<mt>[A-Z])"
 )
 
 
@@ -210,6 +210,10 @@ def _validate_online(exp: NodeExpectation, node: NodeEvidence, failures: list[st
         failures.append(f"UA{exp.ua}: no TX I/T frames captured")
     if node.tx_polls == 0:
         failures.append(f"UA{exp.ua}: no TX poll frames captured")
+    # Secondary wire-activity floor, not the primary scorer: the
+    # semantic path (accepted_exchanges below) is what #88 required.
+    # This catches "no traffic on the wire at all" as an independent
+    # signal; it can no longer carry a node by itself.
     if node.rx_replies == 0:
         failures.append(f"UA{exp.ua}: no RX reply frames captured")
     if node.status_state in (None, "UNINITIALIZED", "OFFLINE", "MISCONFIGURED"):
