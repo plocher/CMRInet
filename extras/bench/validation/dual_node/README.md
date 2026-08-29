@@ -8,14 +8,26 @@ Quick bench validation tooling for the second physical cpNode bench node work (#
 
 ## Traffic profile
 For both UA30 and UA31, the gather script configures:
-- `slowwalker` on output byte 3 for UA30 and byte 2 for UA31
+- `slowwalker` on output byte 5 for UA30 and byte 2 for UA31 (per the
+  jumper inventory in `docs/testbed-physical-notes.md`)
 - `toggleoutfrominput` in `write_read` mode with explicit `src_byte/src_bit` and `dst_byte/dst_bit`
   - UA30 default: byte 3 bit 1
   - UA31 default: byte 2 bit 1
 
 Override jumper mapping as needed with:
+- `--ua-a-walker-byte/--ua-b-walker-byte`
 - `--ua-a-loopback-byte/--ua-a-loopback-bit`
 - `--ua-b-loopback-byte/--ua-b-loopback-bit`
+
+### Walker + loopback on the same node: a visual note
+A loopback and a walker on the same node both write outputs. If they
+share a byte, the walker pattern is visually confusing — two bits change
+per step, not one — which can disrupt a run that is not expecting it.
+That is a readability concern, not a defect: the combination is a valid
+stimulus that exercises the node's reply path. To get a clean one-bit
+walker pattern for visual confirmation, disable the loopback on that
+node (pass `--ua-x-loopback-byte -1`) or put the walker and loopback
+on different bytes.
 
 This uses the new UA-aware generator syntax:
 - `configure slowwalker ua <ua> ...`

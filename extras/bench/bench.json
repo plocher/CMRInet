@@ -9,10 +9,22 @@
         "Location": "4-1.1"
       },
       {
+        "Type": "Node",
+        "ID": "30",
+        "Serial": "58:E6:C5:1A:77:74",
+        "Location": "4-1.2"
+      },
+      {
         "Type": "Sniffer",
         "ID": "RX",
         "Serial": "A0:F2:62:86:B8:18",
         "Location": "4-1.4.2"
+      },
+      {
+        "Type": "Node",
+        "ID": "31",
+        "Serial": "A0:F2:62:85:CC:64",
+        "Location": "4-1.4.3"
       },
       {
         "Type": "Sniffer",
@@ -21,22 +33,10 @@
         "Location": "4-1.4.1"
       },
       {
-        "Type": "Node",
-        "ID": "30",
-        "Serial": "58:E6:C5:1A:77:74",
-        "Location": "4-1.2"
-      },
-      {
         "Type": "Dongle",
         "ID": "RS485",
         "Serial": "BG04ID4L",
         "Location": "5-1"
-      },
-      {
-        "Type": "Node",
-        "ID": "31",
-        "Serial": "A0:F2:62:85:CC:64",
-        "Location": "4-1.4.3"
       }
     ]
   }
