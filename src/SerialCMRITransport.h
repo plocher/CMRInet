@@ -145,19 +145,46 @@ class SerialCMRITransport : public CMRITransport {
   /// verb, never a compile-time or shipped default.
   uint32_t rateDerivedInterByteTimeoutMs() const;
 
-  /// Enable or disable echo cancellation (issue #104). When
-  /// enabled (the default, since the library ships 2-wire-ready),
-  /// pumpReceive_ discards RX bytes while TXEN is asserted
-  /// (txState_ != kIdle), so the Host's own TX echo is
-  /// eaten at the byte level before it assembles into a frame.
-  /// When disabled, RX bytes feed the decoder as usual — for
-  /// 4-wire deployments or explicit opt-out.
-  void setEchoCancelEnabled(bool enabled) {
-    echoCancelEnabled_ = enabled;
+  /// Echo-cancel mode (issue #104, ADR-0003). On a 2-wire bus
+  /// with a misconfigured driver (!RE tied active), the Host's
+  /// receiver hears its own TX echo. The byte-level discard
+  /// runs while TXEN is asserted — through kWriting and
+  /// kDraining, until deassert — because a Node cannot reply
+  /// until it has received ETX (interop 2.3.15, E10), so no
+  /// legitimate reply arrives inside the TXEN-asserted window.
+  /// This is mitigation-of-misconfiguration, not a feature.
+  ///
+  /// - Auto (the default): watch for RX bytes while TXEN is
+  ///   asserted; on the first observation, count it (rxDuringTx),
+  ///   arm the discard permanently, and surface a diagnostic via
+  ///   rxDuringTx(). The host/shell reads the counter.
+  /// - AlwaysOn: always discard RX while TXEN asserted.
+  /// - AlwaysOff: never discard; RX bytes feed the decoder as
+  ///   usual (4-wire or fixed 2-wire explicit opt-out).
+  ///
+  /// May be called before or after begin(); the override
+  /// survives begin(). Without an override, begin() applies
+  /// Auto.
+  enum class EchoCancelMode : uint8_t {
+    kAuto,       ///< watch for RX during TX; arm on first observation
+    kAlwaysOn,   ///< always discard RX while TXEN asserted
+    kAlwaysOff,  ///< never discard (4-wire or fixed 2-wire opt-out)
+  };
+
+  void setEchoCancelMode(EchoCancelMode mode) {
+    echoCancelMode_ = mode;
+    echoCancelOverridden_ = true;
   }
 
-  /// True when echo cancellation is active (the default).
-  bool echoCancelEnabled() const { return echoCancelEnabled_; }
+  /// The active echo-cancel mode.
+  EchoCancelMode echoCancelMode() const { return echoCancelMode_; }
+
+  /// Cumulative count of RX bytes observed while TXEN was
+  /// asserted and the discard was not active (AlwaysOff, or
+  /// Auto before arming). Zero when the discard is eating the
+  /// echo (AlwaysOn, or Auto after arming). Serial-transport-
+  /// scoped defect signal; not on the base seam or the host.
+  uint32_t rxDuringTx() const { return rxDuringTx_; }
 
   /// Override the receive gap-observability thresholds (see
   /// CMRIFrameDecoder::setSlowGapThresholdsMs). May be called before or
@@ -230,6 +257,12 @@ class SerialCMRITransport : public CMRITransport {
   // only while txState_ != kIdle (explicit state, no time sentinel —
   // see CMRITime.h).
   uint32_t drainDueMs_ = 0;
+  // Deferred txState_ flip: latched by pumpTransmit_ on drain-complete,
+  // committed in tick() after pumpReceive_ so the echo discard
+  // sees kDraining for the whole tick (ADR-0003 tick consistency).
+  // The seed of a general deferred-state-commit pattern; see
+  // the TickState tech-debt issue.
+  bool pendingIdle_ = false;
 
   uint32_t lastTickMs_ = 0;
   uint32_t byteMicros_ = 1;  ///< cached port character time (set in begin)
@@ -241,9 +274,14 @@ class SerialCMRITransport : public CMRITransport {
   uint32_t slowGapLoMs_ = 0;   ///< observation floor; 0 = off (derived in begin)
   uint32_t slowGapHiMs_ = 0;   ///< slowGaps trigger; <= lo = watermark-only
   bool slowGapOverridden_ = false;
-  /// Echo cancellation: discard RX bytes while TXEN is asserted
-  /// (issue #104). Default on (the library ships 2-wire-ready).
-  bool echoCancelEnabled_ = true;
+  /// Echo cancellation (issue #104, ADR-0003): mitigation
+  /// of a misconfigured 2-wire bus driver. The byte-level
+  /// discard runs while TXEN is asserted (kWriting and
+  /// kDraining, until deassert). Default Auto; survives begin().
+  EchoCancelMode echoCancelMode_ = EchoCancelMode::kAuto;
+  bool echoCancelOverridden_ = false;  ///< setEchoCancelMode() was called
+  bool echoCancelArmed_ = false;      ///< Auto: armed on first rxDuringTx
+  uint32_t rxDuringTx_ = 0;           ///< RX bytes seen during TX, discard off
 };
 
 }  // namespace CMRInet

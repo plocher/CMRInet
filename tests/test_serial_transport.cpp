@@ -317,22 +317,32 @@ static void test_rx_truncated_frame_never_delivers(void) {
   TEST_ASSERT_EQUAL_HEX8(ok.wireUA, got.wireUA);
 }
 
-static void test_rx_works_while_transmit_drains(void) {
-  // A fast Node begins its reply while the Host's ETX still drains
-  // (interop 2.3.15): receive must not wait for sendComplete.
+static void test_rx_reply_arrives_after_drain(void) {
+  // Physics-aware replacement for the v1.1 fiction test. A Node
+  // cannot reply until it has received ETX (interop 2.3.15, E10), so
+  // its reply arrives after the Host's TXEN deasserts — not while ETX
+  // drains. The prior test queued a reply "while draining" with no
+  // wire-propagation model, encoding the fiction that the bench
+  // disproved. This test models the physics: the reply is queued
+  // only after the drain completes and TXEN drops.
   FakeCMRISerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
   TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
 
+  // Drain completes: TXEN drops, sendComplete() true.
+  t.tick(kPollWireMs);
+  TEST_ASSERT_TRUE(t.sendComplete());
+  TEST_ASSERT_FALSE(port.txenAsserted());
+
+  // Only now (after ETX has left the wire) can a Node reply.
   const CMRIPacket reply = makePacket(5, 'R');
   uint8_t wire[16];
   const size_t n = encodeInto(reply, wire, sizeof(wire));
   port.queueRx(wire, n);
+  t.tick(kPollWireMs + 1);
 
-  t.tick(1);  // still draining
-  TEST_ASSERT_FALSE(t.sendComplete());
   CMRIPacket got;
   TEST_ASSERT_TRUE(t.receivePacket(got));
   TEST_ASSERT_EQUAL_HEX8(reply.wireUA, got.wireUA);
@@ -498,6 +508,150 @@ static void test_slow_gap_observed_end_to_end_through_transport(void) {
 
 // ------------------------------------------------------------------- main
 
+// Phase B/C (issue #104, ADR-0003): echo-cancel characterization
+// through the transport against FakeCMRISerialPort. The 2-wire bench
+// measured the host's own echo arriving while TXEN is asserted. These
+// tests pin the three-state mode (Auto | AlwaysOn | AlwaysOff), the
+// discard scope (through kDraining to deassert), and the auto-detect
+// mechanism (rxDuringTx signal).
+
+// The shipped default is Auto (the library ships 2-wire-ready).
+static void test_echo_cancel_default_auto(void) {
+  FakeCMRISerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();
+  TEST_ASSERT_TRUE(t.echoCancelMode() ==
+                    SerialCMRITransport::EchoCancelMode::kAuto);
+}
+
+// AlwaysOn: RX bytes that arrive while TXEN is asserted (kWriting or
+// kDraining) are discarded at the byte level — the decoder never sees
+// them. Use a write limit to keep kWriting alive across ticks, then
+// let it drain and confirm the discard still holds through deassert.
+static void test_echo_cancel_on_discards_rx_through_drain(void) {
+  FakeCMRISerialPort port;
+  port.setWriteLimit(2);  // accept 2 bytes/call -> kWriting persists
+  SerialCMRITransport t(port);
+  t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOn);
+  t.begin();
+  t.tick(0);
+
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  uint8_t echo[16];
+  const size_t n = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+
+  // kWriting phase: discard. (tick 1: pumpTransmit_ writes 2,
+  // txWritten_=4, still kWriting.)
+  port.queueRx(echo, n);
+  t.tick(1);
+
+  // kDraining phase (all bytes accepted): discard still holds.
+  // tick 2: pumpTransmit_ writes the last 2, txWritten_=6 ->
+  // kDraining, then pumpReceive_ discards.
+  port.queueRx(echo, n);
+  t.tick(2);
+  // Do NOT reach tick 3: drainDueMs_ = wireTime(3) + oneCharTime(0) = 3,
+  // so the drain completes at tick 3 and pumpReceive_ would feed the
+  // decoder in kIdle. Stopping at tick 2 keeps txState_ = kDraining
+  // for the assertion.
+
+  // The whole echo was discarded; nothing decoded.
+  CMRIPacket got;
+  TEST_ASSERT_FALSE(t.receivePacket(got));
+  TEST_ASSERT_EQUAL_UINT32(0, t.decoderStatistics().framesDecoded);
+}
+
+// AlwaysOff: the same echo bytes reach the decoder and assemble.
+// The mode survives begin(), so the opt-out can be set before begin().
+static void test_echo_cancel_off_feeds_rx_while_writing(void) {
+  FakeCMRISerialPort port;
+  port.setWriteLimit(2);
+  SerialCMRITransport t(port);
+  t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOff);
+  t.begin();  // survives: mode stays AlwaysOff
+  TEST_ASSERT_TRUE(t.echoCancelMode() ==
+                    SerialCMRITransport::EchoCancelMode::kAlwaysOff);
+  t.tick(0);
+
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  uint8_t echo[16];
+  const size_t n = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+  port.queueRx(echo, n);
+
+  t.tick(1);  // kWriting; AlwaysOff -> decoder fed
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(t.receivePacket(got));
+  TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(5 + kWireUAOffset),
+                          got.wireUA);
+  TEST_ASSERT_EQUAL_HEX8('P', got.mt);
+  // rxDuringTx counted the echo bytes (defect visible in AlwaysOff).
+  TEST_ASSERT_TRUE(t.rxDuringTx() > 0);
+}
+
+// The mid-tick race: drain completes AND echo bytes are in the
+// RX buffer in the SAME tick. Without the pendingIdle_ deferral,
+// pumpTransmit_ flips txState_ to kIdle before pumpReceive_ runs,
+// so pumpReceive_ sees kIdle and feeds the echo to the decoder.
+// With the deferral, pumpReceive_ sees kDraining for the whole
+// tick and discards the echo. This is the race the bench surfaced.
+static void test_echo_cancel_discard_holds_across_drain_complete_tick(void) {
+  FakeCMRISerialPort port;  // unlimited write -> kWriting momentary
+  SerialCMRITransport t(port);
+  t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOn);
+  t.begin();
+  t.tick(0);
+
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  // All bytes accepted -> kDraining. Queue the echo and tick at
+  // exactly kPollWireMs: drain completes THIS tick, and the echo
+  // is in the RX buffer THIS tick. The discard must hold.
+  uint8_t echo[16];
+  const size_t n = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+  port.queueRx(echo, n);
+  t.tick(kPollWireMs);  // drain-complete + echo in the same tick
+
+  // The echo was discarded (pumpReceive_ saw kDraining, not kIdle).
+  CMRIPacket got;
+  TEST_ASSERT_FALSE(t.receivePacket(got));
+  TEST_ASSERT_EQUAL_UINT32(0, t.decoderStatistics().framesDecoded);
+  // The flip commits within tick() (after pumpReceive_), so
+  // sendComplete() is true when tick() returns. The deferral
+  // protects pumpReceive_'s mid-tick view, not the caller's.
+  TEST_ASSERT_TRUE(t.sendComplete());
+}
+
+// Auto: the first RX byte observed while TXEN is asserted arms the
+// discard permanently and counts rxDuringTx. Before arming, echo
+// bytes reach the decoder (defect visible); after arming, discarded.
+static void test_echo_cancel_auto_arms_on_first_rx_during_tx(void) {
+  FakeCMRISerialPort port;
+  port.setWriteLimit(2);
+  SerialCMRITransport t(port);
+  t.begin();  // default Auto
+  TEST_ASSERT_FALSE(t.echoCancelMode() ==
+                    SerialCMRITransport::EchoCancelMode::kAlwaysOn);
+  t.tick(0);
+
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  uint8_t echo[16];
+  const size_t n = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+  // First echo: arms the discard, counts rxDuringTx, but this tick
+  // still feeds the decoder (arm takes effect next tick).
+  port.queueRx(echo, n);
+  t.tick(1);
+  TEST_ASSERT_EQUAL_UINT32(n, t.rxDuringTx());
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(t.receivePacket(got));  // decoded this tick
+  // Next tick: discard active. Queue more echo; it's discarded.
+  port.queueRx(echo, n);
+  t.tick(2);
+  TEST_ASSERT_FALSE(t.receivePacket(got));
+  // rxDuringTx didn't climb (discard ate the second echo).
+  TEST_ASSERT_EQUAL_UINT32(n, t.rxDuringTx());
+}
+
+// ------------------------------------------------------------------- main
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_idle_reports_send_complete);
@@ -508,7 +662,7 @@ int main(void) {
   RUN_TEST(test_chunked_write_completes_across_ticks);
   RUN_TEST(test_rx_decodes_whole_validated_frame);
   RUN_TEST(test_rx_truncated_frame_never_delivers);
-  RUN_TEST(test_rx_works_while_transmit_drains);
+  RUN_TEST(test_rx_reply_arrives_after_drain);
   RUN_TEST(test_rx_queue_overflow_keeps_oldest_drops_newest);
   RUN_TEST(test_default_interbyte_timeout_is_tolerant_shipped_value);
   RUN_TEST(test_rate_derived_interbyte_timeout_derives_from_char_time);
@@ -520,5 +674,11 @@ int main(void) {
   RUN_TEST(test_default_slow_gap_thresholds_derive_from_char_time);
   RUN_TEST(test_slow_gap_override_survives_begin);
   RUN_TEST(test_slow_gap_observed_end_to_end_through_transport);
+  // Phase B/C (issue #104, ADR-0003): echo-cancel characterization
+  RUN_TEST(test_echo_cancel_default_auto);
+  RUN_TEST(test_echo_cancel_on_discards_rx_through_drain);
+  RUN_TEST(test_echo_cancel_discard_holds_across_drain_complete_tick);
+  RUN_TEST(test_echo_cancel_off_feeds_rx_while_writing);
+  RUN_TEST(test_echo_cancel_auto_arms_on_first_rx_during_tx);
   return UNITY_END();
 }
