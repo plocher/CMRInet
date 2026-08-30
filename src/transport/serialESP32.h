@@ -46,7 +46,7 @@
 #include <Arduino.h>
 #include <driver/uart.h>
 
-#include "StreamCMRISerialPort.h"
+#include "serialStream.h"
 
 namespace CMRInet {
 

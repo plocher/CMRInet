@@ -1,7 +1,7 @@
 // SerialCMRITransport.cpp — serial/RS-485 packet transport. See
 // SerialCMRITransport.h for the model.
 
-#include "SerialCMRITransport.h"
+#include "serial.h"
 
 #include "CMRITime.h"
 

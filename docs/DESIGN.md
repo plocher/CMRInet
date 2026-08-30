@@ -1,7 +1,7 @@
 # CMRInet — Architecture and Design Decisions
 
 Status: agreed baseline from design review, 2026-08-12.
-Version: 1.6 (bump when any decision or contract in this document
+Version: 1.7 (bump when any decision or contract in this document
 changes). A `// VALIDATION:` tag cites the version in which *that
 clause* last changed, not the current document version. Tags are
 therefore re-stamped per clause, as the clause changes and the
@@ -9,6 +9,16 @@ implementing code follows — never wholesale, because a tag naming a
 version the code does not yet satisfy asserts something false. See
 `docs/agents/validation-comments.md`.
 Change log:
+- v1.7 (2026-08-30): library scope narrowed to the CMRI strategy
+  (ADR-0004). D11 obsolete (MQTT carrier dropped); D12 rescoped
+  (gateway is a CMRIHost deployment, semantic half belongs to a
+  sibling library); D1 stops reserving MQTTHost as a future engine
+  here; D3 strengthened (this library IS the CMRI strategy). Layer
+  model rescoped: image seam is this library's top edge, not a
+  universal cross-strategy contract. Node handle strawman replaced
+  with delivered API. Packaging rule added (directory = seam,
+  filename = discriminator, PR #1853 rationale). Transport headers
+  moved to `src/transport/`; umbrella stops including implementations.
 - v1.6 (2026-08-27): the packet rung gains its first absolute
   member (issue #96). An illegal wire-UA byte is not "wrong," it is
   "not a UA" — no conforming station can emit it — so it passes D14's
@@ -91,37 +101,36 @@ Companion documents:
 
 ## One product, two seams
 
-The product is a layout I/O image service. CMRInet is its first
-strategy, not its identity. LCS-9.10.1 governs the strategy, not the
-product.
+This library is the CMRI strategy: packets, byte images, and the two
+CMRI engines, over pluggable packet carriers. You want this library if
+you are implementing CMRInet-compliant Hosts, Nodes, or Gateways.
+
+A semantic/point layer (named, typed I/O points; hardware binding;
+rich data models) lives outside this library — in a sibling library,
+not here. The `pack`/`unpack` seam is shaped so that sibling can own
+both callbacks with the sketch never touching bytes. See ADR-0004.
 
 ```
-Image contract (handles: bits, freshness, health)   <- THE product surface
-        | implemented by (setup-time choice)
-  CMRIHost                    [future push engine — image seam, no
-        |                      consumer yet; named by its schema when
-        |                      it exists (the grammar permits MQTTHost)]
-  packet seam (CMRITransport)      its own MQTT client, topics, LWT
-        |                          (no packet seam at all)
-  SerialCMRITransport / MockCMRITransport /
-  TcpCMRITransport / MqttCMRITransport
+Image seam (handles: bits, freshness, health)   <- this library's top edge
+        | implemented by
+  CMRIHost / CMRINode
+  packet seam (CMRITransport)
+        |
+  SerialCMRITransport / MockCMRITransport / TcpCMRITransport
 ```
 
-- The **image seam** is universal. Every strategy implements it. The
-  sketch selects the strategy in `setup()` and uses image verbs in
-  `loop()`.
-- The **packet seam** is NOT product-wide. It is the polled strategy's
-  carrier boundary. It exists so CMRInet-the-protocol can ride serial,
-  TCP, mock, or MQTT-as-carrier. A native push strategy has no packet
-  seam — its lower edge is its own client library.
-
-Choosing a strategy selects a compatibility domain: `CMRIHost`
-keeps you in the CMRInet interop world (JMRI, fielded Nodes,
-gateways). A native push strategy leaves it, with the same sketch.
+- The **image seam** is this library's top edge. The sketch uses image
+  verbs in `loop()`. Second strategies (push, rich semantics) live
+  outside this library; their top edge is the point layer, not the byte
+  image.
+- The **packet seam** is the polled strategy's carrier boundary. It
+  exists so CMRInet-the-protocol can ride serial, TCP, or mock. A
+  native push strategy has no packet seam — its lower edge is its own
+  client library.
 
 Litmus test for a new medium: need interop with things that speak
-CMRInet → packet seam. The medium is the reason to abandon polling →
-image seam (a new strategy).
+CMRInet → packet seam (serial, TCP). The medium is the reason to
+abandon polling → image seam (a new strategy, outside this library).
 
 ### Units ladder
 
@@ -165,7 +174,8 @@ outermost = what it runs on.
   word is redundant, and a non-polled strategy would not be CMRInet,
   so it must not carry the CMRI qualifier. A future push engine is
   named by the protocol/schema it speaks, once that exists
-  (`MQTTHost` parses correctly under this grammar).
+  (`MQTTHost` parses correctly under this grammar) — but it lives
+  outside this library, which is the CMRI strategy (ADR-0004).
 - Transport implementations end with the interface they implement:
   `SerialCMRITransport`, `MockCMRITransport`, `TcpCMRITransport`,
   `MqttCMRITransport` — read "CMRI-transport over <medium>". Never
@@ -239,7 +249,9 @@ Two different timeouts, kept apart:
   contract (`RemoteNodeConfig`).
 
 ### D3. One strategy, two roles, three counterparty fidelities
-Build the polled strategy only, but both roles of it:
+This library is the CMRI strategy. Second strategies (push, rich
+semantics) live in a sibling library, not here (ADR-0004). Build the
+polled strategy only, but both roles of it:
 - **CMRIHost** — initiates: schedule, reply-gate timeout, re-init
   ladder.
 - **CMRINode** — reacts: UA match, I/T/P handling, R reply. It is
@@ -256,9 +268,9 @@ Counterparty fidelity ladder, in build order:
    reply delay, third-SYN frame drop, DLE-blind flush, body shift,
    trailing I-body byte). The research reviews are its requirements.
 
-No abstract strategy base class yet: one concrete strategy, and the
-shared handle types carry the contract. No second strategy until it
-has a real consumer.
+No abstract strategy base class: one concrete strategy, and the
+shared handle types carry the contract. A second strategy would live
+outside this library.
 
 ### D4. Transports carry packets; the codec lives in the serial adapter
 The polled engine's lower edge is packet-in / packet-out. Framing
@@ -370,38 +382,36 @@ recovery rules implement `docs/cmrinet-interop-profile-and-errata.md`
 Part 2. Where the profile and the spec text disagree, the profile
 wins, and the erratum (Part 1) records why.
 
-### D11. The MQTT carrier transport is the third-party seam proof
-A `MqttCMRITransport` implemented by an independent party, against
-the transport contract alone, validates the packet seam. Acceptance:
-the desktop loopback rig (CMRIHost to CMRINode) runs over it with
-zero engine changes and all mock-transport suites still passing.
-Dispatch only after the codec, engine, and mock transport exist.
-Speed is explicitly not a goal. It is a proof, not a product — see
-D12 for the product-shaped MQTT story.
+### D11. Obsolete — MQTT carrier dropped (ADR-0004)
+D11 reserved an MQTT carrier transport as the packet-seam proof. That
+role is now filled by the existing implementations: mock, serial, and
+the planned TCP carrier give three implementations across two real
+media, which is what a seam proof needs. MQTT-as-carrier had no
+consumer: JMRI cannot speak CMRI-packets-over-MQTT, a wireless node is
+better served by TCP (which JMRI's `networkdriver` already speaks),
+and rich MQTT lives in the semantic layer outside this library. The
+seam itself is unchanged; only the plan to build an MQTT implementation
+of it is retired. See ADR-0004.
 
-### D12. The semantic gateway is the product's first application
-An ESP32 gateway device runs `CMRIHost` at the RS-485 segment
-(polling at wire speed) plus a thin topic-mirror app written against
-the image verbs: publish IB images and per-node state on change
-(retained), subscribe to OB image topics, gateway LWT for liveness.
-No new architecture — product plus mirror sketch.
+### D12. The semantic gateway is a CMRIHost deployment
+A gateway is a `CMRIHost` deployment whose app mirrors images outward
+to the sibling library's topics. It is not a new concept or type in
+this library — it needs nothing beyond what `SimpleHost` already
+needs. The topic mirror, the schema alignment with JMRI's
+`jmrix.mqtt` conventions, and the freshness-across-retain problem all
+belong to the sibling library, not here.
 
 Host-location litmus for any remote scenario:
-- Host at the gateway → images cross the medium (this design).
+- Host at the gateway → images cross the medium (this library's top
+  edge feeds the sibling's mirror).
 - Host remote and already exists (for example JMRI must stay the
-  Host) → packets cross the medium (the JMRI-over-TCP pattern; the
-  MQTT variant is D11).
+  Host) → packets cross the medium (the JMRI-over-TCP pattern;
+  `transport/tcp.h` is the carrier).
 
 Freshness must cross the mirror explicitly: retained messages age
 invisibly, so per-node state/age topics and the gateway LWT are part
-of the schema, not optional extras.
-
-Interop opportunity: align the mirror's topic and payload schema with
-JMRI's `jmrix.mqtt` conventions (`MqttContentParser`), so any JMRI
-instance consumes the gateway's segment as ordinary MQTT
-sensors/turnouts with no CMRI connection. JMRI then doubles as a
-third-party integration test for the image schema, the same role the
-MQTT transport plays for the packet seam.
+of the schema, not optional extras. That schema is the sibling
+library's concern.
 
 ### D13. Inter-byte abort doctrine
 The receive inter-byte abort limit (interop 2.2.6) has two distinct
@@ -898,6 +908,25 @@ Clause semantics (normative for implementers):
   transport-neutral terms, so the strategy folds them into node
   health without knowing the medium.
 - Allocation only in `begin()` (D7).
+
+### Packaging rule (ADR-0004)
+
+Directory = seam. Filename = discriminator. Generic names live in
+subdirectories; top-level headers stay distinctive. Leaf headers
+pull their own dependencies so a sketch names only what it chooses:
+```cpp
+#include "CMRInet.h"                // engines, packets, images, transport seam
+#include "transport/serialESP32.h"  // the choice; pulls serial.h itself
+```
+The umbrella (`CMRInet.h`) carries the seam plus packet, codec, time,
+engines, and handles — but no implementations. The generic-vs-
+distinctive split is not aesthetic: Arduino PR #1853 made a library
+whose folder name matches the header win a collision, so `CMRInet.h`
+is protected by the folder-name match while a bare `transport.h` would
+not be. Transport implementations therefore live under `src/transport/`
+with prefix-dropped filenames (`mock.h`, `serial.h`, `serialESP32.h`),
+while the seam contract stays `CMRITransport.h` at top level.
+
 - Lifecycle and ownership: the sketch constructs and configures the
   transport; the engine calls `transport.begin()` exactly once, from
   its own `begin()`. Sketches do not call the transport's `begin()`.
@@ -905,15 +934,7 @@ Clause semantics (normative for implementers):
   in mocks — replay scripts). Test consequence, learned in #6: script
   mock replies after `CMRIHost::begin()`, never before.
 
-Known implementer decisions for a message-carrier transport (MQTT):
-1. Topic scheme: per-UA topics are legal and preferred. The engine
-   never assumes a shared medium.
-2. Payload: naked `{UA, MT, body}` versus fully framed bytes. Framed
-   payloads make a serial bridge a dumb byte pump. Choose and justify.
-3. QoS/retain mapping: QoS 0 mirrors the wire. A retained output
-   image gives late joiners the last T. Document the choice.
-
-## Handle contract (strawman, pre-implementation)
+## Handle contract (delivered)
 
 ```cpp
 // ---- HOST sketch (bench, gateway) ----
@@ -928,22 +949,24 @@ me.begin();                                     // config -> running (D5)
 
 me.tick(nowMs);                                 // runtime, non-blocking
 
-node5.setOutputBit(bit, v);                     // marks dirty -> full-image T
-node5.setOutputs(image, len);
-bool b       = node5.inputBit(bit);             // last good IB
-uint32_t age = node5.inputAgeMs(nowMs);         // staleness (D2)
-CMRInet::RemoteNodeState s = node5.state();     // projection of 3 axes (D16)
-const CMRInet::RemoteNodeStatistics& st = node5.stats();
-node5.setEnabled(false);                        // delete is also legal (D5)
+node->setOutputBit(byte, bit, v);               // marks dirty -> full-image T
+node->setOutputs(image, len);
+bool b       = node->inputBit(byte, bit);       // last good IB
+uint32_t age = node->inputAgeMs(nowMs);         // staleness (D2)
+CMRInet::RemoteNodeState s = node->state();     // projection of 3 axes (D16)
+const CMRInet::RemoteNodeStatistics& st = node->statistics();
+node->setEnabled(false);                        // delete is also legal (D5)
 ```
 
 ```cpp
 // ---- NODE (device) sketch ----
-CMRInet::CMRINode me(transport,
-    CMRInet::CMRINodeConfig{ .ua = 5, ... });   // engine's OWN types
-me.onOutputs(applyOB);                          // OB arrived -> drive pins
+CMRInet::CMRINodeConfig cfg{ .ua = 5, .nodeType = 'C',
+                             .inputBytes = 2, .outputBytes = 3 };
+CMRInet::CMRINode me(transport, cfg);           // engine's OWN types
+me.pack(fillIB, nullptr);                       // P time: fill input image
+me.unpack(applyOB, nullptr);                    // T time: drive pins from OB
 me.begin();
-// loop(): me.setInputBit(bit, v); me.tick();
+// loop(): me.setInputBit(byte, bit, v); me.tick(millis());
 // no RemoteNodeHandle here — a device holds no views of other nodes
 ```
 
@@ -951,10 +974,11 @@ The families cannot blur: a Host sketch manages *other* nodes through
 the `RemoteNode*` product family; a device sketch IS the machinery
 and touches only `CMRINode` and its own `CMRINode*` types.
 
-Note the strawman above predates the implementation: `addRemoteNode()`
-returns the host for chaining and never hands back a handle. Under D5
-that chaining idiom is retired in favor of per-call status, and handles
-come from `node(UA)` at point of use.
+`addRemoteNode()` returns per-call `ConfigStatus`, not a handle;
+handles come from `node(UA)` at point of use (D5). The `pack`/`unpack`
+seam is function-pointer + context, not cpNode-style globals, so a
+future sibling library can own both callbacks with the sketch never
+touching bytes (ADR-0004).
 
 Open items to settle during tracer-bullet implementation:
 1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
@@ -981,7 +1005,7 @@ Open items to settle during tracer-bullet implementation:
   in `comparison.md` §3 (the anti-checklist is the test plan). Engine
   against mock clock plus scripted-replay transport (fidelity 1).
 - Integration: desktop loopback, CMRIHost to CMRINode over paired
-  mock transports (fidelity 2), later over `MqttCMRITransport` (D11).
+  mock transports (fidelity 2).
 - Conformance/bench: warty CMRINode (fidelity 3), fault injection,
   slow byte-spaced TX (classic Hosts sent gapped bytes; see profile
   2.2.6), oversized frames, truncations.
@@ -993,7 +1017,7 @@ Open items to settle during tracer-bullet implementation:
 In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost
 (I/T/P), `RemoteNodeHandle` (inputs, outputs, freshness, state, re-init
 ladder), scripted-replay tests, OLED hit/miss display per PLAN.md.
-Out (sequenced, not abandoned): CMRINode emulator (Phase 2, as the
-loopback counterparty), MQTT carrier proof (after Phase 2), semantic gateway
-app (after the emulator), push strategy (no consumer), SUSIC/SMINI node
-types (bench roadmap).
+Out (sequenced, not abandoned): TCP carrier transport (JMRI
+`networkdriver` interop), warty CMRINode profiles (fidelity 3),
+SUSIC/SMINI node types (bench roadmap). MQTT carrier and semantic
+gateway belong to a sibling library (ADR-0004).

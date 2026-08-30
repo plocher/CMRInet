@@ -10,11 +10,10 @@
 #include "CMRIHost.h"
 #include "CMRINode.h"
 #include "CMRIPacket.h"
-#include "CMRISerialPort.h"
 #include "CMRITime.h"
 #include "CMRITransport.h"
 #include "ConformanceFault.h"
-#include "MockCMRITransport.h"
 #include "RemoteNodeHandle.h"
-#include "SerialCMRITransport.h"
-#include "StreamCMRISerialPort.h"  // Arduino-only; empty on desktop
+// Transport implementations live under transport/. Include the one
+// your sketch chooses (e.g. transport/serialESP32.h); the umbrella
+// carries only the seam (CMRITransport.h), not implementations.

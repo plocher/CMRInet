@@ -11,6 +11,8 @@
 #include <string.h>
 
 #include "CMRInet.h"
+#include "transport/serial.h"
+#include "transport/serialPort.h"
 #include "unity.h"
 
 using CMRInet::CMRIPacket;

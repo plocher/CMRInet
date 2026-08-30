@@ -13,14 +13,15 @@ CXXFLAGS  = -std=c++11 -Wall -Wextra -Werror -g -I../src -Iunity
 BUILD    := build
 
 LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/CMRIHost.cpp \
-            ../src/CMRINode.cpp ../src/MockCMRITransport.cpp \
-            ../src/SerialCMRITransport.cpp
+            ../src/CMRINode.cpp ../src/transport/mock.cpp \
+            ../src/transport/serial.cpp
 LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRINode.h \
-            ../src/CMRIPacket.h ../src/CMRInet.h ../src/CMRISerialPort.h \
-            ../src/CMRITime.h ../src/CMRITransport.h ../src/ConformanceFault.h \
-            ../src/Esp32UartCMRISerialPort.h ../src/MockCMRITransport.h \
-            ../src/RemoteNodeHandle.h ../src/SerialCMRITransport.h \
-            ../src/StreamCMRISerialPort.h ../src/SimpleHostMetrics.h
+            ../src/CMRIPacket.h ../src/CMRInet.h ../src/CMRITime.h \
+            ../src/CMRITransport.h ../src/ConformanceFault.h \
+            ../src/transport/mock.h ../src/transport/serial.h \
+            ../src/transport/serialPort.h ../src/transport/serialStream.h \
+            ../src/transport/serialESP32.h ../src/RemoteNodeHandle.h \
+            ../src/SimpleHostMetrics.h
 
 TESTS   := test_codec test_time test_mock_transport test_serial_transport \
            test_host test_node test_tracer test_host_display_metrics \

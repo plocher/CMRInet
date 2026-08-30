@@ -57,7 +57,7 @@
 
 #include "CMRIHost.h"
 #include "RemoteNodeHandle.h"
-#include "SerialCMRITransport.h"
+#include "transport/serial.h"
 
 namespace CMRInet {
 namespace testbed {

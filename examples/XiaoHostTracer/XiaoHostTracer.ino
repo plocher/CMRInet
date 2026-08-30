@@ -42,11 +42,10 @@
 #include <Arduino.h>
 
 #include "CMRIHost.h"
-#include "SerialCMRITransport.h"
+#include "transport/serial.h"
+#include "transport/serialESP32.h"
 #include "testbed/TracerShell.h"
 #include "testbed/CdcLineWriter.h"  // #99: shared, testable CDC line writer
-
-#include "Esp32UartCMRISerialPort.h"
 
 // ---- OLED diagnostic display (#11)
 #include <Wire.h>

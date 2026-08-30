@@ -16,7 +16,7 @@
 
 #include <stdint.h>
 
-#include "CMRISerialPort.h"
+#include "transport/serialPort.h"
 
 namespace CMRInet {
 

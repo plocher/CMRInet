@@ -1,7 +1,7 @@
 // MockCMRITransport.cpp — packet-seam test double and scripted-replay
 // rig. See MockCMRITransport.h for the model.
 
-#include "MockCMRITransport.h"
+#include "mock.h"
 
 #include <string.h>
 
