@@ -1,4 +1,4 @@
-// StreamCMRISerialPort.h — Arduino adapter: CMRISerialPort over an
+// StreamSerialPort.h — Arduino adapter: SerialPort over an
 // Arduino Stream (usually a HardwareSerial) plus an optional TXEN pin.
 //
 // Arduino-only: this header compiles under the Arduino toolchain and
@@ -28,8 +28,8 @@
 // port where the core exposes one.
 //
 // Contribution pattern for a core with true TX-complete status:
-// subclass StreamCMRISerialPort and override transmitDrained() to
-// answer from the hardware. Esp32UartCMRISerialPort in this directory
+// subclass StreamSerialPort and override transmitDrained() to
+// answer from the hardware. Esp32SerialPort in this directory
 // is the worked example (uart_wait_tx_done(port, 0) on ESP32). On AVR,
 // the TXCn bit of UCSRnA (set when the shift register empties, cleared
 // by writing a one) is the equivalent truth source. Do not build a
@@ -46,7 +46,7 @@
 
 namespace CMRInet {
 
-class StreamCMRISerialPort : public CMRISerialPort {
+class StreamSerialPort : public SerialPort {
  public:
   /// No TXEN pin: the converter manages direction itself
   /// (auto-direction hardware), or the medium is not RS-485.
@@ -56,7 +56,7 @@ class StreamCMRISerialPort : public CMRISerialPort {
   /// first). `txenPin`: RS-485 driver-enable pin, or kNoTxenPin.
   /// `baud`: the configured line rate. `bitsPerChar`: bit times per
   /// character on the wire — 11 for 8N2 (default), 10 for 8N1.
-  StreamCMRISerialPort(Stream& stream, int txenPin, uint32_t baud,
+  StreamSerialPort(Stream& stream, int txenPin, uint32_t baud,
                        uint8_t bitsPerChar = 11)
       : stream_(stream),
         txenPin_(txenPin),

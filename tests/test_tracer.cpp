@@ -26,7 +26,7 @@
 using CMRInet::CMRIHost;
 using CMRInet::CMRIHostConfig;
 using CMRInet::CMRIPacket;
-using CMRInet::CMRISerialPort;
+using CMRInet::SerialPort;
 using CMRInet::encodeFrame;
 using CMRInet::kWireUAOffset;
 using CMRInet::RemoteNodeConfig;
@@ -43,7 +43,7 @@ void tearDown(void) {}
 /// 1 us so SerialCMRITransport's wire-time floor drains in ~1 ms; the
 /// port always reports drained so sendComplete() advances on the next
 /// tick. No unity asserts inside — it is inert infrastructure.
-class FakePort : public CMRISerialPort {
+class FakePort : public SerialPort {
  public:
   void begin() override {}
   int readByte() override {

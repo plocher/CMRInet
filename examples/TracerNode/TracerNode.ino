@@ -74,7 +74,7 @@ constexpr const char* kVersion = "0.1.0";
 constexpr int kTxenPin = D3;
 
 // ---- Wiring
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                        TRACER_NODE_BAUD);
 CMRInet::SerialCMRITransport    transport(port);
 

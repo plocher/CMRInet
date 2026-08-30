@@ -1,7 +1,7 @@
-// PosixCMRISerialPort.cpp — POSIX termios byte port for the desktop
+// PosixSerialPort.cpp — POSIX termios byte port for the desktop
 // Host harness.
 
-#include "PosixCMRISerialPort.h"
+#include "PosixSerialPort.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -39,11 +39,11 @@ speed_t standardSpeed(uint32_t baud) {
 
 }  // namespace
 
-PosixCMRISerialPort::PosixCMRISerialPort(const char* device, uint32_t baud,
+PosixSerialPort::PosixSerialPort(const char* device, uint32_t baud,
                                          bool stopBits2)
     : device_(device), baud_(baud), stopBits2_(stopBits2) {}
 
-void PosixCMRISerialPort::begin() {
+void PosixSerialPort::begin() {
   if (fd_ >= 0) {
     return;  // idempotent
   }
@@ -112,7 +112,7 @@ void PosixCMRISerialPort::begin() {
   tcflush(fd_, TCIOFLUSH);
 }
 
-int PosixCMRISerialPort::readByte() {
+int PosixSerialPort::readByte() {
   if (fd_ < 0) {
     return -1;
   }
@@ -121,7 +121,7 @@ int PosixCMRISerialPort::readByte() {
   return (n == 1) ? byte : -1;
 }
 
-size_t PosixCMRISerialPort::writeBytes(const uint8_t* bytes, size_t length) {
+size_t PosixSerialPort::writeBytes(const uint8_t* bytes, size_t length) {
   if (fd_ < 0 || bytes == nullptr || length == 0) {
     return 0;
   }
@@ -134,7 +134,7 @@ size_t PosixCMRISerialPort::writeBytes(const uint8_t* bytes, size_t length) {
   return static_cast<size_t>(n);
 }
 
-bool PosixCMRISerialPort::transmitDrained() const {
+bool PosixSerialPort::transmitDrained() const {
   if (fd_ < 0) {
     return true;
   }
@@ -148,11 +148,11 @@ bool PosixCMRISerialPort::transmitDrained() const {
   return pending == 0;
 }
 
-void PosixCMRISerialPort::setTransmitEnable(bool enabled) {
+void PosixSerialPort::setTransmitEnable(bool enabled) {
   (void)enabled;  // auto-direction / permanently-driven adapter
 }
 
-uint32_t PosixCMRISerialPort::byteDurationMicros() const {
+uint32_t PosixSerialPort::byteDurationMicros() const {
   // 8N2 = start + 8 data + 2 stop = 11 bit times; 8N1 = 10.
   const uint32_t bits = stopBits2_ ? 11u : 10u;
   const uint32_t baud = (baud_ == 0) ? 1u : baud_;
@@ -160,7 +160,7 @@ uint32_t PosixCMRISerialPort::byteDurationMicros() const {
   return (micros == 0) ? 1u : micros;
 }
 
-void PosixCMRISerialPort::close() {
+void PosixSerialPort::close() {
   if (fd_ >= 0) {
     ::close(fd_);
     fd_ = -1;

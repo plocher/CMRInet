@@ -1,4 +1,4 @@
-// Esp32UartCMRISerialPort.h — StreamCMRISerialPort with hardware
+// Esp32SerialPort.h — StreamSerialPort with hardware
 // transmit-drain truth for ESP32 UARTs.
 //
 // Origin: born sketch-local in examples/XiaoHostTracer during the #21
@@ -8,7 +8,7 @@
 // behavior is unchanged from the #21 bench pass.
 //
 // Bench finding (#21, 2026-08-15, wire-tap verified): the ESP32-C6
-// Arduino runtime stalls every ~2 s. StreamCMRISerialPort's buffer-only
+// Arduino runtime stalls every ~2 s. StreamSerialPort's buffer-only
 // drain answer plus the transport's wire-time estimate assume
 // transmission proceeds promptly after acceptance; when the stall
 // delays the UART, the estimate expires first and TXEN drops while the
@@ -32,12 +32,12 @@
 // toggles). It is the only mechanism the Arduino build model offers for
 // a port that calls into the ESP-IDF UART driver. Header-only means
 // non-ESP32 builds see an empty file and non-including ESP32 sketches
-// pay nothing (linker-drop, same as StreamCMRISerialPort).
+// pay nothing (linker-drop, same as StreamSerialPort).
 //
 // VALIDATION: Interop v1.1 2.3.14: flush until the last byte leaves the
 // shift register, then drop TXEN at once. transmitDrained() here is the
 // hardware-truth half of the transport's two-gate drain detector; see
-// the seam contract on CMRISerialPort::transmitDrained().
+// the seam contract on SerialPort::transmitDrained().
 
 #pragma once
 
@@ -50,18 +50,18 @@
 
 namespace CMRInet {
 
-/// StreamCMRISerialPort whose drain answer is the ESP32 UART's own
+/// StreamSerialPort whose drain answer is the ESP32 UART's own
 /// TX-done status instead of the software buffer level. The transport's
 /// wire-time estimate still ANDs with this answer (Design v1.1 D13: the
 /// estimate never outlives a real drain, so the conjunction costs
 /// nothing and covers ports that are optimistic by ignorance).
-class Esp32UartCMRISerialPort : public StreamCMRISerialPort {
+class Esp32SerialPort : public StreamSerialPort {
  public:
   /// `uartNum` names the hardware unit behind `stream` (UART_NUM_1 for
-  /// Serial1). All other parameters as StreamCMRISerialPort.
-  Esp32UartCMRISerialPort(Stream& stream, uart_port_t uartNum, int txenPin,
+  /// Serial1). All other parameters as StreamSerialPort.
+  Esp32SerialPort(Stream& stream, uart_port_t uartNum, int txenPin,
                           uint32_t baud, uint8_t bitsPerChar = 11)
-      : StreamCMRISerialPort(stream, txenPin, baud, bitsPerChar),
+      : StreamSerialPort(stream, txenPin, baud, bitsPerChar),
         uartNum_(uartNum) {}
 
   /// Hardware truth: true only when the TX FIFO and the shift register

@@ -158,11 +158,11 @@ void updateDisplayIncremental() {
 namespace {
 
 constexpr const char* kImage = "xiao_host_tracer";
-// 0.1.1: hardware transmit-drain truth (Esp32UartCMRISerialPort) — the
+// 0.1.1: hardware transmit-drain truth (Esp32SerialPort) — the
 // ~2 s C6 runtime stall made the estimate-based drain drop TXEN mid-ETX.
 // 0.1.2: 50 ms inter-byte tolerance — the same stall splits intact
 // replies at the tick level; the rate-derived timeout misread the gap.
-// 0.1.3 (#27): Esp32UartCMRISerialPort promoted from this sketch into
+// 0.1.3 (#27): Esp32SerialPort promoted from this sketch into
 // the library (src/); the library's inter-byte abort doctrine now
 // ships a tolerant default (Design D13). This image keeps its explicit
 // 50 ms override, so runtime behavior is unchanged from 0.1.2.
@@ -193,7 +193,7 @@ constexpr const char* kImage = "xiao_host_tracer";
 constexpr const char* kVersion = "0.9.0"; // #87: degraded lane + breaker telemetry
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                      TRACER_BAUD);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);

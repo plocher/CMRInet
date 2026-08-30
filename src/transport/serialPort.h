@@ -1,4 +1,4 @@
-// CMRISerialPort.h — the byte-port seam under SerialCMRITransport.
+// SerialPort.h — the byte-port seam under SerialCMRITransport.
 //
 // SerialCMRITransport owns the CMRInet byte-level discipline: codec,
 // TXEN ordering, drain timing, inter-byte timeout, error accounting.
@@ -13,7 +13,7 @@
 // discipline.
 //
 // Implementations end with the interface name (Design v1.1 D1):
-// StreamCMRISerialPort, FakeCMRISerialPort, ...
+// StreamSerialPort, FakeSerialPort, ...
 
 #pragma once
 
@@ -24,7 +24,7 @@ namespace CMRInet {
 
 /// Abstract byte port for SerialCMRITransport. Every method must be
 /// non-blocking (Design v1.1 D6: nothing in the library blocks).
-class CMRISerialPort {
+class SerialPort {
  public:
   /// Prepare the port. The UART itself (baud, character framing) is
   /// configured by the sketch or adapter before or during begin().
@@ -87,7 +87,7 @@ class CMRISerialPort {
   // The transport never destroys a port through the seam: nothing is
   // deallocated after begin() (Design v1.2 D7). Protected non-virtual
   // destructor, matching CMRITransport.
-  ~CMRISerialPort() = default;
+  ~SerialPort() = default;
 };
 
 }  // namespace CMRInet

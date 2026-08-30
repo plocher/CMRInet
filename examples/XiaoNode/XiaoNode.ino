@@ -180,7 +180,7 @@ void initExpanders() {
 // =============================================
 constexpr int kTxenPin = D3;
 
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                        CMRINET_SPEED);
 CMRInet::SerialCMRITransport    transport(port);
 

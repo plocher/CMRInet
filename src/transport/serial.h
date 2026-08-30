@@ -4,7 +4,7 @@
 // This class owns every byte-level concern of the serial medium: frame
 // encoding through CMRIFrameCodec, TXEN discipline, drain timing,
 // inter-byte timeout, and error accounting. The port beneath it
-// (CMRISerialPort) is a dumb byte actuator, so desktop tests drive the
+// (SerialPort) is a dumb byte actuator, so desktop tests drive the
 // exact discipline that runs on hardware.
 //
 // VALIDATION: Design v1.1 D4: framing belongs to the serial transport.
@@ -25,7 +25,7 @@
 // kept even for hardware-truth ports: the estimate never outlives a
 // real drain, so it costs nothing and covers ports whose drain answer
 // is optimistic by ignorance (Design v1.1 D13; see the seam contract
-// on CMRISerialPort::transmitDrained()).
+// on SerialPort::transmitDrained()).
 //
 // Receive never waits for transmit:
 // VALIDATION: Interop v1.1 2.3.15: a fast Node begins its reply while
@@ -73,7 +73,7 @@ class SerialCMRITransport : public CMRITransport {
   /// The transport drives, and never destroys, the given port. The
   /// port must outlive the transport (Design v1.2 D7: nothing is
   /// deallocated after begin()).
-  explicit SerialCMRITransport(CMRISerialPort& port) : port_(port) {}
+  explicit SerialCMRITransport(SerialPort& port) : port_(port) {}
 
   // ------------------------------------------------ CMRITransport seam
 
@@ -235,7 +235,7 @@ class SerialCMRITransport : public CMRITransport {
   uint32_t defaultSlowGapLoMs_() const;
   uint32_t defaultSlowGapHiMs_() const;
 
-  CMRISerialPort& port_;
+  SerialPort& port_;
   CMRIFrameDecoder decoder_;
   LinkStatistics stats_;
 
