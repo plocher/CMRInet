@@ -5,6 +5,24 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Node example sketches (issue #9, M5): three examples on the new
+  transport include shape.
+  - `examples/SimpleNode/SimpleNode.ino` — the front-door Node
+    tutorial: minimal GPIO via direct accessors in `loop()`, no
+    pack/unpack callbacks needed for simple cases.
+  - `examples/TracerNode/TracerNode.ino` — the bench C&C Node test
+    mule: JSON-lines packet trace, ring-buffer capture (run/dump/reset),
+    status verb, OLED identity.
+  - `examples/XiaoNode/XiaoNode.ino` — the full-featured Node:
+    OLED status panel with OTA progress/success/error screens, WiFi
+    OTA via the donor `ota.h/.cpp` module (unchanged), MCP23017 I2C
+    expander I/O through the pack/unpack callback seam. No cpNode
+    library dependency — MCP23017 access is inline via Wire.h.
+  - `sketch_lint.py` covers all three new sketches (8 total).
+- CMRINode: pack/unpack callbacks no longer called with len==0. The
+  engine guards `handlePoll_` (skips pack when `inputBytes == 0`) and
+  `handleTransmit_` (skips unpack when the T body is empty). Callbacks
+  can assume len > 0.
 - ADR-0004: library boundary and transport header packaging. This
   library is the CMRI strategy: packets, byte images, and the two CMRI
   engines, over pluggable packet carriers. The semantic/point layer
