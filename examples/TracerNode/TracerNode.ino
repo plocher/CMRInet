@@ -74,8 +74,8 @@ constexpr const char* kVersion = "0.1.0";
 constexpr int kTxenPin = D3;
 
 // ---- Wiring
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
-                                       TRACER_NODE_BAUD);
+CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_NODE_BAUD,
+                                       RX, TX);
 CMRInet::SerialCMRITransport    transport(port);
 
 CMRInet::CMRINodeConfig makeConfig() {
@@ -318,8 +318,6 @@ void setup() {
     delay(10);
   }
 
-  // CMRI wire
-  Serial1.begin(TRACER_NODE_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
   transport.setInterByteTimeoutMs(TRACER_NODE_INTER_BYTE_TIMEOUT_MS);
 
   // OLED
@@ -329,8 +327,9 @@ void setup() {
 
   // Register the trace listener and pack/unpack seam
   node.onTrace(ourOnTrace, nullptr);
-  node.pack(packInputs);
-  node.unpack(unpackOutputs);
+  node.config(makeConfig());
+  node.onPack(packInputs);
+  node.onUnpack(unpackOutputs);
   node.begin();
 
   emitEpoch();

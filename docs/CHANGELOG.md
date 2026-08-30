@@ -94,6 +94,20 @@ High-level changes, newest first.
     `test_tracer`.
 
 ### Changed
+- `Esp32SerialPort` auto-detects the UART number from the
+  `HardwareSerial` reference (`&Serial1` → `UART_NUM_1`, etc.), so
+  sketches no longer pass `UART_NUM_1` or call `Serial1.begin()` —
+  the port's `begin()` configures the UART from the parameters stored
+  at construction. The constructor takes `HardwareSerial&` (not
+  `Stream&`) and gains `rxPin`/`txPin`/`config` parameters with
+  sensible defaults (RX, TX, SERIAL_8N2). Eliminates the duplicate
+  `Serial1.begin()` every sketch carried.
+- `CMRINode` API renamed: `pack()` → `onPack()`, `unpack()` →
+  `onUnpack()` (matches the D7 `onTrace`/`onEvent` listener pattern).
+  New `config(const CMRINodeConfig&)` method sets geometry before
+  `begin()` — unifies the construction pattern so all sketches use
+  `CMRINode node(transport)` + `node.config(cfg)` in `setup()`,
+  eliminating the `new`/null-check XiaoNode needed for derived geometry.
 - Transport headers moved into `src/transport/` and the umbrella
   `CMRInet.h` stopped including implementations (ADR-0004, breaking).
   `MockCMRITransport.{h,cpp}` → `transport/mock.{h,cpp}`,

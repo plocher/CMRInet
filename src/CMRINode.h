@@ -56,10 +56,18 @@ class CMRINode {
   explicit CMRINode(CMRITransport& transport,
                     const CMRINodeConfig& config = CMRINodeConfig());
 
+  /// Set the node configuration. Must be called before begin();
+  /// a no-op after begin() (geometry cannot change at runtime).
+  void config(const CMRINodeConfig& cfg) {
+    if (!began_) {
+      config_ = cfg;
+    }
+  }
+
   /// Register the pack handler. Called at P time with ib.
   /// If not registered, the library sends the image the
   /// direct accessors maintain.
-  void pack(PackHandler handler, void* context = nullptr) {
+  void onPack(PackHandler handler, void* context = nullptr) {
     packHandler_ = handler;
     packContext_ = context;
   }
@@ -67,7 +75,7 @@ class CMRINode {
   /// Register the unpack handler. Called at T time with ob.
   /// If not registered, the library stores ob and the
   /// direct accessors can read it.
-  void unpack(UnpackHandler handler, void* context = nullptr) {
+  void onUnpack(UnpackHandler handler, void* context = nullptr) {
     unpackHandler_ = handler;
     unpackContext_ = context;
   }

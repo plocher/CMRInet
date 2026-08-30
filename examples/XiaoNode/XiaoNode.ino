@@ -5,8 +5,8 @@
 // status panel and non-blocking WiFi OTA firmware updates.
 //
 // What it demonstrates:
-// - The pack/unpack callback pattern with real hardware (I2C expanders).
-// - pack() reads input ports at P time; unpack() writes output ports
+// - The onPack/onUnpack callback pattern with real hardware (I2C expanders).
+// - onPack reads input ports at P time; onUnpack writes output ports
 //   at T time. The engine handles the protocol.
 // - Feature toggles (USE_OLED, USE_OTA) that compile out cleanly.
 // - OLED status panel with OTA progress/success/error screens.
@@ -57,20 +57,9 @@
 #include <Adafruit_SSD1306.h>
 #endif
 
-// =============================================
-// ====   Configuration                     ====
-// =============================================
-#define CMRI_NODE_DESCRIPTION  "XiaoC6"
-#ifndef NODE_ID
-#define NODE_ID                30    // 0...127, same as in JMRI
-#endif
-const long CMRINET_SPEED = 28800;    // 9600, 19200, 28800 ...
-
-#define STRINGIFY_(x)  #x
-#define STRINGIFY(x)   STRINGIFY_(x)
-#ifndef NODE_NAME
-#define NODE_NAME      CMRI_NODE_DESCRIPTION "-" STRINGIFY(NODE_ID)
-#endif
+// ---- Configuration --------------------------------------------------------
+#define NODE_ID 30    // 0...127, same as in JMRI
+#define NODE_NAME "XiaoC6-" "30"
 
 // =============================================
 // ====   I/O Expander Configuration        ====
@@ -175,14 +164,10 @@ void initExpanders() {
   }
 }
 
-// =============================================
-// ====   Wiring (static)                   ====
-// =============================================
-constexpr int kTxenPin = D3;
-
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
-                                       CMRINET_SPEED);
+// ---- Wiring (static; the library never allocates) -------------------------
+CMRInet::Esp32SerialPort port(Serial1, D3, 28800, RX, TX);
 CMRInet::SerialCMRITransport    transport(port);
+CMRInet::CMRINode               node(transport);
 
 CMRInet::CMRINodeConfig makeConfig() {
   CMRInet::CMRINodeConfig cfg;
@@ -193,17 +178,13 @@ CMRInet::CMRINodeConfig makeConfig() {
   return cfg;
 }
 
-CMRInet::CMRINode* node = nullptr;
-
 #ifdef USE_OTA
 OtaManager ota;
 #endif
 
-// =============================================
-// ====   Pack / Unpack seam                ====
-// =============================================
-// pack() is called at P time: read all input ports into IB.
-// unpack() is called at T time: write all output ports from OB.
+// ---- Pack / Unpack seam ---------------------------------------------------
+// onPack is called at P time: read all input ports into IB.
+// onUnpack is called at T time: write all output ports from OB.
 // Both skip the 2 phantom CPNODE bytes at the start of the image.
 
 uint32_t pollCount  = 0;
@@ -267,7 +248,6 @@ void drawCentered(const char* text, uint8_t y) {
 
 void drawStatus() {
   if (!oledOk || screenMode != ScreenMode::LIVE) return;
-  if (node == nullptr) return;
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -277,7 +257,7 @@ void drawStatus() {
   display.setTextSize(1);
   display.setCursor(60, 4);
   display.print(F("UA"));
-  display.print(node->UA());
+  display.print(node.UA());
 
   // Activity counters
   display.setCursor(0, 20);
@@ -289,9 +269,9 @@ void drawStatus() {
   // Output image hex
   display.setCursor(0, 36);
   display.print(F("out:"));
-  for (size_t i = 0; i < node->outputLength(); ++i) {
-    if (node->outputByte(i) < 0x10) display.print('0');
-    display.print(node->outputByte(i), HEX);
+  for (size_t i = 0; i < node.outputLength(); ++i) {
+    if (node.outputByte(i) < 0x10) display.print('0');
+    display.print(node.outputByte(i), HEX);
     display.print(' ');
   }
 
@@ -388,17 +368,14 @@ void setup() {
   }
 #endif
 
-  // Derive geometry from the expander table before constructing the node.
+  // Derive geometry from the expander table before configuring the node.
   initExpanders();
 
-  // Configure the CMRI wire: 28800 8N2 on the MAX3491 UART pins.
-  Serial1.begin(CMRINET_SPEED, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
-
-  // Construct the node on the stack with the derived geometry.
-  node = new CMRInet::CMRINode(transport, makeConfig());
-  node->pack(packInputs);
-  node->unpack(unpackOutputs);
-  node->begin();
+  // Configure the node with the derived geometry.
+  node.config(makeConfig());
+  node.onPack(packInputs);
+  node.onUnpack(unpackOutputs);
+  node.begin();  // → transport.begin() → port.begin() → Serial1.begin()
 
 #ifdef USE_OTA
 #ifdef USE_OLED
@@ -415,9 +392,7 @@ void setup() {
 // ====   Loop                              ====
 // =============================================
 void loop() {
-  if (node != nullptr) {
-    node->tick(millis());
-  }
+  node.tick(millis());
 
 #ifdef USE_OTA
   ota.poll();  // non-blocking; blocks only during a transfer

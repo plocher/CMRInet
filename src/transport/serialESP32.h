@@ -1,6 +1,12 @@
 // Esp32SerialPort.h — StreamSerialPort with hardware
 // transmit-drain truth for ESP32 UARTs.
 //
+// The constructor takes a HardwareSerial (Serial1, Serial2, ...) and
+// auto-detects the UART number by address comparison, so the sketch
+// never sees UART_NUM_1 or calls Serial1.begin() — the port's begin()
+// configures the UART with the baud, framing, and pin mapping the
+// sketch passed at construction.
+//
 // Origin: born sketch-local in examples/XiaoHostTracer during the #21
 // bench (wire-tap verified), promoted into src/ by #27 because
 // hardware TX-complete truth is the correct shipped behavior for every
@@ -55,14 +61,51 @@ namespace CMRInet {
 /// wire-time estimate still ANDs with this answer (Design v1.1 D13: the
 /// estimate never outlives a real drain, so the conjunction costs
 /// nothing and covers ports that are optimistic by ignorance).
+///
+/// The constructor takes a HardwareSerial and auto-detects the UART
+/// number (&Serial1 → UART_NUM_1, etc.), so the sketch never passes
+/// UART_NUM_1 or calls Serial1.begin(). The port's begin() configures
+/// the UART with the baud, framing, and pin mapping stored at
+/// construction.
 class Esp32SerialPort : public StreamSerialPort {
  public:
-  /// `uartNum` names the hardware unit behind `stream` (UART_NUM_1 for
-  /// Serial1). All other parameters as StreamSerialPort.
-  Esp32SerialPort(Stream& stream, uart_port_t uartNum, int txenPin,
-                          uint32_t baud, uint8_t bitsPerChar = 11)
+  /// Construct the port. `stream` is the HardwareSerial (Serial1,
+  /// Serial2, ...); the UART number is auto-detected from it.
+  /// `txenPin`: RS-485 driver-enable pin. `baud`: line rate.
+  /// `rxPin`/`txPin`: UART pin mapping (-1 = core default).
+  /// `config`: UART framing (SERIAL_8N2 default). `bitsPerChar`:
+  /// bit times per character for byteDurationMicros() (11 for 8N2,
+  /// 10 for 8N1; must match `config`).
+  Esp32SerialPort(HardwareSerial& stream, int txenPin, uint32_t baud,
+                   int rxPin = -1, int txPin = -1,
+                   uint32_t config = SERIAL_8N2,
+                   uint8_t bitsPerChar = 11)
       : StreamSerialPort(stream, txenPin, baud, bitsPerChar),
-        uartNum_(uartNum) {}
+        hwStream_(stream),
+        rxPin_(rxPin),
+        txPin_(txPin),
+        uartBaud_(baud),
+        uartConfig_(config) {
+    if (&stream == &Serial1) {
+      uartNum_ = UART_NUM_1;
+#if defined(UART_NUM_2)
+    } else if (&stream == &Serial2) {
+      uartNum_ = UART_NUM_2;
+#endif
+    } else {
+      uartNum_ = UART_NUM_0;
+    }
+  }
+
+  /// Configure the UART, then delegate to the parent. The UART is
+  /// initialized here (from setup() via the begin() chain), not in the
+  /// constructor — so the sketch no longer calls Serial1.begin().
+  void begin() override {
+    hwStream_.begin(uartBaud_, uartConfig_,
+                     static_cast<int8_t>(rxPin_),
+                     static_cast<int8_t>(txPin_));
+    StreamSerialPort::begin();
+  }
 
   /// Hardware truth: true only when the TX FIFO and the shift register
   /// are both empty. Zero timeout keeps this non-blocking (Design v1.1
@@ -74,6 +117,11 @@ class Esp32SerialPort : public StreamSerialPort {
   }
 
  private:
+  HardwareSerial& hwStream_;
+  int rxPin_;
+  int txPin_;
+  uint32_t uartBaud_;
+  uint32_t uartConfig_;
   uart_port_t uartNum_;
 };
 
