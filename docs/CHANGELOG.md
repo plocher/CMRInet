@@ -5,6 +5,37 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- `IOBuffer` — the bounds-safe I/O image container, now the
+  natural type for CMRInet input and output images everywhere.
+  Both engines (`CMRIHost`, `CMRINode`) and the handle
+  (`RemoteNodeHandle`) own IOBuffer members instead of raw
+  `uint8_t[]` arrays. Pack/unpack callbacks receive `IOBuffer&`
+  and use its methods (`setBit`, `getBit`, `setByte`, `byte`,
+  `data`, `setData`, `writable`, `length`, `zero`, `clear`).
+  Richer accessors (setBCD, setEncoder, ...) live in the sketch
+  where the hardware knowledge is — IOBuffer is the safe
+  container, nothing more.
+  - The `setBit`/`getBit` free helpers in `CMRIPacket.h` are
+    deleted (subsumed by IOBuffer methods).
+  - `bit()` is named `getBit()` to avoid a collision with the
+    ESP32 Arduino core's `#define bit(b)` macro.
+  - IOBuffer lengths are set in the constructor and `config()` so
+    accessors work before `begin()`.
+  - All internal raw-array access in `CMRIHost.cpp` and
+    `RemoteNodeHandle.h` now goes through IOBuffer methods.
+
+### Changed
+- Callback signatures changed to `IOBuffer&`:
+  - `PackHandler` / `PackHandlerNoCtx`: `void (*)(IOBuffer& ib)`
+  - `UnpackHandler` / `UnpackHandlerNoCtx`: `void (*)(IOBuffer& ob)`
+  The `size_t len` parameter is gone — IOBuffer knows its own
+  length. The ctx variants retain `void*` for the testbed and
+  sibling library.
+- `RemoteNodeHandle::inputs()` / `outputs()` still return
+  `const uint8_t*` (via `IOBuffer::data()`) for backward
+  compatibility with packet building and telemetry rendering.
+
+### Added
 - Node example sketches (issue #9, M5): three examples on the new
   transport include shape.
   - `examples/SimpleNode/SimpleNode.ino` — the front-door Node

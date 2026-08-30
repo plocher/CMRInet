@@ -11,6 +11,7 @@
 
 #include "CMRIPacket.h"
 #include "CMRITransport.h"
+#include "IOBuffer.h"
 
 // Geometry knobs: input and output image capacities,
 // in data bytes. Shrink for memory-limited targets.
@@ -36,21 +37,19 @@ struct CMRINodeConfig {
 
 /// Handler called at P time with the input image buffer.
 /// The library sends the buffer as R regardless.
-using PackHandler = void (*)(void* ctx, uint8_t* ib,
-                               size_t len);
+using PackHandler = void (*)(void* ctx, IOBuffer& ib);
 
 /// Context-free pack handler — no void* parameter. The peer
 /// API for sketches that don't need a context cookie (the
 /// common case). The ctx version above is for the testbed and
 /// the future sibling library, which bind their own state.
-using PackHandlerNoCtx = void (*)(uint8_t* ib, size_t len);
+using PackHandlerNoCtx = void (*)(IOBuffer& ib);
 
 /// Handler called at T time with the received output image.
-using UnpackHandler = void (*)(void* ctx, const uint8_t* ob,
-                                 size_t len);
+using UnpackHandler = void (*)(void* ctx, IOBuffer& ob);
 
 /// Context-free unpack handler — no void* parameter.
-using UnpackHandlerNoCtx = void (*)(const uint8_t* ob, size_t len);
+using UnpackHandlerNoCtx = void (*)(IOBuffer& ob);
 
 /// Optional trace listener: fires for every received and
 /// sent packet, before UA matching and I/T/P dispatch.
@@ -70,6 +69,8 @@ class CMRINode {
   void config(const CMRINodeConfig& cfg) {
     if (!began_) {
       config_ = cfg;
+      input_.setLength(cfg.inputBytes);
+      output_.setLength(cfg.outputBytes);
     }
   }
 
@@ -127,37 +128,51 @@ class CMRINode {
 
   /// Set one input bit. Bit 0 is the LSB of the named byte.
   /// Out-of-range indexes are ignored.
-  void setInputBit(size_t byte, size_t bit, bool v);
+  void setInputBit(size_t byte, size_t bit, bool v) {
+    input_.setBit(byte, bit, v);
+  }
 
   /// Set one input byte. Out-of-range indexes are ignored.
-  void setInputByte(size_t index, uint8_t v);
+  void setInputByte(size_t index, uint8_t v) {
+    input_.setByte(index, v);
+  }
 
   /// Copy len bytes into the input image. Returns false
   /// if len > inputBytes or data is null with nonzero len.
-  bool setInputs(const uint8_t* data, size_t len);
+  bool setInputs(const uint8_t* data, size_t len) {
+    return input_.setData(data, len);
+  }
 
   /// Read one input bit. Bit 0 is the LSB of the named byte.
   /// Out-of-range indexes read false.
-  bool inputBit(size_t byte, size_t bit) const;
+  bool inputBit(size_t byte, size_t bit) const {
+    return input_.getBit(byte, bit);
+  }
 
   /// Read one input byte. Out-of-range indexes read 0.
-  uint8_t inputByte(size_t index) const;
+  uint8_t inputByte(size_t index) const {
+    return input_.byte(index);
+  }
 
   /// The input image and its configured length.
-  const uint8_t* inputs() const;
+  const uint8_t* inputs() const { return input_.data(); }
   size_t inputLength() const { return config_.inputBytes; }
 
   // ---- output image (OB) ----
 
   /// Read one output bit. Bit 0 is the LSB of the named byte.
   /// Out-of-range indexes read false.
-  bool outputBit(size_t byte, size_t bit) const;
+  bool outputBit(size_t byte, size_t bit) const {
+    return output_.getBit(byte, bit);
+  }
 
   /// Read one output byte. Out-of-range indexes read 0.
-  uint8_t outputByte(size_t index) const;
+  uint8_t outputByte(size_t index) const {
+    return output_.byte(index);
+  }
 
   /// The last received output image and its length.
-  const uint8_t* outputs() const;
+  const uint8_t* outputs() const { return output_.data(); }
   size_t outputLength() const { return config_.outputBytes; }
 
   // ---- identity ----
@@ -186,8 +201,8 @@ class CMRINode {
   TraceListener traceListener_ = nullptr;
   void* traceContext_ = nullptr;
 
-  uint8_t inputs_[kMaxInputBytes] = {0};
-  uint8_t outputs_[kMaxOutputBytes] = {0};
+  IOBuffer input_;
+  IOBuffer output_;
 
   CMRIPacket reply_;
   uint8_t transmissionDelayDh_ = 0;

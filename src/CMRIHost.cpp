@@ -157,6 +157,8 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   node.UA_ = UA;
   node.wireUA_ = static_cast<uint8_t>(UA + kWireUAOffset);
   node.config_ = config;
+  node.input_.setLength(config.inputBytes);
+  node.output_.setLength(config.outputBytes);
   policies_[free] = policy;
   occupied_[free] = true;
   ++nodeCount_;
@@ -236,15 +238,17 @@ CMRIHost::ConfigStatus CMRIHost::setRemoteNodeGeometry(uint8_t UA,
   const uint16_t previousOutputBytes = node.config_.outputBytes;
   node.config_.inputBytes = inputBytes;
   node.config_.outputBytes = outputBytes;
+  node.input_.setLength(inputBytes);
+  node.output_.setLength(outputBytes);
 
   // Belief: the cached image described the old shape, so it is not
   // merely stale, it is meaningless. Reporting kNone is honest;
   // retaining bytes under a new geometry would not be. Clearing
   // freshness is what makes the image invalid -- validity is derived
   // from it (RemoteNodeHandle::hasValidImage_), not separately stored.
-  memset(node.inputs_, 0, sizeof(node.inputs_));
+  node.input_.zero();
   node.freshness_.clear();
-  memset(node.outputs_, 0, sizeof(node.outputs_));
+  node.output_.zero();
 
   // LOAD-BEARING, and it does not look it. imageState_ is a *stored*
   // axis (D16) that updateNodeStates_ recomputes every tick, so this
@@ -564,7 +568,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   }
 
   if (node.config_.inputBytes != 0) {
-    memcpy(node.inputs_, reply.body, node.config_.inputBytes);
+    node.input_.setData(reply.body, node.config_.inputBytes);
   }
   // Marking freshness is what makes the image valid: validity is
   // derived from the mark rather than tracked alongside it, so there is
@@ -1142,7 +1146,7 @@ void CMRIHost::buildTransmitPacket_(size_t nodeIndex) {
   outbound_.clear();
   outbound_.wireUA = node.wireUA_;
   outbound_.mt = MessageType::kTransmitData;
-  outbound_.setBody(node.outputs_, node.config_.outputBytes);
+  outbound_.setBody(node.output_.data(), node.config_.outputBytes);
 }
 
 /// Build a P (poll) packet: UA + MT, empty body.

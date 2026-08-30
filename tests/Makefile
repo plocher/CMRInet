@@ -18,6 +18,7 @@ LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/CMRIHost.cpp \
 LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRINode.h \
             ../src/CMRIPacket.h ../src/CMRInet.h ../src/CMRITime.h \
             ../src/CMRITransport.h ../src/ConformanceFault.h \
+            ../src/IOBuffer.h \
             ../src/transport/mock.h ../src/transport/serial.h \
             ../src/transport/serialPort.h ../src/transport/serialStream.h \
             ../src/transport/serialESP32.h ../src/RemoteNodeHandle.h \

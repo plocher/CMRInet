@@ -190,30 +190,30 @@ OtaManager ota;
 uint32_t pollCount  = 0;
 uint32_t txCount    = 0;
 
-void packInputs(void*, uint8_t* ib, size_t len) {
+void packInputs(void*, CMRInet::IOBuffer& ib) {
   pollCount++;
-  ib[0] = 0;  // phantom onboard byte
-  ib[1] = 0;  // phantom onboard byte
+  ib.setByte(0, 0);  // phantom onboard byte
+  ib.setByte(1, 0);  // phantom onboard byte
   uint8_t idx = 2;
-  for (uint8_t e = 0; e < DISP_ROWS && idx < len; e++) {
+  for (uint8_t e = 0; e < DISP_ROWS && idx < ib.length(); e++) {
     if (expanders[e].portA == IN) {
-      ib[idx++] = mcpReadPort(expanders[e].address, true);
+      ib.setByte(idx++, mcpReadPort(expanders[e].address, true));
     }
-    if (expanders[e].portB == IN && idx < len) {
-      ib[idx++] = mcpReadPort(expanders[e].address, false);
+    if (expanders[e].portB == IN && idx < ib.length()) {
+      ib.setByte(idx++, mcpReadPort(expanders[e].address, false));
     }
   }
 }
 
-void unpackOutputs(void*, const uint8_t* ob, size_t len) {
+void unpackOutputs(void*, CMRInet::IOBuffer& ob) {
   txCount++;
   uint8_t idx = 2;  // skip phantom onboard bytes
-  for (uint8_t e = 0; e < DISP_ROWS && idx < len; e++) {
+  for (uint8_t e = 0; e < DISP_ROWS && idx < ob.length(); e++) {
     if (expanders[e].portA == OUT) {
-      mcpWritePort(expanders[e].address, true, ob[idx++]);
+      mcpWritePort(expanders[e].address, true, ob.byte(idx++));
     }
-    if (expanders[e].portB == OUT && idx < len) {
-      mcpWritePort(expanders[e].address, false, ob[idx++]);
+    if (expanders[e].portB == OUT && idx < ob.length()) {
+      mcpWritePort(expanders[e].address, false, ob.byte(idx++));
     }
   }
 }

@@ -247,16 +247,15 @@ void emitStatus() {
 }
 
 // ---- pack: fill IB with a test pattern (walking bit)
-void packInputs(void*, uint8_t* ib, size_t len) {
-  for (size_t i = 0; i < len; ++i) {
-    ib[i] = static_cast<uint8_t>((millis() / 500u + i) & 0xFFu);
+void packInputs(void*, CMRInet::IOBuffer& ib) {
+  for (size_t i = 0; i < ib.length(); ++i) {
+    ib.setByte(i, static_cast<uint8_t>((millis() / 500u + i) & 0xFFu));
   }
 }
 
 // ---- unpack: store OB (count for diagnostic)
-void unpackOutputs(void*, const uint8_t* ob, size_t len) {
+void unpackOutputs(void*, CMRInet::IOBuffer& ob) {
   (void)ob;
-  (void)len;
   // The output image is already stored by the engine; we can read
   // it via node.outputBit()/outputByte() anytime. This callback is
   // the place to drive pins if the node has physical outputs.

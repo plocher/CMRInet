@@ -42,18 +42,19 @@ struct UnpackLog {
   size_t len = 0;
 };
 
-static void recordUnpack(void* ctx, const uint8_t* ob, size_t len) {
+static void recordUnpack(void* ctx, CMRInet::IOBuffer& ob) {
   UnpackLog& log = *static_cast<UnpackLog*>(ctx);
   log.calls++;
-  log.len = len;
-  if (len > sizeof(log.ob)) len = sizeof(log.ob);
-  memcpy(log.ob, ob, len);
+  log.len = ob.length();
+  size_t n = ob.length();
+  if (n > sizeof(log.ob)) n = sizeof(log.ob);
+  memcpy(log.ob, ob.data(), n);
 }
 
-static void fillPack(void* ctx, uint8_t* ib, size_t len) {
+static void fillPack(void* ctx, CMRInet::IOBuffer& ib) {
   (void)ctx;
-  if (len > 0) {
-    memset(ib, 0xA5, len);
+  for (size_t i = 0; i < ib.length(); ++i) {
+    ib.setByte(i, 0xA5);
   }
 }
 

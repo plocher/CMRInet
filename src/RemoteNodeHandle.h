@@ -19,6 +19,7 @@
 
 #include "CMRITime.h"
 #include "ConformanceFault.h"
+#include "IOBuffer.h"
 
 // Geometry knob: the per-node input image capacity in data bytes.
 //
@@ -330,33 +331,27 @@ class RemoteNodeHandle {
   /// Last good input bit. Bit 0 is the least significant bit of the
   /// named byte. Out-of-range indexes read false.
   bool inputBit(size_t byte, size_t bit) const {
-    if (byte >= config_.inputBytes) {
-      return false;
-    }
-    return (inputs_[byte] >> (bit % 8u)) & 0x01u;
+    return input_.getBit(byte, bit);
   }
 
   /// Last good input byte. Out-of-range indexes read 0.
   uint8_t inputByte(size_t index) const {
-    return (index < config_.inputBytes) ? inputs_[index] : 0u;
+    return input_.byte(index);
   }
 
   /// The last good input image and its configured length.
-  const uint8_t* inputs() const { return inputs_; }
+  const uint8_t* inputs() const { return input_.data(); }
   size_t inputLength() const { return config_.inputBytes; }
 
   /// Last output bit written by the sketch. Bit 0 is the LSB of the
   /// named byte. Out-of-range indexes read false.
   bool outputBit(size_t byte, size_t bit) const {
-    if (byte >= config_.outputBytes) {
-      return false;
-    }
-    return (outputs_[byte] >> (bit % 8u)) & 0x01u;
+    return output_.getBit(byte, bit);
   }
 
   /// Last output byte written. Out-of-range indexes read 0.
   uint8_t outputByte(size_t index) const {
-    return (index < config_.outputBytes) ? outputs_[index] : 0u;
+    return output_.byte(index);
   }
 
   /// The configured output image length in bytes.
@@ -368,14 +363,7 @@ class RemoteNodeHandle {
   // VALIDATION: Interop v1.1 2.3.2: the Host sends the full output image
   // in every T frame; a dirty bit triggers a full-image transmit.
   void setOutputBit(size_t byte, size_t bit, bool v) {
-    if (byte >= config_.outputBytes) {
-      return;
-    }
-    if (v) {
-      outputs_[byte] |= static_cast<uint8_t>(1u << (bit % 8u));
-    } else {
-      outputs_[byte] &= static_cast<uint8_t>(~(1u << (bit % 8u)));
-    }
+    output_.setBit(byte, bit, v);
     outputsDirty_ = true;
   }
 
@@ -383,17 +371,11 @@ class RemoteNodeHandle {
   /// image unchanged) if len > outputBytes or data is null with a nonzero
   /// length. Marks the image dirty on success.
   bool setOutputs(const uint8_t* data, size_t len) {
-    if (len > config_.outputBytes) {
-      return false;
+    const bool ok = output_.setData(data, len);
+    if (ok) {
+      outputsDirty_ = true;
     }
-    if (data == nullptr && len != 0) {
-      return false;
-    }
-    if (len != 0) {
-      memcpy(outputs_, data, len);
-    }
-    outputsDirty_ = true;
-    return true;
+    return ok;
   }
 
   /// Force the engine to re-send a full T on this node's next slot, even
@@ -519,7 +501,7 @@ class RemoteNodeHandle {
 
   // Output image: sketch-written via the setters above, engine-read when
   // it builds a full T. outputsDirty_ tells the engine a T is owed.
-  uint8_t outputs_[kMaxOutputBytes] = {0};
+  IOBuffer output_;
   bool outputsDirty_ = false;
 
   // Engine-only state below. The engine is the sole writer of these.
@@ -554,7 +536,7 @@ class RemoteNodeHandle {
   ConformanceFaultRecord lastFault_;
 
   Age freshness_;
-  uint8_t inputs_[kMaxInputBytes] = {0};
+  IOBuffer input_;
   bool needsInit_ = true;       ///< engine owes this node an I (JMRI mustInit)
   bool reinitArmed_ = false;    ///< re-init ladder fired this miss-run
   uint32_t lastTxMs_ = 0;       ///< last T send time (refresh timer base)
