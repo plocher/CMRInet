@@ -292,7 +292,7 @@ static void test_transmit_carries_full_output_image(void) {
 
 static void test_setOutputBit_marks_dirty_then_transmit(void) {
   Rig rig(CMRIHostConfig(), CMRIHost::RemoteNodePolicy(), 0, 1);
-  rig.node->setOutputBit(3, true);
+  rig.node->setOutputBit(0, 3, true);
   rig.host.begin();
   rig.host.tick(0);  // I
   CMRIPacket sent;
@@ -351,12 +351,12 @@ static void test_reply_commits_inputs_freshness_state_statistics(void) {
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
   TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));
   TEST_ASSERT_EQUAL_HEX8(0x01, rig.node->inputByte(1));
-  TEST_ASSERT_TRUE(rig.node->inputBit(0));
-  TEST_ASSERT_FALSE(rig.node->inputBit(1));
-  TEST_ASSERT_TRUE(rig.node->inputBit(2));
-  TEST_ASSERT_TRUE(rig.node->inputBit(8));
-  TEST_ASSERT_FALSE(rig.node->inputBit(9));
-  TEST_ASSERT_FALSE(rig.node->inputBit(999));
+  TEST_ASSERT_TRUE(rig.node->inputBit(0, 0));
+  TEST_ASSERT_FALSE(rig.node->inputBit(0, 1));
+  TEST_ASSERT_TRUE(rig.node->inputBit(0, 2));
+  TEST_ASSERT_TRUE(rig.node->inputBit(1, 0));
+  TEST_ASSERT_FALSE(rig.node->inputBit(1, 1));
+  TEST_ASSERT_FALSE(rig.node->inputBit(124, 7));  // byte 124 bit 7 = bit 999, out of range
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
   TEST_ASSERT_EQUAL(RemoteNodeLiveness::kResponsive, rig.node->liveness());
   TEST_ASSERT_EQUAL(RemoteNodeImageState::kFresh, rig.node->imageState());
@@ -1769,8 +1769,8 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
   RemoteNodeHandle* node = host.node(5);
   TEST_ASSERT_NOT_NULL(node);
   TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, node->state());
-  node->setOutputBit(0, true);
-  TEST_ASSERT_TRUE(node->outputBit(0));
+  node->setOutputBit(0, 0, true);
+  TEST_ASSERT_TRUE(node->outputBit(0, 0));
   const uint32_t exchangesBefore = node->statistics().exchanges;
   TEST_ASSERT_TRUE(exchangesBefore > 0);
   CMRIPacket sent;
@@ -1793,7 +1793,7 @@ static void test_geometry_change_invalidates_image_and_forces_reinit(void) {
   TEST_ASSERT_EQUAL(RemoteNodeState::kUninitialized, node->state());
   TEST_ASSERT_EQUAL_UINT32(Age::kNeverMarked, node->inputAgeMs(1000));
   TEST_ASSERT_FALSE(node->inputsUsable());
-  TEST_ASSERT_FALSE_MESSAGE(node->outputBit(0),
+  TEST_ASSERT_FALSE_MESSAGE(node->outputBit(0, 0),
                             "an output bit survived a geometry change");
 
   // The re-init ladder runs, and the new I announces the new NI/NO.
@@ -2078,7 +2078,7 @@ static void test_dirty_output_cannot_starve_poll_forever(void) {
   uint32_t sinceLastExchangeMs = 0;
   bool everExchanged = false;
   for (uint32_t t = 1021; t <= 5000; ++t) {
-    live->setOutputBit(0, (t % 2) == 0);  // keep outputsDirty_ true forever
+    live->setOutputBit(0, 0, (t % 2) == 0);  // keep outputsDirty_ true forever
     host.tick(t);
     if (live->statistics().exchanges != lastExchanges) {
       lastExchanges = live->statistics().exchanges;
@@ -2125,7 +2125,7 @@ static void test_anti_starvation_does_not_starve_transmit(void) {
   // Set one real output change and confirm it is delivered promptly
   // (well inside the anti-starvation bound), even though node 6 keeps
   // timing out and backing off in the same rotation.
-  live->setOutputBit(0, true);
+  live->setOutputBit(0, 0, true);
   bool sawTransmit = false;
   for (uint32_t t = 1021; t <= 2000 && !sawTransmit; ++t) {
     host.tick(t);

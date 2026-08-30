@@ -277,7 +277,7 @@ static void test_verb_setbit_mutates_output_and_marks_dirty(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 5 0 1"));
-  TEST_ASSERT_TRUE(rig.node()->outputBit(0));
+  TEST_ASSERT_TRUE(rig.node()->outputBit(0, 0));
   rig.run(0, 3);  // I at 0, T (dirty) at 2
   const std::string* line =
       findContaining(rig.lines, "\"mt\":\"T\",\"body\":\"");
@@ -292,7 +292,7 @@ static void test_verb_setbit_bad_value_emits_error(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 5 0 2"));
-  TEST_ASSERT_FALSE(rig.node()->outputBit(0));
+  TEST_ASSERT_FALSE(rig.node()->outputBit(0, 0));
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "bad value did not emit an error line");
 }
@@ -302,7 +302,7 @@ static void test_verb_setbit_out_of_range_emits_error(void) {
   TracerRig rig;  // outputBytes = 3 -> 24 bits
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("setbit 5 100 1"));
-  TEST_ASSERT_FALSE(rig.node()->outputBit(100));
+  TEST_ASSERT_FALSE(rig.node()->outputBit(12, 4));  // byte 12 bit 4 = bit 100, out of range
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"event\":\"error\""),
                            "out-of-range bit did not emit an error line");
 }

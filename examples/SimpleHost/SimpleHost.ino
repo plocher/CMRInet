@@ -68,9 +68,7 @@ Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
 #endif
 
 // ---- helpers
-// bitOf(byte, bit) is the flat bit index for byte `byte`, bit `bit`.
-// Bit 0 is the least significant bit of the byte.
-constexpr size_t bitOf(size_t byte, size_t bit) { return byte * 8 + bit; }
+// (none)
 
 // ---- Sketch specific details
 constexpr int     kCMRI_BAUD = 28800;
@@ -104,8 +102,10 @@ constexpr uint32_t kFastBitwalkPeriodMs = 250;  // faster
 constexpr size_t   kFastBitwalkByte = 3;      // the byte to fast walk
 
 // Input toggle demo: toggle this output on each rising edge of the trigger.
-constexpr size_t kTriggerInBit = bitOf(6, 0);  // last IOX port B, 
-constexpr size_t kToggleOutBit = bitOf(4, 0);  // output on a different IOX expander
+constexpr size_t kTriggerInByte = 6;  // last IOX port B, 
+constexpr size_t kTriggerInBit = 0;   // bit 0 of that byte
+constexpr size_t kToggleOutByte = 4;  // output on a different IOX expander
+constexpr size_t kToggleOutBit = 0;   // bit 0 of that byte
 
 // ---- Per-node info: everything the sketch knows about each node ------
 // Add or remove rows to match your layout. 
@@ -314,12 +314,12 @@ void loop() {
     // Bitwalk: every kBitwalkPeriodMs, set one bit of byte kBitwalkByte,
     // clearing the rest. The unlit bit advances through 0..7 and loops.
     if (now - lastBitwalkMs >= kBitwalkPeriodMs) {
-      node->setOutputBit(bitOf(kBitwalkByte, bitwalkStep), true);
+      node->setOutputBit(kBitwalkByte, bitwalkStep, true);
       if (bitwalkStep > 0) {
-        node->setOutputBit(bitOf(kBitwalkByte, bitwalkStep - 1), false);
+        node->setOutputBit(kBitwalkByte, bitwalkStep - 1, false);
       } else if (lastBitwalkMs != 0) {
         // Wrap from step 0: clear bit 7 from the previous cycle.
-        node->setOutputBit(bitOf(kBitwalkByte, 7), false);
+        node->setOutputBit(kBitwalkByte, 7, false);
       }
       bitwalkStep = (bitwalkStep + 1) % 8;
       lastBitwalkMs = now;
@@ -327,21 +327,21 @@ void loop() {
     // Fast Bitwalk: every kFastBitwalkPeriodMs, clear one bit of byte kFastBitwalkByte,
     // setting the rest. The lit bit advances through 0..7 and loops.
     if (now - lastFastBitwalkMs >= kFastBitwalkPeriodMs) {
-      node->setOutputBit(bitOf(kFastBitwalkByte, fastBitwalkStep), false);
+      node->setOutputBit(kFastBitwalkByte, fastBitwalkStep, false);
       if (fastBitwalkStep > 0) {
-        node->setOutputBit(bitOf(kFastBitwalkByte, fastBitwalkStep - 1), true);
+        node->setOutputBit(kFastBitwalkByte, fastBitwalkStep - 1, true);
       } else if (lastFastBitwalkMs != 0) {
         // Wrap from step 0: clear bit 7 from the previous cycle.
-        node->setOutputBit(bitOf(kFastBitwalkByte, 7), true);
+        node->setOutputBit(kFastBitwalkByte, 7, true);
       }
       fastBitwalkStep = (fastBitwalkStep + 1) % 8;
       lastFastBitwalkMs = now;
     }
     // Toggle an output on each rising edge of an input.
-    const bool in0 = node->inputBit(kTriggerInBit);
+    const bool in0 = node->inputBit(kTriggerInByte, kTriggerInBit);
     if (in0 && !lastTriggerIn) {
-      node->setOutputBit(kToggleOutBit,
-                         !node->outputBit(kToggleOutBit));
+      node->setOutputBit(kToggleOutByte, kToggleOutBit,
+                         !node->outputBit(kToggleOutByte, kToggleOutBit));
     }
     lastTriggerIn = in0;
   }

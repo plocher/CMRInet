@@ -5,6 +5,33 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Baseline CMRINode engine (issue #9, M1-M4, Design D3): the
+  polled-strategy Node role. Receives addressed I, T, and P; emits R in
+  reply to P. I and T expect no reply (interop E8). The Node serves one
+  UA, so there is no schedule or round-robin.
+  - New `CMRInet::CMRINode` class and `CMRINodeConfig` struct
+    (`src/CMRINode.{h,cpp}`). Config carries `ua`, `nodeType` (the NDP,
+    default `'C'`), `inputBytes`/`outputBytes` (NI/NO), and
+    `transmissionDelayDh`/`Dl`.
+  - The pack/unpack seam: function-pointer + context handlers called at
+    P time (fill the input image) and T time (drive pins from the output
+    image). Complementary direct accessors (`setInputBit`/`setInputByte`/
+    `inputBit`/`inputByte`/`outputBit`/`outputByte`) touch the same image
+    buffers anytime. Both patterns work alone or together (M3).
+  - `onTrace` optional packet trace listener (D7, same as Host's).
+  - `begin()` idempotent; `tick(nowMs)` non-blocking (D6). Blocking is
+    bounded, not prohibited: the Node's only obligation is to produce R
+    before the Host's reply gate (~250 ms); a 2 ms I2C read inside
+    `pack` is fine.
+  - No packet visibility, no card-type awareness, no opts handling (D4).
+    #34/#35 (I-ack, bus discovery) are future follow-ons; the config is
+    shaped to support them but the paths are not built.
+  - 7 desktop loopback integration tests (`tests/test_node.cpp`): I
+    reaches Node, T reaches Node, P→R round trip, full Host↔Node
+    loopback, UA mismatch discarded, NDP mismatch discarded, set input
+    bit. 290 total tests passing.
+  - `src/CMRInet.h` includes `CMRINode.h`; `tests/Makefile` builds
+    `test_node`.
 - Packet-layer illegal wire-UA detection (issue #96, Design v1.6 D14):
   illegal wire-UA bytes (outside [65, 192]) are now detected at the
   Host's packet-verify boundary, before the solicited/unsolicited split,
@@ -34,6 +61,16 @@ High-level changes, newest first.
     `test_tracer`.
 
 ### Changed
+- Bit accessors changed from flat bit index to `(byte, bit)` signature
+  (issue #9, breaking). `RemoteNodeHandle::setOutputBit(bit, v)` →
+  `setOutputBit(byte, bit, v)`, `inputBit(bit)` → `inputBit(byte, bit)`,
+  and the same for `outputBit`. `CMRINode` follows the same shape for
+  `setInputBit`/`inputBit`/`outputBit`. The flat index required the
+  caller to do `byte * 8 + bit` math; the `(byte, bit)` form matches how
+  the images are actually addressed and is used internally across the
+  repo. All call sites updated: `RemoteNodeHandle`, `CMRINode`,
+  `TracerShell`, `test_host`, `test_tracer`, `test_node`, `SimpleHost`,
+  `XiaoHostTracer`.
 - CLI `--address` retired end-to-end (follow-up to the #102 rename).
   The #102 rename deliberately kept `--address` for backward compat,
   but the rest of the bench tooling had already migrated to `--ua`,
