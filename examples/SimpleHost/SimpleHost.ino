@@ -46,8 +46,9 @@
 // as an example, you can use the display for any purpose.
 
 #include <Arduino.h>
-#include "CMRInet.h"                 // CMRIHost, RemoteNodeHandle, SerialCMRITransport
-#include "Esp32UartCMRISerialPort.h" // ESP32 hardware transmit-drain port
+#include "CMRInet.h"                 // CMRIHost, RemoteNodeHandle
+#include "transport/serial.h"        // SerialCMRITransport
+#include "transport/serialESP32.h"   // ESP32 hardware transmit-drain port
 
 // ---- OLED (optional) 
 #define USE_OLED 1

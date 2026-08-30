@@ -22,7 +22,7 @@
 
 #include "CMRIHost.h"
 #include "PosixCMRISerialPort.h"
-#include "SerialCMRITransport.h"
+#include "transport/serial.h"
 #include "testbed/TracerShell.h"
 
 namespace {

@@ -52,11 +52,10 @@ void drawSplash();
 void drawStatus();
 
 #include "CMRIHost.h"
-#include "SerialCMRITransport.h"
+#include "transport/serial.h"
+#include "transport/serialESP32.h"
 #include "testbed/TracerShell.h"
 #include "testbed/CdcLineWriter.h"  // #99: shared CDC line writer
-
-#include "Esp32UartCMRISerialPort.h"
 
 // OLED: identifies the sketch as the operational Host on the bench.
 #include <Wire.h>

@@ -12,7 +12,7 @@ CXXFLAGS  = -std=c++11 -Wall -Wextra -Werror -g -I../../src -I.
 BUILD    := build
 
 LIB_SRCS := ../../src/CMRIFrameCodec.cpp ../../src/CMRIHost.cpp \
-            ../../src/SerialCMRITransport.cpp
+            ../../src/transport/serial.cpp
 
 all: $(BUILD)/cmri_tracer
 

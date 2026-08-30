@@ -42,7 +42,7 @@
 
 #include <Arduino.h>
 
-#include "CMRISerialPort.h"
+#include "serialPort.h"
 
 namespace CMRInet {
 

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "CMRInet.h"
+#include "transport/mock.h"
 #include "unity.h"
 
 using CMRInet::CMRIHost;

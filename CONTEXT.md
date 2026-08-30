@@ -21,9 +21,22 @@ claims a role it does not play.
 ## Strategy
 
 An exchange discipline that fulfills the image contract. Polled
-CMRInet is the first strategy. A component that does not speak the
-CMRInet protocol must not carry the `CMRI` qualifier (it is not a CMRI
+CMRInet is the first — and, in this library, the only — strategy.
+Second strategies (push, rich semantics) live in a sibling library,
+not here (ADR-0004). A component that does not speak the CMRInet
+protocol must not carry the `CMRI` qualifier (it is not a CMRI
 strategy).
+
+### Carrier vs semantic
+
+MQTT appears at two different seams with unrelated meanings. As a
+**carrier** it tunnels CMRI packets over topics (the packet seam);
+as a **semantic** layer it publishes named, typed I/O points over
+topics (the image/point seam, outside this library). The library
+boundary in ADR-0004 keeps the carrier question inside this library
+and the semantic question outside it. TCP, not MQTT, is the alternate
+carrier this library plans to build, because JMRI's `networkdriver`
+speaks it today.
 
 ## Shell
 

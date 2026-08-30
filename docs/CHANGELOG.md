@@ -5,6 +5,21 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- ADR-0004: library boundary and transport header packaging. This
+  library is the CMRI strategy: packets, byte images, and the two CMRI
+  engines, over pluggable packet carriers. The semantic/point layer
+  belongs to a sibling library. MQTT-as-carrier is dropped (no
+  consumer; the seam is proven by mock + serial + planned TCP). TCP is
+  the alternate carrier (JMRI `networkdriver` interop). Transport
+  headers move to `src/transport/` with prefix-dropped filenames; the
+  umbrella stops including implementations. Packaging rule: directory
+  = seam, filename = discriminator, generic names in subdirectories
+  (Arduino PR #1853 collision-resolution rationale). DESIGN bumped to
+  v1.7 (D11 obsolete, D12 rescoped, D1/D3 strengthened, layer model
+  rescoped, Node strawman replaced, packaging rule added). HANDOFF.md
+  deleted (rottod, forbidden vocabulary). library.properties fixed
+  (retired PolledHost/PolledNode names). sketch_lint.py expanded to
+  cover XiaoBenchCal and XiaoBenchEchoCancel.
 - Baseline CMRINode engine (issue #9, M1-M4, Design D3): the
   polled-strategy Node role. Receives addressed I, T, and P; emits R in
   reply to P. I and T expect no reply (interop E8). The Node serves one
@@ -61,6 +76,19 @@ High-level changes, newest first.
     `test_tracer`.
 
 ### Changed
+- Transport headers moved into `src/transport/` and the umbrella
+  `CMRInet.h` stopped including implementations (ADR-0004, breaking).
+  `MockCMRITransport.{h,cpp}` → `transport/mock.{h,cpp}`,
+  `SerialCMRITransport.{h,cpp}` → `transport/serial.{h,cpp}`,
+  `CMRISerialPort.h` → `transport/serialPort.h`,
+  `StreamCMRISerialPort.h` → `transport/serialStream.h`,
+  `Esp32UartCMRISerialPort.h` → `transport/serialESP32.h`.
+  `CMRITransport.h` (the seam) stays at top level; type names are
+  unchanged. A sketch now includes the transport it chooses:
+  `#include "transport/serialESP32.h"` (which pulls `serial.h`). The
+  umbrella carries the seam, packet, codec, time, engines, and handles
+  — but no transport implementations. All internal headers, tests,
+  desktop tracer, and sketches updated.
 - Bit accessors changed from flat bit index to `(byte, bit)` signature
   (issue #9, breaking). `RemoteNodeHandle::setOutputBit(bit, v)` →
   `setOutputBit(byte, bit, v)`, `inputBit(bit)` → `inputBit(byte, bit)`,

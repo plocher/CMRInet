@@ -42,7 +42,7 @@
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
-#include "CMRISerialPort.h"
+#include "serialPort.h"
 #include "CMRITransport.h"
 
 // ---- Geometry knob: shrink for small targets. ----

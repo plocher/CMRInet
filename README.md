@@ -8,12 +8,12 @@ health; CMRInet polling is the first exchange strategy beneath that
 contract. See [docs/DESIGN.md](docs/DESIGN.md) for the layer model and
 decisions D1-D17.
 
-Status: **Host engine, bench tracer, and sniffer are built; the
-front-door Host example (`examples/SimpleHost`) lands with this
-change.** The Node-side engine (`CMRINode`) is issue #9. See
-[PLAN.md](PLAN.md) for phasing and [HANDOFF.md](HANDOFF.md) for the
-bench environment. Agents picking up this work: start with
-[HANDOFF.md](HANDOFF.md).
+Status: **Host and Node engines are built, with desktop loopback
+integration tests passing.** The front-door examples are `SimpleHost`
+and `SimpleNode`. Bench instruments (`XiaoHostTracer`, `XiaoSniffer`)
+are built for the testbed. See [docs/DESIGN.md](docs/DESIGN.md) for
+the architecture and [docs/adr/0004-library-boundary-and-transport-packaging.md](docs/adr/0004-library-boundary-and-transport-packaging.md)
+for the library boundary decision.
 
 ## Architecture at a glance
 
@@ -76,8 +76,8 @@ command-driven R&D tracer. `XiaoSniffer` is a passive bus tap. Use the
 tracer to poke a node interactively. Use SimpleHost as the starting
 point for a layout.
 
-The Node-side engine is issue #9. This README covers the Host side now.
-It will extend to cover both roles when #9 lands.
+The Node-side engine is built (`CMRINode`, issue #9). See
+`examples/SimpleNode` for the front-door Node example.
 
 ## Documents
 
@@ -95,15 +95,22 @@ It will extend to cover both roles when #9 lands.
 
 ## Repository layout
 
-- `src/` — codec, transports (serial/RS-485, mock), the polled Host
-  engine, strategy-neutral handle types, and the shared testbed engine.
+- `src/` — codec, the polled Host and Node engines, strategy-neutral
+  handle types, and the shared testbed shell.
+- `src/transport/` — transport implementations: `mock.h` (test double),
+  `serial.h` (RS-485), `serialESP32.h` (hardware TX-drain port), and
+  the byte-port seam (`serialPort.h`, `serialStream.h`). The umbrella
+  carries the seam (`CMRITransport.h`); a sketch includes the
+  implementation it chooses.
 - `examples/SimpleHost` — the front-door Host tutorial (Xiao ESP32-C6,
   OLED, behavior-only).
+- `examples/SimpleNode` — the front-door Node tutorial (Xiao ESP32-C6,
+  pack/unpack seam, minimal GPIO).
 - `examples/XiaoHostTracer` — the bench R&D tracer (Xiao ESP32-C6, USB
   CDC command stream, JSON-lines telemetry).
 - `examples/XiaoSniffer` — a passive RS-485 bus tap (Xiao ESP32-C6,
   OLED, JSON-lines frame log).
-- `tests/` — desktop unit tests (145 tests, no Arduino dependencies).
+- `tests/` — desktop unit tests (290 tests, no Arduino dependencies).
 - `extras/desktop/` — the desktop tracer binary.
 
 Related libraries in this family: [`cpNode`](../cpNode) (deployed
