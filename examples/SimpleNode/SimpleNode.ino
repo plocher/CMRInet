@@ -11,18 +11,18 @@
 // - Register onPack/onUnpack callbacks — the canonical Node seam.
 // - Drive the engine with node.tick(millis()).
 //
-// The pack/unpack seam is how a Node sketch moves data between the
-// wire and the hardware. The engine calls onPack at P time (just
+// The onPack/onUnpack seam is how a Node sketch moves data between
+// the wire and the hardware. The engine calls onPack at P time (just
 // before sending R) to fill the input image, and onUnpack at T time
-// (after receiving the output image) to drive pins. This is the
-// pattern to learn here and carry forward to real hardware (I2C
-// expanders, shift registers, etc.) — see XiaoNode for that.
+// (after receiving the output image) to drive pins.
 //
-// The complementary direct accessors (setInputBit / outputBit) are
-// available for cases where you want to set or read image bits outside
-// the callback — for example, in loop() when an event-driven input
-// doesn't need to wait for poll time. Both patterns write the same
-// image buffers and can be mixed.
+// Inside the callbacks, two peer APIs touch the same image buffer:
+//   setBit(ib, byte, bit, v)   — write a bit in the raw buffer
+//   node.setInputBit(byte, bit, v) — write a bit via the engine
+// Both are equally first-class; use whichever reads cleaner. The
+// direct accessors in loop() (setInputBit / outputBit) are a safety
+// net for cases where you want to set or read bits outside callback
+// time.
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
 //   D7 - RX   CMRI RS485 receive
@@ -37,7 +37,7 @@
 
 #include <Arduino.h>
 
-#include "CMRInet.h"               // CMRINode, CMRINodeConfig
+#include "CMRInet.h"               // CMRINode, CMRINodeConfig, setBit, getBit
 #include "transport/serial.h"      // SerialCMRITransport
 #include "transport/serialESP32.h" // Esp32SerialPort (auto-detects UART,
                                    //   calls Serial1.begin() from begin())
@@ -51,18 +51,16 @@ CMRInet::CMRINode               node(transport);
 // ---- Pack / Unpack seam ----------------------------------------------------
 //
 // onPack is called at P time: fill the input image (ib) the engine
-//   will send as R. The callback receives the buffer and its length.
+//   will send as R. The engine guarantees len > 0.
 // onUnpack is called at T time: the engine has stored the output
 //   image (ob) the Host sent; drive hardware from it.
-//
-// The engine guarantees len > 0 for both callbacks.
 
-void packInputs(void*, uint8_t* ib, size_t len) {
-  ib[0] = (digitalRead(D2) == LOW) ? 0x01 : 0x00;  // active-low button
+void packInputs(uint8_t* ib, size_t len) {
+  CMRInet::setBit(ib, 0, 0, (digitalRead(D2) == LOW));  // active-low button
 }
 
-void unpackOutputs(void*, const uint8_t* ob, size_t len) {
-  digitalWrite(LED_BUILTIN, (ob[0] & 0x01u) ? HIGH : LOW);
+void unpackOutputs(const uint8_t* ob, size_t len) {
+  digitalWrite(LED_BUILTIN, CMRInet::getBit(ob, 0, 0) ? HIGH : LOW);
 }
 
 // ---- Setup -----------------------------------------------------------------
