@@ -347,7 +347,7 @@ Observability is listener registration (JMRI pattern): metrics,
 monitor, and trace hooks are optional listeners the linker drops when
 unused. No feature `#ifdef`s inside the library. Platform guards on
 platform-specific ports (e.g. `#if defined(ARDUINO_ARCH_ESP32)` on
-`Esp32UartCMRISerialPort`) are not feature toggles — they are the only
+`Esp32SerialPort`) are not feature toggles — they are the only
 mechanism the Arduino build model offers for a port that calls into a
 core-specific driver, and a non-matching build sees an empty file
 (the shipped guard is `#if defined(ARDUINO) && defined(ARDUINO_ARCH_ESP32)`).
@@ -443,7 +443,7 @@ any legally-paced node a Host has configured under the JMRI-tuned
 defaults (D9) with roughly 6x margin. Add a per-node field only when a
 consumer whose nodes exceed that ceiling appears.
 
-Companion: the `transmitDrained()` seam contract (CMRISerialPort.h)
+Companion: the `transmitDrained()` seam contract (serialPort.h)
 and the TXEN two-gate drain detector (SerialCMRITransport) are the
 transmit-side doctrine this receive-side doctrine pairs with. The
 conjunction (estimate AND port drain) is kept even for hardware-truth

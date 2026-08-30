@@ -213,7 +213,7 @@ void drawHostStatus() {
 #endif
 
 // ---- Host wiring (static/stack; the library never allocates) --------------
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, D3, 28800);
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, D3, 28800);
 CMRInet::SerialCMRITransport    transport(port);
 CMRInet::CMRIHost               host(transport);
 

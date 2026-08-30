@@ -1,5 +1,5 @@
 // cmri_tracer.cpp — the desktop Host tracer: CMRIHost over
-// SerialCMRITransport over PosixCMRISerialPort, driven from a
+// SerialCMRITransport over PosixSerialPort, driven from a
 // command-and-control loop on stdin/stdout.
 //
 // The C&C engine (verbs, JSON-lines telemetry, listener wiring) is
@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #include "CMRIHost.h"
-#include "PosixCMRISerialPort.h"
+#include "PosixSerialPort.h"
 #include "transport/serial.h"
 #include "testbed/TracerShell.h"
 
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
   fcntl(STDIN_FILENO, F_SETFL,
         fcntl(STDIN_FILENO, F_GETFL, 0) | O_NONBLOCK);
 
-  CMRInet::PosixCMRISerialPort port(opt.device, opt.baud, /*stopBits2=*/true);
+  CMRInet::PosixSerialPort port(opt.device, opt.baud, /*stopBits2=*/true);
   CMRInet::SerialCMRITransport transport(port);
   if (opt.conformanceStrict) {
     // Conformance-strict: the rate-derived inter-byte abort (three

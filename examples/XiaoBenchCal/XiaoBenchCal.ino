@@ -95,7 +95,7 @@ constexpr const char* kImage = "xiao_bench_cal";
 constexpr const char* kVersion = "0.1.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                      CALIB_BAUD);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);

@@ -1,27 +1,15 @@
 // SimpleNode.ino — minimal CMRINode example.
 //
-// The front-door Node example, mirroring SimpleHost's role for the
-// Node side. This sketch is the simplest way to make a device act as
-// a CMRInet node: read a pushbutton, drive an LED, and let the engine
-// handle the protocol.
+// a CMRInet node: 
+//    - read a pushbutton, 
+//    - drive an LED
 //
-// What it demonstrates:
-// - Configure one CMRINode with a fixed UA and geometry.
-// - Register pack/unpack callbacks — the canonical Node seam.
-// - Drive the engine with node.tick(millis()).
-//
-// The pack/unpack seam is how a Node sketch moves data between the
-// wire and the hardware. The engine calls pack() at P time (just
-// before sending R) to fill the input image, and unpack() at T time
-// (after receiving the output image) to drive pins. This is the
-// pattern to learn here and carry forward to real hardware (I2C
-// expanders, shift registers, etc.) — see XiaoNode for that.
-//
-// The complementary direct accessors (setInputBit / outputBit) are
-// available for cases where you want to set or read image bits outside
-// the callback — for example, in loop() when an event-driven input
-// doesn't need to wait for poll time. Both patterns write the same
-// image buffers and can be mixed.
+// The pack/unpack callbacks are how a Node sketch moves data between
+// the wire and the connected sensors and actuators.
+// The CMRI engine calls pack() when it gets a POLL message
+// so the routine can fill the input image.  In the same way,
+// it calls unpack() when it gets a TRANSMIT message with
+// the output image so the routine can drive output pins. 
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
 //   D7 - RX   CMRI RS485 receive
@@ -32,7 +20,6 @@
 //         R± on the Node routes to the Host's T± and
 //         T± on the Node routes to the Host's R±
 //
-// No OLED, no WiFi, no OTA — just the engine and two pins.
 
 #include <Arduino.h>
 
@@ -68,7 +55,7 @@ constexpr int kTxenPin = D3;
 // The port adapter wraps the stream but does NOT configure the UART.
 // The sketch must call Serial1.begin() below to set baud, framing, and
 // pin routing before the transport uses it.
-CMRInet::Esp32UartCMRISerialPort port(Serial1, UART_NUM_1, kTxenPin,
+CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
                                        SIMPLE_NODE_BAUD);
 CMRInet::SerialCMRITransport    transport(port);
 

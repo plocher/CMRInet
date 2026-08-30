@@ -1,4 +1,4 @@
-// PosixCMRISerialPort.h — the CMRISerialPort seam over a POSIX termios
+// PosixSerialPort.h — the SerialPort seam over a POSIX termios
 // device (macOS / Linux), for the desktop Host harness.
 //
 // Lives in extras/ so the Arduino build never compiles it. The port is
@@ -20,14 +20,14 @@
 
 namespace CMRInet {
 
-/// CMRISerialPort over a POSIX serial device. Non-blocking throughout:
+/// SerialPort over a POSIX serial device. Non-blocking throughout:
 /// the descriptor is opened O_NONBLOCK and every method returns at
 /// once (Design v1.1 D6).
-class PosixCMRISerialPort : public CMRISerialPort {
+class PosixSerialPort : public SerialPort {
  public:
   /// `device` must outlive the port (it is not copied). `stopBits2`
   /// selects 8N2 (the CMRInet default) versus 8N1.
-  PosixCMRISerialPort(const char* device, uint32_t baud,
+  PosixSerialPort(const char* device, uint32_t baud,
                       bool stopBits2 = true);
 
   /// Open and configure the device. Idempotent. On failure the port

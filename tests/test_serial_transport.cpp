@@ -3,7 +3,7 @@
 // sendComplete semantics, codec integration on receive, inter-byte
 // timeout, and error accounting through transport stats.
 //
-// The transport is driven against FakeCMRISerialPort, a scriptable
+// The transport is driven against FakeSerialPort, a scriptable
 // byte-port double that records the exact order of TXEN transitions
 // and writes. Every timing assertion runs on the injected clock; no
 // test sleeps or reads a wall clock.
@@ -16,7 +16,7 @@
 #include "unity.h"
 
 using CMRInet::CMRIPacket;
-using CMRInet::CMRISerialPort;
+using CMRInet::SerialPort;
 using CMRInet::encodeFrame;
 using CMRInet::kMaxBody;
 using CMRInet::kWireUAOffset;
@@ -27,11 +27,11 @@ void tearDown(void) {}
 
 // ------------------------------------------------------------- fake port
 
-/// Scriptable CMRISerialPort double. Bytes written land in txData();
+/// Scriptable SerialPort double. Bytes written land in txData();
 /// TXEN transitions and writes land in an ordered event log; received
 /// bytes are queued by the test with queueRx(). The port models a UART
 /// whose software buffer accepts writeLimit() bytes per call.
-class FakeCMRISerialPort : public CMRISerialPort {
+class FakeSerialPort : public SerialPort {
  public:
   enum class Op : uint8_t { kAssert, kDeassert, kWrite };
   struct Event {
@@ -149,7 +149,7 @@ static constexpr uint32_t kPollWireMs = 3;
 // ------------------------------------------------------------- send / TXEN
 
 static void test_idle_reports_send_complete(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -159,7 +159,7 @@ static void test_idle_reports_send_complete(void) {
 }
 
 static void test_send_writes_frame_with_txen_discipline(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -187,17 +187,17 @@ static void test_send_writes_frame_with_txen_discipline(void) {
   // Event order: begin() releases the driver, then the send is
   // assert, one write, deassert. Nothing else.
   TEST_ASSERT_EQUAL_size_t(4, port.eventCount());
-  TEST_ASSERT_TRUE(port.event(0).op == FakeCMRISerialPort::Op::kDeassert);
-  TEST_ASSERT_TRUE(port.event(1).op == FakeCMRISerialPort::Op::kAssert);
-  TEST_ASSERT_TRUE(port.event(2).op == FakeCMRISerialPort::Op::kWrite);
+  TEST_ASSERT_TRUE(port.event(0).op == FakeSerialPort::Op::kDeassert);
+  TEST_ASSERT_TRUE(port.event(1).op == FakeSerialPort::Op::kAssert);
+  TEST_ASSERT_TRUE(port.event(2).op == FakeSerialPort::Op::kWrite);
   TEST_ASSERT_EQUAL_size_t(n, port.event(2).length);
-  TEST_ASSERT_TRUE(port.event(3).op == FakeCMRISerialPort::Op::kDeassert);
+  TEST_ASSERT_TRUE(port.event(3).op == FakeSerialPort::Op::kDeassert);
 
   TEST_ASSERT_EQUAL_UINT32(1, t.stats().packetsSent);
 }
 
 static void test_txen_holds_until_port_reports_drained(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -217,7 +217,7 @@ static void test_txen_holds_until_port_reports_drained(void) {
 }
 
 static void test_send_backpressure_while_draining(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -230,7 +230,7 @@ static void test_send_backpressure_while_draining(void) {
 }
 
 static void test_send_rejects_oversized_body(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -243,7 +243,7 @@ static void test_send_rejects_oversized_body(void) {
 }
 
 static void test_chunked_write_completes_across_ticks(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   port.setWriteLimit(4);  // UART buffer accepts 4 bytes per call
   SerialCMRITransport t(port);
   t.begin();
@@ -270,7 +270,7 @@ static void test_chunked_write_completes_across_ticks(void) {
 // --------------------------------------------------------------- receive
 
 static void test_rx_decodes_whole_validated_frame(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   const uint8_t body[] = {0x00, 0x02, 0xFF, 0x10, 0x41};  // needs escaping
@@ -291,7 +291,7 @@ static void test_rx_decodes_whole_validated_frame(void) {
 }
 
 static void test_rx_truncated_frame_never_delivers(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   const uint8_t truncated[] = {0xFF, 0xFF, 0x02, 0x46, 0x52};  // no ETX
@@ -327,7 +327,7 @@ static void test_rx_reply_arrives_after_drain(void) {
   // wire-propagation model, encoding the fiction that the bench
   // disproved. This test models the physics: the reply is queued
   // only after the drain completes and TXEN drops.
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -351,7 +351,7 @@ static void test_rx_reply_arrives_after_drain(void) {
 }
 
 static void test_rx_queue_overflow_keeps_oldest_drops_newest(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   uint8_t wire[16];
@@ -372,7 +372,7 @@ static void test_rx_queue_overflow_keeps_oldest_drops_newest(void) {
 // ------------------------------------------------- timeouts and statistics
 
 static void test_default_interbyte_timeout_is_tolerant_shipped_value(void) {
-  FakeCMRISerialPort port;  // 500 us per character
+  FakeSerialPort port;  // 500 us per character
   SerialCMRITransport t(port);
   t.begin();
   // Design v1.1 D13: the shipped/deployment abort default is a tolerant
@@ -385,7 +385,7 @@ static void test_default_interbyte_timeout_is_tolerant_shipped_value(void) {
 }
 
 static void test_rate_derived_interbyte_timeout_derives_from_char_time(void) {
-  FakeCMRISerialPort port;  // 500 us per character
+  FakeSerialPort port;  // 500 us per character
   SerialCMRITransport t(port);
   // The rate-derived value is the conformance-strict instrument (three
   // character times, interop 2.2.6). It is an explicit opt-in via
@@ -398,7 +398,7 @@ static void test_rate_derived_interbyte_timeout_derives_from_char_time(void) {
 }
 
 static void test_shipped_abort_exceeds_rate_derived(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   // D13 invariant: the shipped deployment limit is strictly more
@@ -409,7 +409,7 @@ static void test_shipped_abort_exceeds_rate_derived(void) {
 }
 
 static void test_timeout_override_and_disable(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.setInterByteTimeoutMs(0);  // conformance-grade: tolerate any gap
   t.begin();                   // begin() must not clobber the override
@@ -429,7 +429,7 @@ static void test_timeout_override_and_disable(void) {
 }
 
 static void test_hardware_errors_surface_through_stats(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   port.setHardwareErrorCount(3);  // UART framing/overrun errors
@@ -438,7 +438,7 @@ static void test_hardware_errors_surface_through_stats(void) {
 }
 
 static void test_begin_resets_state(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   t.tick(0);
@@ -462,7 +462,7 @@ static void test_begin_resets_state(void) {
 // The transport derives the observation floor and suspicion floor from
 // the port's character time, mirroring the inter-byte abort derivation.
 static void test_default_slow_gap_thresholds_derive_from_char_time(void) {
-  FakeCMRISerialPort port;  // 500 us/char
+  FakeSerialPort port;  // 500 us/char
   SerialCMRITransport t(port);
   t.begin();
   // lo = 1 char time (ceil 500 us) = 1 ms; hi = 3 char times = 2 ms.
@@ -472,7 +472,7 @@ static void test_default_slow_gap_thresholds_derive_from_char_time(void) {
 
 // An explicit override survives begin() (same contract as the abort limit).
 static void test_slow_gap_override_survives_begin(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.setSlowGapThresholdsMs(5, 15);
   t.begin();  // must not clobber the override
@@ -484,7 +484,7 @@ static void test_slow_gap_override_survives_begin(void) {
 // intra-frame gap lands in the slow band and surfaces via
 // decoderStatistics(), without aborting the exchange.
 static void test_slow_gap_observed_end_to_end_through_transport(void) {
-  FakeCMRISerialPort port;  // 500 us/char -> lo=1, hi=2 derived
+  FakeSerialPort port;  // 500 us/char -> lo=1, hi=2 derived
   SerialCMRITransport t(port);
   t.setInterByteTimeoutMs(100);  // raise abort to open the slow band [2,100)
   t.begin();
@@ -511,7 +511,7 @@ static void test_slow_gap_observed_end_to_end_through_transport(void) {
 // ------------------------------------------------------------------- main
 
 // Phase B/C (issue #104, ADR-0003): echo-cancel characterization
-// through the transport against FakeCMRISerialPort. The 2-wire bench
+// through the transport against FakeSerialPort. The 2-wire bench
 // measured the host's own echo arriving while TXEN is asserted. These
 // tests pin the three-state mode (Auto | AlwaysOn | AlwaysOff), the
 // discard scope (through kDraining to deassert), and the auto-detect
@@ -519,7 +519,7 @@ static void test_slow_gap_observed_end_to_end_through_transport(void) {
 
 // The shipped default is Auto (the library ships 2-wire-ready).
 static void test_echo_cancel_default_auto(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   SerialCMRITransport t(port);
   t.begin();
   TEST_ASSERT_TRUE(t.echoCancelMode() ==
@@ -531,7 +531,7 @@ static void test_echo_cancel_default_auto(void) {
 // them. Use a write limit to keep kWriting alive across ticks, then
 // let it drain and confirm the discard still holds through deassert.
 static void test_echo_cancel_on_discards_rx_through_drain(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   port.setWriteLimit(2);  // accept 2 bytes/call -> kWriting persists
   SerialCMRITransport t(port);
   t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOn);
@@ -566,7 +566,7 @@ static void test_echo_cancel_on_discards_rx_through_drain(void) {
 // AlwaysOff: the same echo bytes reach the decoder and assemble.
 // The mode survives begin(), so the opt-out can be set before begin().
 static void test_echo_cancel_off_feeds_rx_while_writing(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   port.setWriteLimit(2);
   SerialCMRITransport t(port);
   t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOff);
@@ -597,7 +597,7 @@ static void test_echo_cancel_off_feeds_rx_while_writing(void) {
 // With the deferral, pumpReceive_ sees kDraining for the whole
 // tick and discards the echo. This is the race the bench surfaced.
 static void test_echo_cancel_discard_holds_across_drain_complete_tick(void) {
-  FakeCMRISerialPort port;  // unlimited write -> kWriting momentary
+  FakeSerialPort port;  // unlimited write -> kWriting momentary
   SerialCMRITransport t(port);
   t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOn);
   t.begin();
@@ -626,7 +626,7 @@ static void test_echo_cancel_discard_holds_across_drain_complete_tick(void) {
 // discard permanently and counts rxDuringTx. Before arming, echo
 // bytes reach the decoder (defect visible); after arming, discarded.
 static void test_echo_cancel_auto_arms_on_first_rx_during_tx(void) {
-  FakeCMRISerialPort port;
+  FakeSerialPort port;
   port.setWriteLimit(2);
   SerialCMRITransport t(port);
   t.begin();  // default Auto

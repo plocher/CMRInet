@@ -16,11 +16,11 @@ LIB_SRCS := ../../src/CMRIFrameCodec.cpp ../../src/CMRIHost.cpp \
 
 all: $(BUILD)/cmri_tracer
 
-$(BUILD)/cmri_tracer: cmri_tracer.cpp PosixCMRISerialPort.cpp \
-                      PosixCMRISerialPort.h \
+$(BUILD)/cmri_tracer: cmri_tracer.cpp PosixSerialPort.cpp \
+                      PosixSerialPort.h \
                       ../../src/testbed/TracerShell.h $(LIB_SRCS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) cmri_tracer.cpp PosixCMRISerialPort.cpp \
+	$(CXX) $(CXXFLAGS) cmri_tracer.cpp PosixSerialPort.cpp \
 	    $(LIB_SRCS) -o $@
 
 .PHONY: all clean
