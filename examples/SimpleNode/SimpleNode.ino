@@ -37,7 +37,7 @@
 
 #include <Arduino.h>
 
-#include "CMRInet.h"               // CMRINode, CMRINodeConfig, setBit, getBit
+#include "CMRInet.h"               // CMRINode, CMRINodeConfig, IOBuffer
 #include "transport/serial.h"      // SerialCMRITransport
 #include "transport/serialESP32.h" // Esp32SerialPort (auto-detects UART,
                                    //   calls Serial1.begin() from begin())
@@ -55,12 +55,12 @@ CMRInet::CMRINode               node(transport);
 // onUnpack is called at T time: the engine has stored the output
 //   image (ob) the Host sent; drive hardware from it.
 
-void packInputs(uint8_t* ib, size_t len) {
-  CMRInet::setBit(ib, 0, 0, (digitalRead(D2) == LOW));  // active-low button
+void packInputs(CMRInet::IOBuffer& ib) {
+  ib.setBit(0, 0, (digitalRead(D2) == LOW));  // active-low button
 }
 
-void unpackOutputs(const uint8_t* ob, size_t len) {
-  digitalWrite(LED_BUILTIN, CMRInet::getBit(ob, 0, 0) ? HIGH : LOW);
+void unpackOutputs(CMRInet::IOBuffer& ob) {
+  digitalWrite(LED_BUILTIN, ob.getBit(0, 0) ? HIGH : LOW);
 }
 
 // ---- Setup -----------------------------------------------------------------

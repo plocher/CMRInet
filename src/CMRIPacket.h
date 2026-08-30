@@ -97,24 +97,4 @@ struct CMRIPacket {
   }
 };
 
-/// Set one bit in a raw image buffer. Bit 0 is the LSB of the
-/// named byte. For use inside pack/unpack callbacks where the
-/// engine hands you a uint8_t* directly. Peer to CMRINode::setInputBit
-/// and RemoteNodeHandle::setOutputBit, which do the same thing on the
-/// engine-owned buffers.
-inline void setBit(uint8_t* image, size_t byte, size_t bit, bool v) {
-  if (v) {
-    image[byte] |= static_cast<uint8_t>(1u << (bit % 8u));
-  } else {
-    image[byte] &= static_cast<uint8_t>(~(1u << (bit % 8u)));
-  }
-}
-
-/// Read one bit from a raw image buffer. Bit 0 is the LSB of the
-/// named byte. For use inside pack/unpack callbacks where the
-/// engine hands you a const uint8_t* directly.
-inline bool getBit(const uint8_t* image, size_t byte, size_t bit) {
-  return (image[byte] >> (bit % 8u)) & 0x01u;
-}
-
 }  // namespace CMRInet
