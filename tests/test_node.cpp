@@ -73,7 +73,7 @@ struct LoopbackRig {
     nodeConfig.inputBytes = 2;
     nodeConfig.outputBytes = 3;
     host.addRemoteNode(5, nodeConfig);
-    node.unpack(recordUnpack, &unpackLog);
+    node.onUnpack(recordUnpack, &unpackLog);
   }
 
   static CMRINodeConfig makeNodeConfig() {
@@ -152,7 +152,7 @@ static void test_transmit_reaches_node(void) {
 
 static void test_poll_reply_round_trip(void) {
   LoopbackRig rig;
-  rig.node.pack(fillPack, nullptr);
+  rig.node.onPack(fillPack, nullptr);
   uint32_t base = primeToPoll(rig);
   tickBoth(rig, base, base + 1);
   CMRIPacket sent;
@@ -171,7 +171,7 @@ static void test_poll_reply_round_trip(void) {
 
 static void test_full_loopback(void) {
   LoopbackRig rig;
-  rig.node.pack(fillPack, nullptr);
+  rig.node.onPack(fillPack, nullptr);
   uint32_t base = primeToPoll(rig);
   const uint8_t out[] = {0x01, 0x02, 0x03};
   rig.host.node(5)->setOutputs(out, 3);

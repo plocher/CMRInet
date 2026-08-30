@@ -325,7 +325,6 @@ void setup() {
   Serial.setRxBufferSize(1024);
 #endif
 
-  Serial1.begin(ECHOCALC_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
   transport.setInterByteTimeoutMs(ECHOCALC_INTER_BYTE_TIMEOUT_MS);
 
   Wire.begin(D4 /* SDA */, D5 /* SCL */);
