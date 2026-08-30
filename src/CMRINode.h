@@ -39,9 +39,18 @@ struct CMRINodeConfig {
 using PackHandler = void (*)(void* ctx, uint8_t* ib,
                                size_t len);
 
+/// Context-free pack handler — no void* parameter. The peer
+/// API for sketches that don't need a context cookie (the
+/// common case). The ctx version above is for the testbed and
+/// the future sibling library, which bind their own state.
+using PackHandlerNoCtx = void (*)(uint8_t* ib, size_t len);
+
 /// Handler called at T time with the received output image.
 using UnpackHandler = void (*)(void* ctx, const uint8_t* ob,
                                  size_t len);
+
+/// Context-free unpack handler — no void* parameter.
+using UnpackHandlerNoCtx = void (*)(const uint8_t* ob, size_t len);
 
 /// Optional trace listener: fires for every received and
 /// sent packet, before UA matching and I/T/P dispatch.
@@ -64,20 +73,36 @@ class CMRINode {
     }
   }
 
-  /// Register the pack handler. Called at P time with ib.
-  /// If not registered, the library sends the image the
-  /// direct accessors maintain.
+  /// Register the pack handler (with context). Called at P time
+  /// with ib and the context cookie. If not registered, the
+  /// library sends the image the direct accessors maintain.
   void onPack(PackHandler handler, void* context = nullptr) {
     packHandler_ = handler;
     packContext_ = context;
+    packHandlerNoCtx_ = nullptr;
   }
 
-  /// Register the unpack handler. Called at T time with ob.
-  /// If not registered, the library stores ob and the
-  /// direct accessors can read it.
+  /// Register the pack handler (context-free). The peer API
+  /// for sketches that don't need a context cookie.
+  void onPack(PackHandlerNoCtx handler) {
+    packHandlerNoCtx_ = handler;
+    packHandler_ = nullptr;
+  }
+
+  /// Register the unpack handler (with context). Called at T
+  /// time with ob and the context cookie. If not registered,
+  /// the library stores ob and the direct accessors can read it.
   void onUnpack(UnpackHandler handler, void* context = nullptr) {
     unpackHandler_ = handler;
     unpackContext_ = context;
+    unpackHandlerNoCtx_ = nullptr;
+  }
+
+  /// Register the unpack handler (context-free). The peer API
+  /// for sketches that don't need a context cookie.
+  void onUnpack(UnpackHandlerNoCtx handler) {
+    unpackHandlerNoCtx_ = handler;
+    unpackHandler_ = nullptr;
   }
 
   /// Register the optional trace listener.
@@ -154,8 +179,10 @@ class CMRINode {
 
   PackHandler packHandler_ = nullptr;
   void* packContext_ = nullptr;
+  PackHandlerNoCtx packHandlerNoCtx_ = nullptr;
   UnpackHandler unpackHandler_ = nullptr;
   void* unpackContext_ = nullptr;
+  UnpackHandlerNoCtx unpackHandlerNoCtx_ = nullptr;
   TraceListener traceListener_ = nullptr;
   void* traceContext_ = nullptr;
 

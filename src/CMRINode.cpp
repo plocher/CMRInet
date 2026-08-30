@@ -71,14 +71,22 @@ void CMRINode::handleTransmit_(const CMRIPacket& rx) {
   if (n > 0) {
     memcpy(outputs_, rx.body, n);
   }
-  if (unpackHandler_ != nullptr && n > 0) {
-    unpackHandler_(unpackContext_, outputs_, n);
+  if (n > 0) {
+    if (unpackHandler_ != nullptr) {
+      unpackHandler_(unpackContext_, outputs_, n);
+    } else if (unpackHandlerNoCtx_ != nullptr) {
+      unpackHandlerNoCtx_(outputs_, n);
+    }
   }
 }
 
 void CMRINode::handlePoll_() {
-  if (packHandler_ != nullptr && config_.inputBytes > 0) {
-    packHandler_(packContext_, inputs_, config_.inputBytes);
+  if (config_.inputBytes > 0) {
+    if (packHandler_ != nullptr) {
+      packHandler_(packContext_, inputs_, config_.inputBytes);
+    } else if (packHandlerNoCtx_ != nullptr) {
+      packHandlerNoCtx_(inputs_, config_.inputBytes);
+    }
   }
   reply_.clear();
   reply_.wireUA = wireUA();
