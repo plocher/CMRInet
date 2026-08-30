@@ -8,6 +8,7 @@
 
 #include "CMRIFrameCodec.h"
 #include "CMRIHost.h"
+#include "CMRINode.h"
 #include "CMRIPacket.h"
 #include "CMRISerialPort.h"
 #include "CMRITime.h"

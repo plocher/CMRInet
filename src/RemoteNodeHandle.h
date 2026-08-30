@@ -327,14 +327,13 @@ class RemoteNodeHandle {
   /// The unit UA byte as transmitted (UA + 65).
   uint8_t wireUA() const { return wireUA_; }
 
-  /// Last good input bit. Bit 0 is the least significant bit of input
-  /// byte 0. Out-of-range bits read false.
-  bool inputBit(size_t bit) const {
-    const size_t byteIndex = bit / 8u;
-    if (byteIndex >= config_.inputBytes) {
+  /// Last good input bit. Bit 0 is the least significant bit of the
+  /// named byte. Out-of-range indexes read false.
+  bool inputBit(size_t byte, size_t bit) const {
+    if (byte >= config_.inputBytes) {
       return false;
     }
-    return (inputs_[byteIndex] >> (bit % 8u)) & 0x01u;
+    return (inputs_[byte] >> (bit % 8u)) & 0x01u;
   }
 
   /// Last good input byte. Out-of-range indexes read 0.
@@ -346,14 +345,13 @@ class RemoteNodeHandle {
   const uint8_t* inputs() const { return inputs_; }
   size_t inputLength() const { return config_.inputBytes; }
 
-  /// Last output bit written by the sketch. Bit 0 is the LSB of output
-  /// byte 0. Out-of-range bits read false.
-  bool outputBit(size_t bit) const {
-    const size_t byteIndex = bit / 8u;
-    if (byteIndex >= config_.outputBytes) {
+  /// Last output bit written by the sketch. Bit 0 is the LSB of the
+  /// named byte. Out-of-range indexes read false.
+  bool outputBit(size_t byte, size_t bit) const {
+    if (byte >= config_.outputBytes) {
       return false;
     }
-    return (outputs_[byteIndex] >> (bit % 8u)) & 0x01u;
+    return (outputs_[byte] >> (bit % 8u)) & 0x01u;
   }
 
   /// Last output byte written. Out-of-range indexes read 0.
@@ -364,19 +362,19 @@ class RemoteNodeHandle {
   /// The configured output image length in bytes.
   size_t outputLength() const { return config_.outputBytes; }
 
-  /// Set one output bit. Out-of-range bits are ignored. Marks the output
+  /// Set one output bit. Bit 0 is the LSB of the named
+  /// byte. Out-of-range bits are ignored. Marks the output
   /// image dirty so the engine sends a full T on this node's next slot.
   // VALIDATION: Interop v1.1 2.3.2: the Host sends the full output image
   // in every T frame; a dirty bit triggers a full-image transmit.
-  void setOutputBit(size_t bit, bool v) {
-    const size_t byteIndex = bit / 8u;
-    if (byteIndex >= config_.outputBytes) {
+  void setOutputBit(size_t byte, size_t bit, bool v) {
+    if (byte >= config_.outputBytes) {
       return;
     }
     if (v) {
-      outputs_[byteIndex] |= static_cast<uint8_t>(1u << (bit % 8u));
+      outputs_[byte] |= static_cast<uint8_t>(1u << (bit % 8u));
     } else {
-      outputs_[byteIndex] &= static_cast<uint8_t>(~(1u << (bit % 8u)));
+      outputs_[byte] &= static_cast<uint8_t>(~(1u << (bit % 8u)));
     }
     outputsDirty_ = true;
   }

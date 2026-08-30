@@ -357,7 +357,7 @@ class TracerShell {
       emitLine("error", "outOfRange", "setbit: bit beyond output image");
       return VerbResult::kHandled;
     }
-    node.setOutputBit(static_cast<size_t>(bit), value != 0u);
+    node.setOutputBit(static_cast<size_t>(bit / 8), static_cast<size_t>(bit % 8), value != 0u);
     emitNodeLine_(nowMs_, "setbit", node);
     return VerbResult::kHandled;
   }

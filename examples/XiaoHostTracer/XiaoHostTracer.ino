@@ -341,11 +341,11 @@ struct FastWalkerGenerator {
   void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
     if (!enabled || target == nullptr || byte >= target->outputLength()) return;
     if (now_ms - last_ms >= period_ms) {
-      target->setOutputBit(byte * 8 + step, false);
+      target->setOutputBit(byte, step, false);
       if (step > 0) {
-        target->setOutputBit(byte * 8 + (step - 1), true);
+        target->setOutputBit(byte, step - 1, true);
       } else if (last_ms != 0) {
-        target->setOutputBit(byte * 8 + 7, true);
+        target->setOutputBit(byte, 7, true);
       }
       step = (step + 1) % 8;
       last_ms = now_ms;
@@ -362,11 +362,11 @@ struct SlowWalkerGenerator {
   void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
     if (!enabled || target == nullptr || byte >= target->outputLength()) return;
     if (now_ms - last_ms >= period_ms) {
-      target->setOutputBit(byte * 8 + step, true);
+      target->setOutputBit(byte, step, true);
       if (step > 0) {
-        target->setOutputBit(byte * 8 + (step - 1), false);
+        target->setOutputBit(byte, step - 1, false);
       } else if (last_ms != 0) {
-        target->setOutputBit(byte * 8 + 7, false);
+        target->setOutputBit(byte, 7, false);
       }
       step = (step + 1) % 8;
       last_ms = now_ms;
@@ -386,13 +386,14 @@ struct ToggleOutFromInputGenerator {
     const size_t in_bits = target->inputLength() * 8u;
     const size_t out_bits = target->outputLength() * 8u;
     if (in_bit >= in_bits || out_bit >= out_bits) return;
-    bool current_in = target->inputBit(in_bit);
+    bool current_in = target->inputBit(in_bit / 8u, in_bit % 8u);
     if (mode == Mode::kWriteRead) {
-      if (target->outputBit(out_bit) != current_in) {
-        target->setOutputBit(out_bit, current_in);
+      if (target->outputBit(out_bit / 8u, out_bit % 8u) != current_in) {
+        target->setOutputBit(out_bit / 8u, out_bit % 8u, current_in);
       }
     } else if (current_in && !last_in) {
-      target->setOutputBit(out_bit, !target->outputBit(out_bit));
+      target->setOutputBit(out_bit / 8u, out_bit % 8u,
+                           !target->outputBit(out_bit / 8u, out_bit % 8u));
     }
     last_in = current_in;
   }
@@ -620,7 +621,7 @@ bool handleGeneratorControl(char* cmd) {
       CMRInet::RemoteNodeHandle* target = host.node(target_ua);
       const size_t in_bits = target ? (target->inputLength() * 8u) : 0u;
       loopback.last_in = (target != nullptr && loopback.in_bit < in_bits)
-          ? target->inputBit(loopback.in_bit)
+          ? target->inputBit(loopback.in_bit / 8u, loopback.in_bit % 8u)
           : false;
     } else if (strcmp(gen_name, "stall") == 0) {
       if (stall.ms == 0) stall.enabled = false;
