@@ -17,17 +17,14 @@ for the library boundary decision.
 
 ## Architecture at a glance
 
-CMRInet is a layout I/O image service. A sketch deals in images,
+This library is the CMRI strategy. A sketch deals in images,
 freshness, and node health. It does not deal in packets or bytes.
 
-One product, two seams:
-
-- **The image seam** is the product surface. Every strategy implements
-  it. A sketch selects a strategy in `setup()` and uses image verbs in
-  `loop()`.
+- **The image seam** is this library's top edge. The sketch uses
+  image verbs in `loop()`.
 - **The packet seam** is the polled strategy's carrier boundary. It
-  exists so CMRInet can ride serial, TCP, mock, or MQTT-as-carrier. A
-  native push strategy has no packet seam.
+  exists so CMRInet can ride serial, TCP, or mock. Second strategies
+  (push, rich semantics) live in a sibling library (ADR-0004).
 
 Units ladder, from the sketch down to the wire:
 
@@ -76,8 +73,19 @@ command-driven R&D tracer. `XiaoSniffer` is a passive bus tap. Use the
 tracer to poke a node interactively. Use SimpleHost as the starting
 point for a layout.
 
-The Node-side engine is built (`CMRINode`, issue #9). See
-`examples/SimpleNode` for the front-door Node example.
+### Node side
+
+Open `examples/SimpleNode/SimpleNode.ino`. It is the front-door example
+for the Node side — the simplest way to make a device act as a CMRInet
+node. The sketch reads a pushbutton into an input bit and drives an LED
+from an output bit, using the direct accessors in `loop()`.
+
+For real layout I/O on I2C expanders, see `examples/XiaoNode/XiaoNode.ino`
+— the full-featured Node with OLED status, WiFi OTA, and the pack/unpack
+callback pattern for MCP23017 expander I/O.
+
+`examples/TracerNode` is the bench C&C test mule for internal validation
+against the Host tracer.
 
 ## Documents
 
@@ -108,6 +116,9 @@ The Node-side engine is built (`CMRINode`, issue #9). See
   pack/unpack seam, minimal GPIO).
 - `examples/XiaoHostTracer` — the bench R&D tracer (Xiao ESP32-C6, USB
   CDC command stream, JSON-lines telemetry).
+- `examples/TracerNode` — the bench Node test mule (capture, trace, C&C).
+- `examples/XiaoNode` — the full-featured Node (OLED, WiFi OTA, I2C
+  expanders via pack/unpack).
 - `examples/XiaoSniffer` — a passive RS-485 bus tap (Xiao ESP32-C6,
   OLED, JSON-lines frame log).
 - `tests/` — desktop unit tests (290 tests, no Arduino dependencies).

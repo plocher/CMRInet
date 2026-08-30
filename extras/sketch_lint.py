@@ -67,7 +67,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # The sketches the gate covers. Add new examples here.
-DEFAULT_SKETCHES = ("SimpleHost", "XiaoHostTracer", "XiaoSniffer",
+DEFAULT_SKETCHES = ("SimpleHost", "SimpleNode", "XiaoHostTracer", "XiaoSniffer",
+                     "TracerNode", "XiaoNode",
                      "XiaoBenchCal", "XiaoBenchEchoCancel")
 
 # Third-party libraries the OLED sketches pull in. Passing them

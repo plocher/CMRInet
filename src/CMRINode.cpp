@@ -68,14 +68,16 @@ void CMRINode::handleTransmit_(const CMRIPacket& rx) {
   const size_t n = (rx.length < config_.outputBytes)
                        ? rx.length
                        : config_.outputBytes;
-  memcpy(outputs_, rx.body, n);
-  if (unpackHandler_ != nullptr) {
+  if (n > 0) {
+    memcpy(outputs_, rx.body, n);
+  }
+  if (unpackHandler_ != nullptr && n > 0) {
     unpackHandler_(unpackContext_, outputs_, n);
   }
 }
 
 void CMRINode::handlePoll_() {
-  if (packHandler_ != nullptr) {
+  if (packHandler_ != nullptr && config_.inputBytes > 0) {
     packHandler_(packContext_, inputs_, config_.inputBytes);
   }
   reply_.clear();
