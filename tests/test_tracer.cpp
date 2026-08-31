@@ -777,6 +777,72 @@ static void test_unknown_verb_emits_error(void) {
       "error line did not echo the unknown verb");
 }
 
+// ----------------------------------------------- issue #112 instrumentation
+
+// Poll timeout emits miss with gate/kind fields and a transport snapshot,
+// then an xchg completion with outcome=timeout.
+static void test_miss_and_xchg_carry_gate_context(void) {
+  TracerRig rig;
+  rig.run(0, 8);
+  const std::string* miss = findContaining(rig.lines, "\"event\":\"miss\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(miss, "no miss event");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*miss, "\"kind\":\"P\""),
+                           "miss missing kind=P");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*miss, "\"outcome\":\"timeout\""),
+                           "miss missing outcome=timeout");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*miss, "\"gateMs\":"),
+                           "miss missing gateMs");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*miss, "\"transport\":{"),
+                           "miss missing transport snapshot");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*miss, "\"rxDuringTx\":"),
+                           "miss transport missing rxDuringTx");
+
+  const std::string* xchg =
+      findContaining(rig.lines, "\"event\":\"xchg\",\"role\":\"host\"");
+  // Prefer an xchg that closed a poll; several I/T xchg lines precede it.
+  const std::string* xchgTimeout = nullptr;
+  for (const auto& s : rig.lines) {
+    if (contains(s, "\"event\":\"xchg\"") &&
+        contains(s, "\"outcome\":\"timeout\"")) {
+      xchgTimeout = &s;
+      break;
+    }
+  }
+  TEST_ASSERT_NOT_NULL_MESSAGE(xchgTimeout, "no xchg timeout line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*xchgTimeout, "\"kind\":\"P\""),
+                           "xchg timeout not kind=P");
+  (void)xchg;
+}
+
+// T trace lines carry an FNV-1a fingerprint of the body (issue #112).
+static void test_trace_t_carries_body_fingerprint(void) {
+  TracerRig rig;
+  const uint8_t image[] = {0x01, 0x02, 0xA0};
+  TEST_ASSERT_TRUE(rig.node()->setOutputs(image, 3));
+  rig.run(0, 3);
+  const std::string* line =
+      findContaining(rig.lines, "\"mt\":\"T\",\"body\":\"0102A0\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(line, "no T trace");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"fp\":\""),
+                           "T trace missing fp fingerprint");
+}
+
+// Capture-mode filter keeps miss/xchg live while suppressing state noise.
+static void test_backoff_trace_only_keeps_miss_and_xchg(void) {
+  TracerRig rig;
+  rig.shell.setBackoffTraceOnly(true);
+  rig.run(0, 8);
+  TEST_ASSERT_TRUE_MESSAGE(
+      countContaining(rig.lines, "\"event\":\"miss\"") >= 1,
+      "capture mode silenced miss");
+  TEST_ASSERT_TRUE_MESSAGE(
+      countContaining(rig.lines, "\"event\":\"xchg\"") >= 1,
+      "capture mode silenced xchg");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(
+      0, countContaining(rig.lines, "\"event\":\"state\""),
+      "capture mode should still silence state lines");
+}
+
 // ------------------------------------------------------------------- main
 
 int main(void) {
@@ -809,5 +875,8 @@ int main(void) {
   RUN_TEST(test_node_status_line_carries_the_health_axes);
   RUN_TEST(test_node_status_line_reports_the_geometry_disagreement);
   RUN_TEST(test_unknown_verb_emits_error);
+  RUN_TEST(test_miss_and_xchg_carry_gate_context);
+  RUN_TEST(test_trace_t_carries_body_fingerprint);
+  RUN_TEST(test_backoff_trace_only_keeps_miss_and_xchg);
   return UNITY_END();
 }

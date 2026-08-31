@@ -208,6 +208,35 @@ enum class CMRIHostEventType : uint8_t {
   // is not carrying a UA at all, so it names no node to charge. The event
   // fires with node = null and replyWireUA holding the raw byte.
   kIllegalWireUA,     ///< a packet carried an illegal wire-UA byte (node is null)
+  // Exchange completion and unsolicited RX (issue #112). Dense full-T
+  // investigations need a compact Host belief timeline: which kind closed,
+  // what the prior kind was, gate age, and whether an R arrived outside a
+  // poll gate ("R on wire, Host did not retire the poll").
+  kExchangeComplete,  ///< one I/P/T exchange retired (outcome + kind adjacency)
+  kUnsolicitedPacket, ///< RX while no poll reply gate was open (node may be null)
+};
+
+/// Packet kind of an outstanding or just-finished Host exchange.
+/// Public so listeners and the tracer can name I/P/T without parsing
+/// private engine state (issue #112).
+enum class HostExchangeKind : uint8_t {
+  kNone = 0,   ///< idle / not an exchange event
+  kInit,       ///< I
+  kPoll,       ///< P
+  kTransmit,   ///< T
+};
+
+/// How an exchange left the schedule. Meaningful on kExchangeComplete;
+/// also stamped onto the reply/miss/reject that closed a poll so a
+/// single listener line can pair outcome with gate age (issue #112).
+enum class HostExchangeOutcome : uint8_t {
+  kNone = 0,
+  kAccepted,   ///< poll: verified R committed
+  kRejected,   ///< poll: geometry reject closed the exchange
+  kTimeout,    ///< poll: reply gate expired
+  kSettled,    ///< I settle finished (engine advances to T; not finishExchange)
+  kDelivered,  ///< T post-gap finished; outputs no longer dirty for this send
+  kOrphaned,   ///< node mutated away mid-flight; nothing attributed
 };
 
 /// Why a reply was rejected. Meaningful only when a CMRIHostEvent
@@ -306,7 +335,25 @@ struct CMRIHostEvent {
   /// disagreement is a configuration fix, not a firmware fix).
   uint16_t previousInputBytes = 0;
   uint16_t previousOutputBytes = 0;
+
+  /// Exchange / gate context (issue #112). Populated on reply, reject,
+  /// miss, xchg, and unsolicited events. `gateMs` is wall time since the
+  /// post-send wait was armed (`nowMs - gateArmedMs`); zero when no gate
+  /// was open. `kind` is the exchange that just closed (or the outstanding
+  /// kind when an unsolicited packet arrived). `prevKind` is the prior
+  /// closed exchange on this Host (Host-wide adjacency, not per-node).
+  HostExchangeKind kind = HostExchangeKind::kNone;
+  HostExchangeKind prevKind = HostExchangeKind::kNone;
+  HostExchangeOutcome outcome = HostExchangeOutcome::kNone;
+  uint32_t gateArmedMs = 0;
+  uint32_t gateMs = 0;
 };
+
+/// Human-readable name for a HostExchangeKind value.
+const char* hostExchangeKindString(HostExchangeKind kind);
+
+/// Human-readable name for a HostExchangeOutcome value.
+const char* hostExchangeOutcomeString(HostExchangeOutcome outcome);
 
 /// Event listener. Plain function pointer with a context cookie
 /// (Design v1.1 D7: no std::function). Called from inside tick();
@@ -694,9 +741,15 @@ class CMRIHost {
   void buildPollPacket_(size_t nodeIndex);
   void invalidateNodeInputs_(RemoteNodeHandle& node);
   void acceptReply_(const CMRIPacket& reply, uint32_t nowMs);
-  void finishExchange_(uint32_t nowMs);
+  /// Close the outstanding exchange. `outcome` is recorded on the
+  /// kExchangeComplete event when the exchange still has an owner
+  /// (issue #112). Orphaned completions still charge Gate B and clear
+  /// the orphan mark, but attribute no node event beyond the xchg line
+  /// stamped outcome=orphaned with node=null.
+  void finishExchange_(uint32_t nowMs, HostExchangeOutcome outcome);
   void updateNodeStates_(uint32_t nowMs);
   uint32_t replyTimeoutFor_(size_t nodeIndex) const;
+  HostExchangeKind currentKind_() const;
   void emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                   uint32_t nowMs,
                   RemoteNodeState previousState = RemoteNodeState::kUninitialized,
@@ -708,7 +761,8 @@ class CMRIHost {
                   PollBackoffChangeReason pollBackoffReason =
                       PollBackoffChangeReason::kNone,
                   uint32_t previousPollBackoffMs = 0,
-                  uint32_t newPollBackoffMs = 0);
+                  uint32_t newPollBackoffMs = 0,
+                  HostExchangeOutcome outcome = HostExchangeOutcome::kNone);
 
   /// Deliver a pre-built event to the listener, if one is registered.
   /// This is the dispatch tail shared by emitEvent_() (which builds the
@@ -773,6 +827,10 @@ class CMRIHost {
   Deadline paceGate_;       ///< time gate between exchanges
   Deadline waitGate_;       ///< post-send wait: reply gate / settle / gap
   uint32_t gateArmedMs_ = 0;  ///< when the wait was armed (turnaround base)
+  /// Kind of the most recently *finished* exchange (Host-wide). Feeds
+  /// `prevKind` on the next completion so a dense-T capture can see T→P
+  /// adjacency without reconstructing it from the packet ring (#112).
+  HostExchangeKind previousClosedKind_ = HostExchangeKind::kNone;
 
   // ---- degraded-lane allocator (D17), host-wide ----
   //

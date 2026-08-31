@@ -393,7 +393,30 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
     }
     if (phase_ != Phase::kAwaitWait ||
         outboundKind_ != OutboundKind::kPoll) {
+      // Unsolicited: counted always; event carries phase/kind so a dense-T
+      // capture can pair "R on wire" with Host belief (issue #112).
       ++statistics_.unsolicitedPackets;
+      if (eventListener_ != nullptr) {
+        CMRIHostEvent event;
+        event.type = CMRIHostEventType::kUnsolicitedPacket;
+        event.nowMs = nowMs;
+        event.replyLength = static_cast<uint16_t>(rx.length);
+        event.replyWireUA = rx.wireUA;
+        event.replyMt = rx.mt;
+        event.kind = currentKind_();
+        event.prevKind = previousClosedKind_;
+        if (phase_ == Phase::kAwaitWait && gateArmedMs_ != 0) {
+          event.gateArmedMs = gateArmedMs_;
+          event.gateMs = nowMs - gateArmedMs_;
+        }
+        // Attribute only when a live exchange still owns a node; otherwise
+        // leave node null (idle / orphan / pre-send).
+        if (!exchangeOrphaned_ && phase_ != Phase::kIdle &&
+            occupied_[polledIndex_]) {
+          event.node = &nodes_[polledIndex_];
+        }
+        fire_(event);
+      }
       continue;
     }
     if (exchangeOrphaned_) {
@@ -524,7 +547,8 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
                RemoteNodeState::kUninitialized,
                RemoteNodeState::kUninitialized,
                ReplyRejectReason::kGeometryMismatch, reply.length, reply.wireUA,
-               reply.mt);
+               reply.mt, PollBackoffChangeReason::kNone, 0, 0,
+               HostExchangeOutcome::kRejected);
     emitEvent_(CMRIHostEventType::kPollBackoffChanged, node, nowMs,
                RemoteNodeState::kUninitialized,
                RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0,
@@ -563,7 +587,7 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
         tripBreaker_(node, nowMs);
       }
     }
-    finishExchange_(nowMs);
+    finishExchange_(nowMs, HostExchangeOutcome::kRejected);
     return;
   }
 
@@ -605,27 +629,76 @@ void CMRIHost::acceptReply_(const CMRIPacket& reply, uint32_t nowMs) {
   node.pollBackoff_.disarm();
   node.statistics_.lastTurnaroundMs = nowMs - gateArmedMs_;
   ++statistics_.repliesAccepted;
-  emitEvent_(CMRIHostEventType::kReplyAccepted, node, nowMs);
+  emitEvent_(CMRIHostEventType::kReplyAccepted, node, nowMs,
+             RemoteNodeState::kUninitialized, RemoteNodeState::kUninitialized,
+             ReplyRejectReason::kNone, 0, 0, 0, PollBackoffChangeReason::kNone,
+             0, 0, HostExchangeOutcome::kAccepted);
   emitEvent_(CMRIHostEventType::kPollBackoffChanged, node, nowMs,
              RemoteNodeState::kUninitialized,
              RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0, 0,
              0, PollBackoffChangeReason::kAccept, previousBackoffMs,
              node.pollBackoffMs_);
-  finishExchange_(nowMs);
+  finishExchange_(nowMs, HostExchangeOutcome::kAccepted);
 }
 
 /// Close the outstanding exchange and arm the pacing gate.
 ///
 /// Clearing the orphan mark here is what bounds its lifetime to exactly
 /// one exchange: every path out of an exchange funnels through this.
-void CMRIHost::finishExchange_(uint32_t nowMs) {
+/// Emits kExchangeComplete (issue #112) before the phase resets so the
+/// line still carries kind/gate adjacency from the exchange that closed.
+void CMRIHost::finishExchange_(uint32_t nowMs, HostExchangeOutcome outcome) {
   // Charge Gate B before the phase resets, while the grant record still
   // describes the exchange that just ended.
   chargeDegradedExchange_(nowMs);
+
+  const HostExchangeKind kind = currentKind_();
+  const HostExchangeKind prevKind = previousClosedKind_;
+  const uint32_t gateArmedMs = gateArmedMs_;
+  const uint32_t gateMs = (gateArmedMs_ != 0) ? (nowMs - gateArmedMs_) : 0;
+
+  if (eventListener_ != nullptr) {
+    CMRIHostEvent event;
+    event.type = CMRIHostEventType::kExchangeComplete;
+    event.nowMs = nowMs;
+    event.kind = kind;
+    event.prevKind = prevKind;
+    event.outcome = outcome;
+    event.gateArmedMs = gateArmedMs;
+    event.gateMs = gateMs;
+    if (!exchangeOrphaned_ && occupied_[polledIndex_]) {
+      event.node = &nodes_[polledIndex_];
+    } else {
+      // Orphaned: nothing to attribute. Force the outcome spelling even
+      // if the caller passed a poll outcome (the node is gone).
+      event.node = nullptr;
+      if (exchangeOrphaned_) {
+        event.outcome = HostExchangeOutcome::kOrphaned;
+      }
+    }
+    fire_(event);
+  }
+
+  if (kind != HostExchangeKind::kNone) {
+    previousClosedKind_ = kind;
+  }
+
   waitGate_.disarm();
   paceGate_.armIn(nowMs, config_.pollPacingMs);
   phase_ = Phase::kIdle;
   exchangeOrphaned_ = false;
+}
+
+HostExchangeKind CMRIHost::currentKind_() const {
+  switch (outboundKind_) {
+    case OutboundKind::kInit:
+      return HostExchangeKind::kInit;
+    case OutboundKind::kPoll:
+      return HostExchangeKind::kPoll;
+    case OutboundKind::kTransmit:
+      return HostExchangeKind::kTransmit;
+  }
+  return HostExchangeKind::kNone;
 }
 
 /// Advance the exchange schedule. Later steps run in the same tick when an
@@ -740,7 +813,7 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // VALIDATION: Design v1.2 D5: an orphaned exchange attributes
       // nothing to any node; the miss is not charged and no event is
       // emitted.
-      finishExchange_(nowMs);
+      finishExchange_(nowMs, HostExchangeOutcome::kOrphaned);
       return;
     }
     if (outboundKind_ == OutboundKind::kPoll) {
@@ -754,7 +827,11 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
       // state and gate behavior, so they are not stored in observation
       // statistics.
       ++node.consecutiveMisses_;
-      emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs);
+      emitEvent_(CMRIHostEventType::kReplyTimeout, node, nowMs,
+                 RemoteNodeState::kUninitialized,
+                 RemoteNodeState::kUninitialized, ReplyRejectReason::kNone, 0,
+                 0, 0, PollBackoffChangeReason::kNone, 0, 0,
+                 HostExchangeOutcome::kTimeout);
       // Poll-retry backoff (map issue #41): back off this node's next
       // poll attempt so a chronically offline node cannot tax the
       // round-robin's baseline cycle time -- pollDueBy_ depends on that
@@ -791,16 +868,31 @@ void CMRIHost::runSchedule_(uint32_t nowMs) {
         invalidateNodeInputs_(node);
         emitEvent_(CMRIHostEventType::kReinitScheduled, node, nowMs);
       }
-      finishExchange_(nowMs);
+      finishExchange_(nowMs, HostExchangeOutcome::kTimeout);
     } else if (outboundKind_ == OutboundKind::kInit) {
-      // Settle elapsed: send the immediate full T (interop 2.3.1).
+      // Settle elapsed: record xchg completion for the I, then send the
+      // immediate full T (interop 2.3.1). I does not call finishExchange_
+      // because the exchange slot stays owned for the mandatory T.
+      if (eventListener_ != nullptr && !exchangeOrphaned_) {
+        CMRIHostEvent event;
+        event.type = CMRIHostEventType::kExchangeComplete;
+        event.nowMs = nowMs;
+        event.node = &nodes_[polledIndex_];
+        event.kind = HostExchangeKind::kInit;
+        event.prevKind = previousClosedKind_;
+        event.outcome = HostExchangeOutcome::kSettled;
+        event.gateArmedMs = gateArmedMs_;
+        event.gateMs = (gateArmedMs_ != 0) ? (nowMs - gateArmedMs_) : 0;
+        fire_(event);
+        previousClosedKind_ = HostExchangeKind::kInit;
+      }
       buildTransmitPacket_(polledIndex_);
       outboundKind_ = OutboundKind::kTransmit;
       phase_ = Phase::kSendOutbound;
     } else {  // kTransmit
       // Post-T gap elapsed: the T is delivered.
       nodes_[polledIndex_].outputsDirty_ = false;
-      finishExchange_(nowMs);
+      finishExchange_(nowMs, HostExchangeOutcome::kDelivered);
     }
   }
 }
@@ -1238,7 +1330,8 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
                           uint8_t replyMt,
                           PollBackoffChangeReason pollBackoffReason,
                           uint32_t previousPollBackoffMs,
-                          uint32_t newPollBackoffMs) {
+                          uint32_t newPollBackoffMs,
+                          HostExchangeOutcome outcome) {
   if (eventListener_ == nullptr) {
     return;
   }
@@ -1264,6 +1357,16 @@ void CMRIHost::emitEvent_(CMRIHostEventType type, const RemoteNodeHandle& node,
   event.pollBackoffReason = pollBackoffReason;
   event.previousPollBackoffMs = previousPollBackoffMs;
   event.newPollBackoffMs = newPollBackoffMs;
+  // Gate / kind context for exchange-shaped events (issue #112).
+  event.outcome = outcome;
+  if (type == CMRIHostEventType::kReplyAccepted ||
+      type == CMRIHostEventType::kReplyRejected ||
+      type == CMRIHostEventType::kReplyTimeout) {
+    event.kind = currentKind_();
+    event.prevKind = previousClosedKind_;
+    event.gateArmedMs = gateArmedMs_;
+    event.gateMs = (gateArmedMs_ != 0) ? (nowMs - gateArmedMs_) : 0;
+  }
   fire_(event);
 }
 
@@ -1331,6 +1434,29 @@ const char* pollBackoffChangeReasonString(PollBackoffChangeReason reason) {
     case PollBackoffChangeReason::kAccept:            return "accept";
     case PollBackoffChangeReason::kGeometryMismatch:  return "geometry-mismatch";
     case PollBackoffChangeReason::kInitial:           return "initial";
+  }
+  return "unknown";
+}
+
+const char* hostExchangeKindString(HostExchangeKind kind) {
+  switch (kind) {
+    case HostExchangeKind::kNone:     return "none";
+    case HostExchangeKind::kInit:     return "I";
+    case HostExchangeKind::kPoll:     return "P";
+    case HostExchangeKind::kTransmit: return "T";
+  }
+  return "unknown";
+}
+
+const char* hostExchangeOutcomeString(HostExchangeOutcome outcome) {
+  switch (outcome) {
+    case HostExchangeOutcome::kNone:      return "none";
+    case HostExchangeOutcome::kAccepted:  return "accepted";
+    case HostExchangeOutcome::kRejected:  return "rejected";
+    case HostExchangeOutcome::kTimeout:   return "timeout";
+    case HostExchangeOutcome::kSettled:   return "settled";
+    case HostExchangeOutcome::kDelivered: return "delivered";
+    case HostExchangeOutcome::kOrphaned:  return "orphaned";
   }
   return "unknown";
 }

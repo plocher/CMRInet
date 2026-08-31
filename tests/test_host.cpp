@@ -26,6 +26,8 @@ using CMRInet::ConformanceFaultRecord;
 using CMRInet::ConformanceLayer;
 using CMRInet::encodeFrame;
 using CMRInet::FaultAttribution;
+using CMRInet::HostExchangeKind;
+using CMRInet::HostExchangeOutcome;
 using CMRInet::kWireUAOffset;
 using CMRInet::layerOf;
 using CMRInet::MockCMRITransport;
@@ -146,6 +148,13 @@ struct ListenerLog {
   /// Illegal wire-UA events (issue #96).
   int illegalWireUA = 0;
   uint8_t lastIllegalWireUA = 0;
+  /// Exchange completion / unsolicited (issue #112).
+  int exchangeComplete = 0;
+  int unsolicited = 0;
+  HostExchangeKind lastKind = HostExchangeKind::kNone;
+  HostExchangeKind lastPrevKind = HostExchangeKind::kNone;
+  HostExchangeOutcome lastOutcome = HostExchangeOutcome::kNone;
+  uint32_t lastGateMs = 0;
 };
 
 static void recordEvent(void* context, const CMRIHostEvent& event) {
@@ -182,6 +191,20 @@ static void recordEvent(void* context, const CMRIHostEvent& event) {
       ++log.illegalWireUA;
       log.lastIllegalWireUA = event.replyWireUA;
       log.lastFault = event.fault;
+      break;
+    case CMRIHostEventType::kExchangeComplete:
+      ++log.exchangeComplete;
+      log.lastKind = event.kind;
+      log.lastPrevKind = event.prevKind;
+      log.lastOutcome = event.outcome;
+      log.lastGateMs = event.gateMs;
+      break;
+    case CMRIHostEventType::kUnsolicitedPacket:
+      ++log.unsolicited;
+      log.lastKind = event.kind;
+      log.lastPrevKind = event.prevKind;
+      log.lastGateMs = event.gateMs;
+      log.lastReplyLength = event.replyLength;
       break;
   }
   log.lastNode = event.node;

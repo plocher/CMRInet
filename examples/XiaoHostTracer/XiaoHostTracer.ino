@@ -146,7 +146,10 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.9.2: Esp32SerialPort ctor is (stream, txen, baud, rx, tx) — the
 // leftover UART_NUM_1 arg made baud=D3 and pins=28800, which the ESP
 // UART driver rejected as "baud rate unachievable" and left polls=0.
-constexpr const char* kVersion = "0.9.2"; // Esp32SerialPort ctor args
+// 0.10.0 (#112): dense full-T Host belief timeline — live miss/reject/
+// xchg/unsolicited during `run`, gate/kind on those lines, transport
+// snapshot on miss/reject, T body `fp` on packet traces.
+constexpr const char* kVersion = "0.10.0"; // #112 xchg/miss instrumentation
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_BAUD,
@@ -862,6 +865,8 @@ void loop() {
         run_invalid_ua_records = 0;
         run_start_ms = millis();
         run_end_ms = run_start_ms + secs * 1000;
+        // Keep miss/reject/xchg/unsolicited live during capture (#112);
+        // packet traces still go only to the ring via ourOnTrace.
         engine.setBackoffTraceOnly(true);
         Serial.print("BEGIN CAPTURE t="); Serial.println(run_start_ms);
       }
