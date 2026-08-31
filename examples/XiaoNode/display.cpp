@@ -6,6 +6,8 @@
 #include <Adafruit_SSD1306.h>
 #include <string.h>
 
+#include "Ssd1306SegmentedFlush.h"
+
 namespace {
 
 constexpr uint8_t SCREEN_WIDTH = 128;
@@ -13,6 +15,7 @@ constexpr uint8_t SCREEN_HEIGHT = 64;
 constexpr uint8_t SCREEN_ADDRESS = 0x3C;
 
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(oled, SCREEN_ADDRESS);
 
 // Live view layout metrics (128x64, 6x8 base font).
 constexpr uint8_t FONT_W = 6;
@@ -90,8 +93,9 @@ void NodeDisplay::drawPortCells(uint8_t x, uint8_t y, Dir dir, uint8_t val,
 }
 
 void NodeDisplay::drawGrid() {
-  // PCB/wiring order: Port B left, Port A right.
-  for (uint8_t e = 0; e < DISP_ROWS; e++) {
+  // PCB/wiring order: Port B left, Port A right. Only the sketch-supplied
+  // visible count is drawn; storage remains fixed at kMaxExpanders.
+  for (uint8_t e = 0; e < visibleCount_; e++) {
     const uint8_t y = static_cast<uint8_t>(GRID_TOP + e * ROW_PITCH);
     drawPortCells(PORT_LEFT_X, y, dirs_[e][1], data_[e][1], delta_[e][1]);
     drawPortCells(PORT_RIGHT_X, y, dirs_[e][0], data_[e][0], delta_[e][0]);
@@ -109,6 +113,11 @@ void NodeDisplay::drawStatus() {
     case NET_READY:
       oled.printf("%s OTA", ip_.toString().c_str());
       break;
+    case NET_FAILED:
+      // Keep the same "WiFi" lead-in as CONNECTING so the eye lands
+      // on the same corner; message must fit a 21-char 6px line.
+      oled.print(F("WiFi: can't connect"));
+      break;
   }
 }
 
@@ -119,7 +128,7 @@ void NodeDisplay::render() {
   drawHeader();
   drawGrid();
   drawStatus();
-  oled.display();
+  oledFlush.markDirty();
 }
 
 bool NodeDisplay::begin(const char* name) {
@@ -136,14 +145,33 @@ bool NodeDisplay::begin(const char* name) {
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextWrap(false);
   drawHeader();
-  oled.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();
   dirty_ = true;
   return true;
 }
 
+void NodeDisplay::update(const IOX_Config* expanders, uint8_t count,
+                         const uint8_t portState[][kPortsPerExpander]) {
+  if (!alive_ || expanders == nullptr || portState == nullptr) {
+    return;
+  }
+  const uint8_t n = (count > kMaxExpanders) ? kMaxExpanders : count;
+  if (n != visibleCount_) {
+    visibleCount_ = n;
+    dirty_ = true;
+  }
+  for (uint8_t e = 0; e < visibleCount_; e++) {
+    // Direction and Dir share ordinals (UNUSED/OUT/IN); map once here so
+    // the sketch never casts.
+    setPort(e, static_cast<Dir>(expanders[e].portA), portState[e][0],
+            static_cast<Dir>(expanders[e].portB), portState[e][1]);
+  }
+}
+
 void NodeDisplay::setPort(uint8_t index, Dir dirA, uint8_t dataA, Dir dirB,
                           uint8_t dataB) {
-  if (!alive_ || index >= DISP_ROWS) {
+  if (!alive_ || index >= visibleCount_) {
     return;
   }
 
@@ -218,8 +246,8 @@ void NodeDisplay::show() {
 
   // Age change highlights; keep rendering while any are visible so
   // expired halos get erased.
-  for (uint8_t e = 0; e < DISP_ROWS; e++) {
-    for (uint8_t p = 0; p < DISP_COLS; p++) {
+  for (uint8_t e = 0; e < visibleCount_; e++) {
+    for (uint8_t p = 0; p < kPortsPerExpander; p++) {
       if (haloAge_[e][p]) {
         if (--haloAge_[e][p] == 0) {
           delta_[e][p] = 0;
@@ -289,7 +317,8 @@ void NodeDisplay::otaProgress(unsigned int received, unsigned int total) {
   drawCentered(buf, 40);
   snprintf(buf, sizeof(buf), "%u / %u KB", received / 1024, total / 1024);
   drawCentered(buf, 52);
-  oled.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();
 }
 
 void NodeDisplay::otaSuccess() {
@@ -306,7 +335,8 @@ void NodeDisplay::otaSuccess() {
   oled.drawLine(62, 25, 70, 15, SSD1306_WHITE);
   drawCentered("UPDATE OK", 40);
   drawCentered("rebooting...", 52);
-  oled.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();
 }
 
 void NodeDisplay::otaError(const char* name) {
@@ -322,8 +352,16 @@ void NodeDisplay::otaError(const char* name) {
   oled.drawLine(70, 14, 58, 26, SSD1306_WHITE);
   drawCentered("UPDATE FAILED", 38);
   drawCentered(name, 48);
-  oled.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();
 
   mode_ = MODE_HOLD;
   holdUntil_ = millis() + OTA_ERROR_HOLD_MS;
+}
+
+void NodeDisplay::serviceFlush() {
+  if (!alive_) {
+    return;
+  }
+  oledFlush.service();
 }

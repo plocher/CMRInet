@@ -37,6 +37,7 @@
 // =============================================
 // ====   Feature toggles                   ====
 // =============================================
+
 #define USE_OLED   // Comment out to run headless
 #define USE_OTA    // Comment out to disable WiFi + OTA
 
@@ -81,14 +82,10 @@
 #define NODE_NAME      CMRI_NODE_DESCRIPTION "-" STRINGIFY(NODE_ID)
 #endif
 
-// Up to 8 MCP23017 expanders. Each has two 8-bit ports.
-// Edit this table to match your hardware. DISP_ROWS keeps the OLED
-// grid and this table the same length when USE_OLED is on.
-#ifdef USE_OLED
-IOX_Config expanders[DISP_ROWS] =
-#else
+// MCP23017 expanders. Each has two 8-bit ports (A, B).
+// Edit this table to match your hardware. Count is sizeof(expanders);
+// the OLED is told that count at begin() and clamps at its fixed max-8.
 IOX_Config expanders[] =
-#endif
 #if NODE_ID == 30
 {
     { 0x20, IN,     OUT    },
@@ -121,8 +118,8 @@ NodeDisplay oled;
 constexpr uint32_t kDisplayRefreshMs = 100;  // ~10 fps; bits change slowly
 uint32_t lastDisplayMs = 0;
 // Cached bits from the last pack/unpack, one [portA, portB] per expander.
-// The display reads this; pack/unpack own the writes.
-uint8_t portState[DISP_ROWS][DISP_COLS] = {};
+// Row count from the I/O table; columns match the panel's port pair.
+uint8_t portState[kExpanderCount][NodeDisplay::kPortsPerExpander] = {};
 #endif
 
 #ifdef USE_OTA
@@ -143,6 +140,9 @@ CMRInet::CMRINode               node(transport);
 
 void packInputs(CMRInet::IOBuffer& ib);
 void unpackOutputs(CMRInet::IOBuffer& ob);
+#ifdef USE_OLED
+void sampleInputPorts();
+#endif
 
 #if defined(USE_OLED) && defined(USE_OTA)
 static NodeDisplay::NetState netStateFor(OtaManager::State s) {
@@ -152,6 +152,8 @@ static NodeDisplay::NetState netStateFor(OtaManager::State s) {
       return NodeDisplay::NET_READY;
     case OtaManager::CONNECTING:
       return NodeDisplay::NET_CONNECTING;
+    case OtaManager::FAILED:
+      return NodeDisplay::NET_FAILED;
     default:
       return NodeDisplay::NET_OFF;
   }
@@ -209,13 +211,10 @@ void loop() {
   const uint32_t now = millis();
   if (now - lastDisplayMs >= kDisplayRefreshMs) {
     lastDisplayMs = now;
-    for (uint8_t e = 0; e < kExpanderCount && e < DISP_ROWS; e++) {
-      oled.setPort(e,
-                   static_cast<NodeDisplay::Dir>(expanders[e].portA),
-                   portState[e][0],
-                   static_cast<NodeDisplay::Dir>(expanders[e].portB),
-                   portState[e][1]);
-    }
+    // Sample inputs here so the grid tracks pin changes even when the
+    // Host is not polling. Outputs still arrive via unpack().
+    sampleInputPorts();
+    oled.update(expanders, kExpanderCount, portState);
     oled.setTX(txCount);
     oled.setRX(rxCount);
 #ifdef USE_OTA
@@ -223,6 +222,7 @@ void loop() {
 #endif
     oled.show();  // pushes a frame only when something changed
   }
+  oled.serviceFlush();  // one I2C chunk per loop
 #endif
 }
 
@@ -233,7 +233,21 @@ void loop() {
 // onPack: read all input ports into IB at P time.
 // onUnpack: write all output ports from OB at T time.
 // Both skip the 2 phantom CPNODE bytes at the start of the image.
-// portState is updated so the OLED grid can show both directions.
+// portState is the OLED snapshot: inputs are also sampled in loop so
+// the grid moves without waiting for a Host poll; outputs update here.
+
+#ifdef USE_OLED
+void sampleInputPorts() {
+  for (uint8_t e = 0; e < kExpanderCount; e++) {
+    if (expanders[e].portA == IN) {
+      portState[e][0] = ioxReadPort(expanders[e].address, true);
+    }
+    if (expanders[e].portB == IN) {
+      portState[e][1] = ioxReadPort(expanders[e].address, false);
+    }
+  }
+}
+#endif
 
 void packInputs(CMRInet::IOBuffer& ib) {
   txCount++;
@@ -244,18 +258,14 @@ void packInputs(CMRInet::IOBuffer& ib) {
     if (expanders[e].portA == IN) {
       const uint8_t val = ioxReadPort(expanders[e].address, true);
 #ifdef USE_OLED
-      if (e < DISP_ROWS) {
-        portState[e][0] = val;
-      }
+      portState[e][0] = val;
 #endif
       ib.setByte(idx++, val);
     }
     if (expanders[e].portB == IN && idx < ib.length()) {
       const uint8_t val = ioxReadPort(expanders[e].address, false);
 #ifdef USE_OLED
-      if (e < DISP_ROWS) {
-        portState[e][1] = val;
-      }
+      portState[e][1] = val;
 #endif
       ib.setByte(idx++, val);
     }
@@ -269,18 +279,14 @@ void unpackOutputs(CMRInet::IOBuffer& ob) {
     if (expanders[e].portA == OUT) {
       const uint8_t val = ob.byte(idx++);
 #ifdef USE_OLED
-      if (e < DISP_ROWS) {
-        portState[e][0] = val;
-      }
+      portState[e][0] = val;
 #endif
       ioxWritePort(expanders[e].address, true, val);
     }
     if (expanders[e].portB == OUT && idx < ob.length()) {
       const uint8_t val = ob.byte(idx++);
 #ifdef USE_OLED
-      if (e < DISP_ROWS) {
-        portState[e][1] = val;
-      }
+      portState[e][1] = val;
 #endif
       ioxWritePort(expanders[e].address, false, val);
     }

@@ -1,44 +1,49 @@
 // iox.cpp — MCP23017 I2C expander access. See iox.h.
+//
+// Register map and transaction shape match the donor cpNode IOX path
+// (proven on this hardware): stop-then-requestFrom reads, GPIO for
+// R/W, IODIR/GPPU/IPOL setup on inputs.
 
 #include "iox.h"
 #include <Wire.h>
 
 namespace {
 
-// MCP23017 register addresses.
-constexpr uint8_t MCP_IODIRA = 0x00;
-constexpr uint8_t MCP_IODIRB = 0x01;
-constexpr uint8_t MCP_IPOLA  = 0x02;
-constexpr uint8_t MCP_IPOLB  = 0x03;
-constexpr uint8_t MCP_GPIOA  = 0x12;
-constexpr uint8_t MCP_GPIOB  = 0x13;
-constexpr uint8_t MCP_OLATA  = 0x14;
-constexpr uint8_t MCP_OLATB  = 0x15;
+// MCP23017 register base addresses (IOCON.BANK = 0). Port B is base+1.
+constexpr uint8_t MCP_IODIR   = 0x00;  // A=0x00, B=0x01
+constexpr uint8_t MCP_IPOL    = 0x02;  // A=0x02, B=0x03  (active-low map)
+constexpr uint8_t MCP_GPPU    = 0x0C;  // A=0x0C, B=0x0D
+constexpr uint8_t MCP_GPIO    = 0x12;  // A=0x12, B=0x13
 
-void writeReg(uint8_t addr, uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(addr);
-  Wire.write(reg);
-  Wire.write(val);
-  Wire.endTransmission();
-}
+constexpr uint8_t PORT_INPUT     = 0xFF;
+constexpr uint8_t PORT_OUTPUT    = 0x00;
+constexpr uint8_t PORT_PULLUPS   = 0xFF;
+constexpr uint8_t PORT_ACTIVELOW = 0xFF;
 
-uint8_t readReg(uint8_t addr, uint8_t reg) {
-  Wire.beginTransmission(addr);
-  Wire.write(reg);
-  Wire.endTransmission(false);
-  Wire.requestFrom(addr, static_cast<uint8_t>(1));
-  if (Wire.available()) return Wire.read();
-  return 0;
-}
+uint8_t portOffset(bool isPortA) { return isPortA ? 0 : 1; }
 
 void initPort(uint8_t addr, Direction dir, bool isPortA) {
-  const uint8_t iodir = isPortA ? MCP_IODIRA : MCP_IODIRB;
-  const uint8_t ipol  = isPortA ? MCP_IPOLA  : MCP_IPOLB;
+  const uint8_t port = portOffset(isPortA);
   if (dir == IN) {
-    writeReg(addr, iodir, 0xFF);       // all pins input
-    writeReg(addr, ipol,  0xFF);       // invert (active-low convention)
+    Wire.beginTransmission(addr);
+    Wire.write(static_cast<uint8_t>(MCP_IODIR + port));
+    Wire.write(PORT_INPUT);
+    Wire.endTransmission();
+
+    Wire.beginTransmission(addr);
+    Wire.write(static_cast<uint8_t>(MCP_GPPU + port));
+    Wire.write(PORT_PULLUPS);
+    Wire.endTransmission();
+
+    Wire.beginTransmission(addr);
+    Wire.write(static_cast<uint8_t>(MCP_IPOL + port));
+    Wire.write(PORT_ACTIVELOW);
+    Wire.endTransmission();
   } else if (dir == OUT) {
-    writeReg(addr, iodir, 0x00);       // all pins output
+    Wire.beginTransmission(addr);
+    Wire.write(static_cast<uint8_t>(MCP_IODIR + port));
+    Wire.write(PORT_OUTPUT);
+    Wire.endTransmission();
   }
 }
 
@@ -62,9 +67,23 @@ IOX_Geometry ioxInit(IOX_Config* table, uint8_t count) {
 }
 
 uint8_t ioxReadPort(uint8_t addr, bool isPortA) {
-  return readReg(addr, isPortA ? MCP_GPIOA : MCP_GPIOB);
+  // Donor shape: stop after the register pointer write, then requestFrom.
+  // A repeated-start (endTransmission(false)) failed to update on this
+  // bench hardware even though the same register map is correct.
+  Wire.beginTransmission(addr);
+  Wire.write(static_cast<uint8_t>(MCP_GPIO + portOffset(isPortA)));
+  Wire.endTransmission();
+
+  Wire.requestFrom(addr, static_cast<uint8_t>(1));
+  if (Wire.available()) {
+    return static_cast<uint8_t>(Wire.read());
+  }
+  return 0;
 }
 
 void ioxWritePort(uint8_t addr, bool isPortA, uint8_t val) {
-  writeReg(addr, isPortA ? MCP_OLATA : MCP_OLATB, val);
+  Wire.beginTransmission(addr);
+  Wire.write(static_cast<uint8_t>(MCP_GPIO + portOffset(isPortA)));
+  Wire.write(val);
+  Wire.endTransmission();
 }
