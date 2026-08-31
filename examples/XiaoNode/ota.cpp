@@ -1,5 +1,4 @@
 // ota.cpp — non-blocking WiFi + ArduinoOTA lifecycle.
-// Drops in UNCHANGED from the donor Xiao_I2C sketch.
 
 #include "ota.h"
 
@@ -17,15 +16,33 @@ static const char* errorName(ota_error_t err) {
     }
 }
 
-void OtaManager::begin(const char* hostname, const char* ssid, const char* password) {
+void OtaManager::begin(const char* hostname, const char* ssid,
+                       const char* password, uint32_t connectTimeoutMs) {
     _hostname = hostname;
+    _connectTimeoutMs = connectTimeoutMs;
+    _connectStartedMs = millis();
+    _everReady = false;
+    _armed = false;
 
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);   // modem power-save stalls OTA TCP transfers on C6
-    WiFi.setAutoReconnect(true);
+    // Auto-reconnect is useful after a real join; leave it off until then
+    // so a bad SSID/password does not thrash the radio forever.
+    WiFi.setAutoReconnect(false);
     WiFi.begin(ssid, password);
 
     _state = CONNECTING;
+}
+
+void OtaManager::failJoin_(const char* reason) {
+    WiFi.disconnect(true /* wifioff */, false /* eraseAP */);
+    WiFi.setAutoReconnect(false);
+    _state = FAILED;
+    // Brief full-screen notice via the OTA error hook is intentional;
+    // after HOLD the live status line shows NET_FAILED ("WiFi: ...").
+    if (onError) {
+        onError(reason);
+    }
 }
 
 void OtaManager::arm(void) {
@@ -43,6 +60,11 @@ void OtaManager::arm(void) {
     });
     ArduinoOTA.onError([this](ota_error_t err) {
         if (onError) onError(errorName(err));
+        // Transfer failed but the link is still up; back to READY so the
+        // next handle() cycle can accept another attempt.
+        if (_state == UPDATING) {
+            _state = READY;
+        }
     });
 
     ArduinoOTA.begin();
@@ -50,16 +72,47 @@ void OtaManager::arm(void) {
 }
 
 void OtaManager::poll(void) {
-    if (_state == OFF) return;
-
-    bool connected = (WiFi.status() == WL_CONNECTED);
-    if (connected && !_armed) {
-        arm();
+    if (_state == OFF || _state == FAILED) {
+        return;
     }
-    _state = connected ? READY : CONNECTING;
 
-    if (_armed && connected) {
-        ArduinoOTA.handle();
+    // Do not clobber an in-progress OTA with READY/CONNECTING.
+    if (_state == UPDATING) {
+        if (_armed) {
+            ArduinoOTA.handle();
+        }
+        return;
+    }
+
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+    if (connected) {
+        if (!_everReady) {
+            _everReady = true;
+            // Now that credentials worked once, allow drop recovery.
+            WiFi.setAutoReconnect(true);
+        }
+        if (!_armed) {
+            arm();
+        }
+        _state = READY;
+        if (_armed) {
+            ArduinoOTA.handle();
+        }
+        return;
+    }
+
+    // Not connected.
+    if (_everReady) {
+        // Had a real join before: wait for auto-reconnect.
+        _state = CONNECTING;
+        return;
+    }
+
+    // Still on the first join attempt.
+    _state = CONNECTING;
+    if (_connectTimeoutMs != 0 &&
+        (millis() - _connectStartedMs) >= _connectTimeoutMs) {
+failJoin_("WiFi: can't connect");
     }
 }
 
