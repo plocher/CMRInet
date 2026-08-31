@@ -9,6 +9,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef ARDUINO
+#include <Arduino.h>  // millis(), for the tick() convenience overload
+#endif
+
 #include "CMRIPacket.h"
 #include "CMRITransport.h"
 #include "IOBuffer.h"
