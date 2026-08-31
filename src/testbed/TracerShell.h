@@ -105,7 +105,7 @@ inline const char* eventName(CMRIHostEventType type) {
 ///
 /// Verb vocabulary. Every verb acting on a node names its UA:
 ///
-///   status                          host counters plus the node roster
+///   status                          three host-scope lines (see below)
 ///   status <UA>                     one node's image, health, counters
 ///   quiesce <UA> | resume <UA>      out of / back into the rotation
 ///   forcetx <UA>                    re-send a full T with no change
@@ -128,7 +128,8 @@ class TracerShell {
   /// as its stream requires.
   using LineWriter = void (*)(void* context, const char* line);
 
-  /// Callback appending extra JSON fields to a roster-bearing line.
+/// Callback emitting a generators JSON fragment (leading comma OK).
+  /// Invoked on its own line after the status/roster pair.
   using StatusExtender = void (*)(void* context, char* buffer,
                                   size_t remaining_capacity);
 
@@ -158,8 +159,10 @@ class TracerShell {
     host.onTrace(&TracerShell::onHostTrace_, this);
   }
 
-  /// Register an optional callback that appends further JSON fields
-  /// (e.g. `,"generators":{...}`) to a roster-bearing line.
+/// Register an optional callback that emits a generators JSON fragment
+  /// (e.g. `,"generators":{...}`) as its own line after `status`.
+  /// Kept off the counters/roster lines so a long extender cannot
+  /// truncate the host ledger under CDC backpressure.
   void setStatusExtender(StatusExtender extender, void* context = nullptr) {
     statusExtender_ = extender;
     statusExtenderContext_ = context;
@@ -184,13 +187,18 @@ class TracerShell {
                   /*identity=*/true, /*config=*/true, /*roster=*/true);
   }
 
-  /// Emit one host-scope line at the shell's current clock.
+/// Emit one host-scope line at the shell's current clock.
+  ///
+  /// `status` is special: it is a three-line bundle (counters, roster,
+  /// optional generators). Everything else remains a single line.
   void emitLine(const char* event, const char* extraKey = nullptr,
                 const char* extraValue = nullptr) {
-    const bool isStatus = (strcmp(event, "status") == 0);
+    if (strcmp(event, "status") == 0) {
+      emitStatusBundle_();
+      return;
+    }
     emitHostLine_(nowMs_, event, kNoUA, extraKey, extraValue,
-                  /*identity=*/isStatus, /*config=*/false,
-                  /*roster=*/isStatus);
+                  /*identity=*/false, /*config=*/false, /*roster=*/false);
   }
 
   /// Dispatch one C&C verb. Unknown verbs emit an error line and count
@@ -202,8 +210,13 @@ class TracerShell {
     if (strcmp(verb, "quit") == 0) {
       return VerbResult::kQuit;
     }
-    if (strcmp(verb, "status") == 0) {
-      emitLine("status");
+if (strcmp(verb, "status") == 0) {
+      // Three small lines, not one large one: host counters, roster, and
+      // (when an extender is registered) generators. A single line with
+      // all three routinely exceeded the CDC write budget and arrived
+      // truncated on the gather side, which left status_snapshot null
+      // and analyzers false-FAIL.
+      emitStatusBundle_();
       return VerbResult::kHandled;
     }
     if (strncmp(verb, "status ", 7) == 0) {
@@ -610,13 +623,54 @@ class TracerShell {
     finish_(written);
   }
 
-  // ------------------------------------------------ line emission
+// ------------------------------------------------ line emission
   //
   // Two scopes, because the fields have two different owners. Host scope
   // carries what CMRIHost, the transport, and the decoder own; node
   // scope carries what a RemoteNodeHandle owns. Mixing them into one
   // flat line was only possible while the shell pretended there was
   // exactly one node.
+  //
+  // Host-scope `status` is further split into a three-line bundle so no
+  // single CDC write carries counters + roster + generators at once:
+  //   1. event="status"      host counters + degraded ledger + identity
+  //   2. event="roster"      the live node table only
+  //   3. event="generators"  optional StatusExtender payload (sketch)
+  // Epoch still carries roster on one line: it is rare and small enough.
+
+  /// Emit the host-scope status bundle as three short JSON lines.
+  void emitStatusBundle_() {
+    // 1) Counters and ledger — the fields degraded-lane scoring needs.
+    emitHostLine_(nowMs_, "status", kNoUA, nullptr, nullptr,
+                  /*identity=*/true, /*config=*/false, /*roster=*/false);
+    // 2) Roster alone — the membership view dual-node scoring needs.
+    emitHostLine_(nowMs_, "roster", kNoUA, nullptr, nullptr,
+                  /*identity=*/false, /*config=*/false, /*roster=*/true);
+    // 3) Generators, when the wrapping main registered an extender.
+    if (statusExtender_ != nullptr) {
+      emitGeneratorsLine_();
+    }
+  }
+
+  /// Own line for the StatusExtender payload. The extender still returns
+  /// a leading-comma fragment (historical contract with emitHostLine_);
+  /// we strip the comma and wrap it as a complete object.
+  void emitGeneratorsLine_() {
+    char extBuf[256] = {0};
+    statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
+    const char* payload = extBuf;
+    if (payload[0] == ',') {
+      ++payload;
+    }
+    if (payload[0] == '\0') {
+      return;
+    }
+    int written = appendf_(
+        0, "{\"seq\":%u,\"ts\":%u,\"event\":\"generators\",\"role\":\"host\",%s",
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(nowMs_ - epochMs_), payload);
+    finish_(written);
+  }
 
   void emitHostLine_(uint32_t nowMs, const char* event, int UA,
                      const char* extraKey, const char* extraValue,
@@ -687,13 +741,11 @@ class TracerShell {
     if (extraKey != nullptr && extraValue != nullptr) {
       written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
     }
-    if (roster) {
+if (roster) {
+      // Roster only. Generators ride their own line via
+      // emitGeneratorsLine_ so a long extender cannot truncate the
+      // membership view under CDC backpressure.
       written = appendRoster_(written);
-      if (statusExtender_ != nullptr) {
-        char extBuf[256] = {0};
-        statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
-        written = appendf_(written, "%s", extBuf);
-      }
     }
     finish_(written);
   }

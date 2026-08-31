@@ -213,7 +213,7 @@ void drawHostStatus() {
 #endif
 
 // ---- Host wiring (static/stack; the library never allocates) --------------
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, D3, 28800);
+CMRInet::Esp32SerialPort port(Serial1, D3, 28800, RX /* D7 */, TX /* D6 */);
 CMRInet::SerialCMRITransport    transport(port);
 CMRInet::CMRIHost               host(transport);
 
@@ -253,8 +253,7 @@ void onHostEvent(void* /*context*/, const CMRInet::CMRIHostEvent& event) {
 void setup() {
   Serial.begin(115200);  // USB CDC: diagnostic output for rejections
 
-  // The CMRI wire: 28800 8N2 on the MAX3491 UART pins.
-  Serial1.begin(kCMRI_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
+  // The CMRI wire is configured by Esp32SerialPort::begin() via host.begin().
   transport.setInterByteTimeoutMs(50);  // tolerant
 
 #if USE_OLED

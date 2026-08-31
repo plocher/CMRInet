@@ -114,8 +114,8 @@ constexpr const char* kImage = "xiao_bench_echo_cancel";
 constexpr const char* kVersion = "0.1.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
-                                      ECHOCALC_BAUD);
+CMRInet::Esp32SerialPort port(Serial1, kTxenPin, ECHOCALC_BAUD,
+                                      RX /* D7 */, TX /* D6 */);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
 CMRInet::testbed::TracerShell engine;

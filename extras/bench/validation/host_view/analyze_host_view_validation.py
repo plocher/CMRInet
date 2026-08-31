@@ -135,10 +135,16 @@ def _extract_packet_evidence(
 
 
 def _extract_node_state_map(status_snapshot: Optional[dict]) -> tuple[dict[int, str], list[str]]:
-    """Extract status snapshot state map keyed by semantic UA."""
+    """Extract status snapshot state map keyed by semantic UA.
+
+    Membership lives under `roster`. `nodes` is the integer live-count.
+    """
     if status_snapshot is None:
         return {}, []
-    nodes = status_snapshot.get("nodes")
+    nodes = status_snapshot.get("roster")
+    if not isinstance(nodes, list):
+        legacy = status_snapshot.get("nodes")
+        nodes = legacy if isinstance(legacy, list) else None
     if not isinstance(nodes, list):
         return {}, []
     out: dict[int, str] = {}

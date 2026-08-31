@@ -254,14 +254,122 @@ def reboot_and_reconnect(port, timeout=10.0):
 
 
 
-def sync_and_validate_boot(ser, timeout=15.0):
-    # Send a status to ask for identity directly (works on fresh boot without nodes)
+def read_host_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
+    """Read the host-scope status bundle from the tracer shell.
+
+    Bare `status` emits two or three short JSON lines:
+      event=status      host counters + degraded ledger + identity
+      event=roster      live node table
+      event=generators  optional StatusExtender payload
+
+    Older firmware emitted one monolithic line with all three. This
+    reader accepts either shape: a single status line with an embedded
+    roster still works, and a split bundle is merged into one dict so
+    analyzers keep a stable status_snapshot contract.
+    """
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
     ser.write(b"status\n")
-    time.sleep(0.5)
-    
+    deadline = time.time() + timeout_s
+    status_doc: Optional[dict] = None
+    roster_doc: Optional[dict] = None
+    generators_doc: Optional[dict] = None
+
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event = doc.get("event")
+        # Node-scope status lines also say role=host; they carry a top-level
+        # "ua". Host-scope status has no top-level ua (only roster entries do).
+        if event == "status" and "ua" not in doc:
+            status_doc = doc
+            # Legacy single-line shape already carries roster/generators.
+            if isinstance(doc.get("roster"), list) or "generators" in doc:
+                return doc
+        elif event == "roster":
+            roster_doc = doc
+        elif event == "generators":
+            generators_doc = doc
+        if status_doc is not None and roster_doc is not None:
+            # Generators is optional and arrives third. Hold the pair until
+            # it shows up or a short tail of the deadline elapses, so a
+            # healthy extender is not raced out of the merge.
+            if generators_doc is None and (time.time() + 0.4) < deadline:
+                continue
+            merged = dict(status_doc)
+            if "roster" in roster_doc:
+                merged["roster"] = roster_doc["roster"]
+            if generators_doc is not None and "generators" in generators_doc:
+                merged["generators"] = generators_doc["generators"]
+            return merged
+    # Prefer a partial status line (ledger/identity) over nothing: the
+    # degraded-lane analyzer can still score grants/denials without a
+    # roster, and dual-node falls back to per-node status for states.
+    if status_doc is not None and roster_doc is not None:
+        merged = dict(status_doc)
+        if "roster" in roster_doc:
+            merged["roster"] = roster_doc["roster"]
+        if generators_doc is not None and "generators" in generators_doc:
+            merged["generators"] = generators_doc["generators"]
+        return merged
+    return status_doc
+
+
+def read_node_status(ser, ua: int, timeout_s: float = 3.0) -> Optional[dict]:
+    """Read one per-node status JSON payload from the tracer shell."""
+    ser.write(f"status {ua}\n".encode("utf-8"))
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if doc.get("event") != "status":
+            continue
+        if doc.get("ua") != ua:
+            continue
+        return doc
+    return None
+
+
+def sync_and_validate_boot(ser, timeout=15.0):
+    # Send a status to ask for identity directly (works on fresh boot without nodes).
+    # Prefer the merged bundle reader so split status lines still yield image/version.
+    snapshot = read_host_status_snapshot(ser, timeout_s=min(timeout, 8.0))
+    if snapshot is not None:
+        image = snapshot.get("image")
+        version = snapshot.get("version")
+        if image == "xiao_host_tracer" and version:
+            ver_parts = tuple(int(x) for x in str(version).split("."))
+            if ver_parts >= (0, 4, 0):
+                print(f"Verified boot: {image} v{version}")
+                return True
+            print(
+                f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if image is not None and image != "xiao_host_tracer":
+            print(
+                f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Fallback: scan the stream for identity on status/epoch (or truncated lines).
     start = time.time()
     while time.time() - start < timeout:
-        line = ser.readline().decode('utf-8', errors='replace').strip()
+        line = ser.readline().decode("utf-8", errors="replace").strip()
         if not line:
             continue
         print(f"BOOT: {line}")
@@ -291,7 +399,7 @@ def sync_and_validate_boot(ser, timeout=15.0):
         if not version:
             print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
             sys.exit(1)
-        ver_parts = tuple(int(x) for x in version.split('.'))
+        ver_parts = tuple(int(x) for x in version.split("."))
         if ver_parts < (0, 4, 0):
             print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)
             sys.exit(1)

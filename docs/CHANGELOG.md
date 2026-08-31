@@ -4,6 +4,21 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Changed
+- Host sketches (`XiaoHostTracer`, `SimpleHost`, `XiaoBenchCal`,
+  `XiaoBenchEchoCancel`) updated to the `Esp32SerialPort(stream, txen,
+  baud, rx, tx)` constructor. A leftover `UART_NUM_1` positional arg was
+  binding baud to the TXEN pin and made the ESP UART driver log
+  "baud rate unachievable", leaving `polls=0` on the bench.
+- TracerShell bare `status` is now a multi-line host-scope bundle instead of
+  one monolithic JSON line: `event=status` (counters + degraded ledger +
+  identity), `event=roster` (live node table), and optional
+  `event=generators` from the StatusExtender. The old single-line shape
+  routinely truncated under CDC backpressure and left gather manifests with
+  a null `status_snapshot`. Gather scripts merge the bundle back into one
+  dict for analyzers; analyzers read membership from `roster` (with legacy
+  `nodes`-as-list accepted).
+
 ### Added
 - `IOBuffer` — the bounds-safe I/O image container, now the
   natural type for CMRInet input and output images everywhere.
