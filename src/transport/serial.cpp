@@ -19,6 +19,10 @@ void SerialCMRITransport::begin() {
   txWritten_ = 0;
   txState_ = TxState::kIdle;
   drainDueMs_ = 0;
+  pendingIdle_ = false;
+  echoDiscardRemaining_ = 0;
+  echoCancelArmed_ = false;
+  rxDuringTx_ = 0;
   lastTickMs_ = 0;
   decoder_.reset();
   decoder_.resetStatistics();
@@ -77,6 +81,11 @@ bool SerialCMRITransport::sendPacket(const CMRIPacket& packet) {
   }
   txLength_ = n;
   txWritten_ = 0;
+  // Own-frame echo budget: discard at most one wire-frame of RX while
+  // TXEN is up. A fast Node may start R before TXEN drops (interop
+  // 2.3.15); those bytes are not echo and must reach the decoder
+  // (issue #112 dense-T empty-gate misses).
+  echoDiscardRemaining_ = n;
   stats_.packetsSent++;
 
   // TXEN discipline, step 1: assert before the first byte
@@ -131,9 +140,9 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
     // only know their buffer; the port's own answer covers late
     // chunks still sitting in its FIFO (see header).
     //
-    // TXEN drops now (wire discipline), but the txState_ flip is
-    // deferred via pendingIdle_ so pumpReceive_ sees kDraining
-    // for the whole tick and the echo discard stays active (ADR-0003).
+    // TXEN drops now (wire discipline). txState_ flip is deferred via
+    // pendingIdle_ so pumpReceive_ can finish the own-frame echo budget
+    // on this tick, then accept any surplus as early Node R (#112).
     if (timeReached(nowMs, drainDueMs_) && port_.transmitDrained()) {
       port_.setTransmitEnable(false);
       pendingIdle_ = true;  // commit the flip after pumpReceive_
@@ -142,62 +151,77 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
 }
 
 void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
-  // Echo cancellation (issue #104, ADR-0003): on a 2-wire
-  // bus with a misconfigured driver (!RE tied active), the
-  // Host's receiver hears its own TX echo. The byte-level
-  // discard runs while TXEN is asserted — through kWriting
-  // AND kDraining, until deassert — because a Node cannot
-  // reply until it has received ETX (interop 2.3.15, E10), so
-  // no legitimate reply arrives inside the TXEN-asserted
-  // window. This is mitigation-of-misconfiguration, not a
-  // feature.
+  // Echo cancellation (issue #104, ADR-0003; issue #112):
+  // on a 2-wire bus with !RE tied active, the Host hears its own
+  // TX echo. Discard only that echo — at most one wire-frame of
+  // RX per send (echoDiscardRemaining_) — and only while TXEN is
+  // still actually asserted.
   //
-  // Three-state mode (ADR-0003):
-  // - AlwaysOn: discard RX while TXEN asserted.
-  // - Auto (default): watch for RX during TX; on the first
-  //   observation, count it (rxDuringTx_), arm the discard
-  //   permanently. The host/shell reads rxDuringTx() to
-  //   surface the misconfiguration diagnostic.
-  // - AlwaysOff: never discard; feed the decoder (4-wire
-  //   or fixed 2-wire explicit opt-out).
-  const bool txAsserted = (txState_ != TxState::kIdle);
-  if (txAsserted) {
-    const bool discardActive =
-        (echoCancelMode_ == EchoCancelMode::kAlwaysOn) ||
-        (echoCancelMode_ == EchoCancelMode::kAuto && echoCancelArmed_);
-    if (discardActive) {
-      // Discard the echo for the whole TXEN-asserted window.
-      // The echo never reaches the decoder.
-      int byte = port_.readByte();
-      while (byte >= 0) {
-        byte = port_.readByte();  // discard, do not feed the decoder
-      }
-      return;
-    }
-    // Discard not active (AlwaysOff, or Auto not yet armed):
-    // feed the decoder so the defect is observable, and count
-    // each byte as the rxDuringTx defect signal. In Auto,
-    // the first observation arms the discard (takes effect
-    // next tick; any echo bytes that escape this tick are
-    // caught by the frame-level drainReceive_ classification).
+  // A fast Node may begin R while the Host's ETX still drains
+  // (interop 2.3.15, E10). Those bytes are not echo. Discarding
+  // the entire TXEN window ate legitimate replies under dense full-T
+  // and produced empty 250 ms gates with R present on the wire.
+  //
+  // Modes (ADR-0003):
+  // - AlwaysOn: length-limited discard of own-frame echo.
+  // - Auto: arm permanently on first RX-during-TX; then AlwaysOn shape.
+  // - AlwaysOff: never discard; feed the decoder.
+  //
+  // Discard window = TXEN up, OR the drain-complete tick (pendingIdle_)
+  // while own-frame budget remains. After TXEN falls, finish eating the
+  // rest of our echo, then feed any surplus (early Node R). Fully idle
+  // ticks with no budget left feed everything.
+  const bool txenUp =
+      (txState_ != TxState::kIdle) && !pendingIdle_;
+  const bool discardActive =
+      (echoCancelMode_ == EchoCancelMode::kAlwaysOn) ||
+      (echoCancelMode_ == EchoCancelMode::kAuto && echoCancelArmed_);
+  const bool inEchoWindow =
+      txenUp || (pendingIdle_ && echoDiscardRemaining_ > 0);
+
+  if (inEchoWindow || txenUp) {
     int byte = port_.readByte();
     while (byte >= 0) {
-      ++rxDuringTx_;
-      if (echoCancelMode_ == EchoCancelMode::kAuto && !echoCancelArmed_) {
-        echoCancelArmed_ = true;  // arm permanently
-      }
-      // VALIDATION: Interop v1.1 2.2.9: received bytes normalize
-      // to unsigned 8-bit values at the read.
-      if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
-        drainDecoder_();
+      if (discardActive && echoDiscardRemaining_ > 0) {
+        // Own-frame echo: throw away, do not feed the decoder.
+        --echoDiscardRemaining_;
+      } else if (discardActive) {
+        // Budget exhausted: early Node R (or noise past the echo).
+        // Feed the decoder — this is the #112 fix vs whole-window discard.
+        if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
+          drainDecoder_();
+        }
+      } else if (txenUp) {
+        // Discard not active (AlwaysOff, or Auto not yet armed) while
+        // TXEN is up: feed the decoder so the defect is observable, and
+        // count each byte as the rxDuringTx defect signal. In Auto, the
+        // first observation arms the discard for later ticks.
+        ++rxDuringTx_;
+        if (echoCancelMode_ == EchoCancelMode::kAuto && !echoCancelArmed_) {
+          echoCancelArmed_ = true;  // arm permanently
+        }
+        // VALIDATION: Interop v1.1 2.2.9: received bytes normalize
+        // to unsigned 8-bit values at the read.
+        if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
+          drainDecoder_();
+        }
+      } else {
+        // pendingIdle with budget already 0 and discard off: feed.
+        if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
+          drainDecoder_();
+        }
       }
       byte = port_.readByte();
     }
+    if (pendingIdle_) {
+      echoDiscardRemaining_ = 0;
+    }
     return;
   }
-  // kIdle: drain everything the port has buffered. Bytes arrive at
-  // line rate, far below CPU rate, so this loop is bounded by the
-  // port's buffer.
+  // Fully idle, no residual budget: drain everything into the decoder.
+  // Bytes arrive at line rate, far below CPU rate, so this loop is
+  // bounded by the port's buffer.
+  echoDiscardRemaining_ = 0;
   int byte = port_.readByte();
   while (byte >= 0) {
     // VALIDATION: Interop v1.1 2.2.9: received bytes normalize to

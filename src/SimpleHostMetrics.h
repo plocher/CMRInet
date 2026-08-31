@@ -291,10 +291,14 @@ class HostStatusPanel {
     if (online) {
       // "UA30  165ms  12m  0e" — tag omitted on purpose.
       // lat already includes the "ms" suffix from latencyText().
+      // Worst-case under -Wformat-truncation is ~20 bytes; callers
+      // must pass a buffer of at least 24 (display rows use 24).
       snprintf(buf, len, "UA%u %s %3um %2ue", UA, lat, m, e);
     } else {
       const char* tag = (stateTag != nullptr) ? stateTag : "---";
-      // "UA31 OFF   ---  5m  0e"
+      // "UA31 OFF  ---ms  5m  0e" — lat is 5 chars ("  ---"); tag is
+      // 3. Upper bound ~26 with UA=127; keep row buffers >= 28 so the
+      // ESP32 -Werror=format-truncation gate stays clean (#112 flash).
       snprintf(buf, len, "UA%u %s %s %3um %2ue", UA, tag, lat, m, e);
     }
   }

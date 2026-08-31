@@ -231,7 +231,7 @@ void drawHostStatus() {
   const char* tag =
       (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr) ? node->statistics().lastTurnaroundMs : 0;
-  char row[24];
+  char row[28];
   panel.nodeRowText(row, sizeof(row), now, 0, ECHOCALC_UA, online, tag, latMs);
   display.setCursor(0, 30);
   display.print(row);

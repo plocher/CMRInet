@@ -4,6 +4,13 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Fixed
+- Serial echo-cancel no longer discards a fast Node's R that starts while
+  Host TXEN is still draining (issue #112). Discard is limited to one
+  own-frame wire length (Auto still arms permanently after the first
+  RX-during-TX). Dense full-T empty 250 ms gates with R on the wire were
+  the bench symptom.
+
 ### Added
 - Host dense full-T instrumentation (issue #112): `kExchangeComplete`
   (`event=xchg`) and `kUnsolicitedPacket` (`event=unsolicited`) on the D7

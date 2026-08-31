@@ -149,7 +149,9 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.10.0 (#112): dense full-T Host belief timeline — live miss/reject/
 // xchg/unsolicited during `run`, gate/kind on those lines, transport
 // snapshot on miss/reject, T body `fp` on packet traces.
-constexpr const char* kVersion = "0.10.0"; // #112 xchg/miss instrumentation
+// 0.10.1 (#112): echo-cancel discards only own-frame wire length so a
+// fast Node R that starts while ETX drains is not eaten (interop 2.3.15).
+constexpr const char* kVersion = "0.10.1"; // #112 own-frame echo budget
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_BAUD,
@@ -679,7 +681,7 @@ void drawHostStatus() {
       (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr)
       ? node->statistics().lastTurnaroundMs : 0;
-  char row[24];
+  char row[28];
   panel.nodeRowText(row, sizeof(row), now, 0,
                     TRACER_UA, online, tag, latMs);
   display.setTextSize(1);
