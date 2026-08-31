@@ -5,6 +5,13 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- Host dense full-T instrumentation (issue #112): `kExchangeComplete`
+  (`event=xchg`) and `kUnsolicitedPacket` (`event=unsolicited`) on the D7
+  listener; reply/miss/reject lines carry `kind`/`prevKind`/`outcome`/
+  `gateMs` plus a transport snapshot (`rxDuringTx`, echo mode, decoder
+  aborts/drops) on miss/reject. T packet traces carry an FNV-1a `fp` body
+  fingerprint. XiaoHostTracer `run` capture no longer silences
+  miss/reject/xchg/unsolicited (packet traces still go to the ring).
 - `Ssd1306SegmentedFlush` (`src/Ssd1306SegmentedFlush.h`): non-blocking
   SSD1306 push used by SimpleHost, XiaoHostTracer, XiaoSniffer, XiaoNode,
   and bench sketches so a full-frame `display()` (~25 ms I2C stall) cannot

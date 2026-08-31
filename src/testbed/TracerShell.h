@@ -93,6 +93,9 @@ inline const char* eventName(CMRIHostEventType type) {
     case CMRIHostEventType::kNodeDeleted: return "node_delete";
     case CMRIHostEventType::kGeometryChanged: return "node_geometry";
     case CMRIHostEventType::kIllegalWireUA: return "illegal_wire_ua";
+    // Dense full-T Host belief timeline (issue #112).
+    case CMRIHostEventType::kExchangeComplete: return "xchg";
+    case CMRIHostEventType::kUnsolicitedPacket: return "unsolicited";
   }
   return "unknown";
 }
@@ -244,8 +247,12 @@ if (strcmp(verb, "status") == 0) {
     return VerbResult::kHandled;
   }
 
-  /// When enabled, emit only backoff-change host events; suppress all
-  /// other event lines. Preserves diagnostic trace density.
+  /// Capture-mode filter (issue #112 / XiaoHostTracer `run`). When
+  /// enabled, suppress high-rate chatter (state, reinit, node_*,
+  /// breaker_*, plain reply without enrichment need) but keep the dense-T
+  /// decision table live: miss, reject, xchg, unsolicited, and backoff.
+  /// Full packet `trace` lines stay off during `run` (ring owns them);
+  /// this flag only gates the onEvent path.
   void setBackoffTraceOnly(bool enabled) { backoffTraceOnly_ = enabled; }
 
  private:
@@ -520,13 +527,36 @@ if (strcmp(verb, "status") == 0) {
     // event would be swallowed. The roster reflects the post-delete table
     // (issue #91).
     if (event.type == CMRIHostEventType::kNodeDeleted) {
+      if (self.backoffTraceOnly_) {
+        return;
+      }
       self.emitHostLine_(event.nowMs, "node_delete",
                          static_cast<int>(event.departedUA), nullptr,
                          nullptr, /*identity=*/false, /*config=*/false,
                          /*roster=*/true);
       return;
     }
-    if (self.backoffTraceOnly_ || event.node == nullptr) {
+    // Issue #112: keep miss/reject/xchg/unsolicited live during capture.
+    // Everything else still drops under backoffTraceOnly_.
+    if (self.backoffTraceOnly_ &&
+        event.type != CMRIHostEventType::kReplyTimeout &&
+        event.type != CMRIHostEventType::kReplyRejected &&
+        event.type != CMRIHostEventType::kExchangeComplete &&
+        event.type != CMRIHostEventType::kUnsolicitedPacket) {
+      return;
+    }
+    if (event.type == CMRIHostEventType::kIllegalWireUA) {
+      // Host-scoped, node null (issue #96). Keep the existing swallow
+      // outside capture; during normal mode still no dedicated renderer
+      // beyond counters on status.
+      return;
+    }
+    if (event.type == CMRIHostEventType::kUnsolicitedPacket ||
+        event.type == CMRIHostEventType::kExchangeComplete) {
+      self.emitExchangeScoped_(event);
+      return;
+    }
+    if (event.node == nullptr) {
       return;
     }
     if (event.type == CMRIHostEventType::kNodeStateChanged) {
@@ -549,7 +579,13 @@ if (strcmp(verb, "status") == 0) {
                          /*extraValue=*/nullptr, extra);
       return;
     }
-    // kNodeAdded and the exchange/health events render node-scoped.
+    if (event.type == CMRIHostEventType::kReplyAccepted ||
+        event.type == CMRIHostEventType::kReplyRejected ||
+        event.type == CMRIHostEventType::kReplyTimeout) {
+      self.emitExchangeOutcome_(event);
+      return;
+    }
+    // kNodeAdded and remaining health events render node-scoped.
     self.emitNodeLine_(event.nowMs, eventName(event.type), *event.node);
   }
 
@@ -592,7 +628,142 @@ if (strcmp(verb, "status") == 0) {
     written = appendf_(written,
         ",\"dir\":\"%s\",\"mt\":\"%s\",\"body\":\"%s\"",
         transmit ? "tx" : "rx", mtBuf, bodyHex);
+    // T fingerprint (issue #112): short hash so dense full-T captures can
+    // match identifiable stim bodies without dumping the whole image on
+    // every line. FNV-1a 32-bit over the body bytes.
+    if (packet.mt == MessageType::kTransmitData || packet.mt == 'T') {
+      written = appendf_(written, ",\"fp\":\"%08X\"",
+                         static_cast<unsigned>(fnv1a32_(packet.body, len)));
+    }
     finish_(written);
+  }
+
+  /// Compact exchange-shaped lines: xchg and unsolicited (issue #112).
+  /// May be node-null (orphan xchg, idle unsolicited).
+  void emitExchangeScoped_(const CMRIHostEvent& event) {
+    const char* name = eventName(event.type);
+    int written = appendf_(
+        0,
+        "{\"seq\":%u,\"ts\":%u,\"event\":\"%s\",\"role\":\"host\"",
+        static_cast<unsigned>(++seq_),
+        static_cast<unsigned>(event.nowMs - epochMs_), name);
+    if (event.node != nullptr) {
+      written = appendf_(written, ",\"ua\":%u,\"present\":true",
+                         event.node->UA());
+    } else {
+      written = appendf_(written, ",\"ua\":null,\"present\":false");
+    }
+    written = appendExchangeFields_(written, event);
+    if (event.type == CMRIHostEventType::kUnsolicitedPacket) {
+      const char mtPrint =
+          (event.replyMt >= 0x20 && event.replyMt <= 0x7E)
+              ? static_cast<char>(event.replyMt)
+              : '.';
+      written = appendf_(
+          written,
+          ",\"replyLen\":%u,\"replyWireUA\":%u,\"replyMt\":\"%c\"",
+          static_cast<unsigned>(event.replyLength),
+          static_cast<unsigned>(event.replyWireUA), mtPrint);
+    }
+    finish_(written);
+  }
+
+  /// reply / reject / miss with gate + transport snapshot (issue #112).
+  void emitExchangeOutcome_(const CMRIHostEvent& event) {
+    char extra[384];
+    int n = 0;
+    n += snprintf(extra + n, sizeof(extra) - static_cast<size_t>(n),
+                  ",\"kind\":\"%s\",\"prevKind\":\"%s\",\"outcome\":\"%s\""
+                  ",\"gateArmedMs\":%lu,\"gateMs\":%lu",
+                  hostExchangeKindString(event.kind),
+                  hostExchangeKindString(event.prevKind),
+                  hostExchangeOutcomeString(event.outcome),
+                  static_cast<unsigned long>(event.gateArmedMs),
+                  static_cast<unsigned long>(event.gateMs));
+    if (event.type == CMRIHostEventType::kReplyRejected) {
+      const char mtPrint =
+          (event.replyMt >= 0x20 && event.replyMt <= 0x7E)
+              ? static_cast<char>(event.replyMt)
+              : '.';
+      n += snprintf(extra + n, sizeof(extra) - static_cast<size_t>(n),
+                    ",\"rejectReason\":\"%s\",\"replyLen\":%u"
+                    ",\"replyWireUA\":%u,\"replyMt\":\"%c\""
+                    ",\"expectedLen\":%u",
+                    replyRejectReasonString(event.rejectReason),
+                    static_cast<unsigned>(event.replyLength),
+                    static_cast<unsigned>(event.replyWireUA), mtPrint,
+                    static_cast<unsigned>(event.expectedLength));
+    }
+    if (event.type == CMRIHostEventType::kReplyTimeout ||
+        event.type == CMRIHostEventType::kReplyRejected) {
+      n += appendTransportSnapshot_(extra + n,
+                                    sizeof(extra) - static_cast<size_t>(n));
+    }
+    (void)n;
+    emitNodeLine_(event.nowMs, eventName(event.type), *event.node,
+                  /*identity=*/false, /*extraKey=*/nullptr,
+                  /*extraValue=*/nullptr, extra);
+  }
+
+  int appendExchangeFields_(int written, const CMRIHostEvent& event) {
+    return appendf_(
+        written,
+        ",\"kind\":\"%s\",\"prevKind\":\"%s\",\"outcome\":\"%s\""
+        ",\"gateArmedMs\":%lu,\"gateMs\":%lu",
+        hostExchangeKindString(event.kind),
+        hostExchangeKindString(event.prevKind),
+        hostExchangeOutcomeString(event.outcome),
+        static_cast<unsigned long>(event.gateArmedMs),
+        static_cast<unsigned long>(event.gateMs));
+  }
+
+  /// Transport + decoder counters snapshot. Appends a JSON object fragment
+  /// starting with a leading comma. Used on miss/reject so a stall can be
+  /// scored against echo-cancel / decoder health without a status poll.
+  int appendTransportSnapshot_(char* buf, size_t cap) {
+    if (transport_ == nullptr || cap == 0) {
+      return 0;
+    }
+    const LinkStatistics& link = transport_->stats();
+    const CMRIFrameDecoder::Statistics& dec =
+        transport_->decoderStatistics();
+    const char* echo =
+        echoCancelModeName_(transport_->echoCancelMode());
+    return snprintf(
+        buf, cap,
+        ",\"transport\":{\"rxDuringTx\":%lu,\"echo\":\"%s\""
+        ",\"decodeErrors\":%lu,\"timeoutAborts\":%lu"
+        ",\"danglingDle\":%lu,\"overflowAborts\":%lu"
+        ",\"headerAborts\":%lu,\"droppedPackets\":%lu"
+        ",\"framesRestarted\":%lu,\"slowGaps\":%lu}",
+        static_cast<unsigned long>(transport_->rxDuringTx()), echo,
+        static_cast<unsigned long>(link.decodeErrors),
+        static_cast<unsigned long>(dec.timeoutAborts),
+        static_cast<unsigned long>(dec.danglingDle),
+        static_cast<unsigned long>(dec.overflowAborts),
+        static_cast<unsigned long>(dec.headerAborts),
+        static_cast<unsigned long>(dec.droppedPackets),
+        static_cast<unsigned long>(dec.framesRestarted),
+        static_cast<unsigned long>(dec.slowGaps));
+  }
+
+  static const char* echoCancelModeName_(
+      SerialCMRITransport::EchoCancelMode mode) {
+    switch (mode) {
+      case SerialCMRITransport::EchoCancelMode::kAuto: return "auto";
+      case SerialCMRITransport::EchoCancelMode::kAlwaysOn: return "on";
+      case SerialCMRITransport::EchoCancelMode::kAlwaysOff: return "off";
+    }
+    return "unknown";
+  }
+
+  static uint32_t fnv1a32_(const uint8_t* data, size_t len) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; ++i) {
+      h ^= data[i];
+      h *= 16777619u;
+    }
+    return h;
   }
 
   void emitBackoffTrace_(const CMRIHostEvent& event) {
