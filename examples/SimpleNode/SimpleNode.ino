@@ -1,66 +1,64 @@
 // SimpleNode.ino — minimal CMRINode example.
-//
-// The front-door Node example, mirroring SimpleHost's role for the
-// Node side. This sketch is the simplest way to make a device act as
-// a CMRInet node: read a pushbutton, drive an LED, and let the engine
-// handle the protocol.
+// 
+// Hardware requirements:
+// A cpNode-Xiao connected to a 4-wire RS485 CMRI bus.
+// JMRI configured as a CMRI Host with a "C type" node as UA 30.
+//    This usually requires a USB/RS485 dongle on the PC, and a 
+//    4-wire RS485 bus to the cpNode-Xiao.
 //
 // What it demonstrates:
-// - Construct one CMRINode with its transport.
-// - Configure it in setup() with config().
-// - Register onPack/onUnpack callbacks — the canonical Node seam.
-// - Drive the engine with node.tick(millis()).
+// - A functional CMRINode: JMRI's sensor and turnout tables can show changes
+//   on Sensor CMRI:cs0002 and Turnout CMRI:ct0001
+// - Configuration in setup().
+// - Registration and use of onPack/onUnpack callbacks.
+//   - The onboard LED is driven by CT0001 on the cpNode-Xiao.
+//   - The onboard pushbutton on D2is read by CS0002 on the cpNode-Xiao.
+// - Driving the engine in loop() with node.tick(millis()).
 //
-// The onPack/onUnpack seam is how a Node sketch moves data between
-// the wire and the hardware. The engine calls onPack at P time (just
-// before sending R) to fill the input image, and onUnpack at T time
-// (after receiving the output image) to drive pins.
+// How it works:
+// The onPack/onUnpack mechanism is how a Node sketch moves data between
+// the CMRI bus and the hardware. When it receives a POLL request, the 
+// engine calls the onPack callback to construct a RESPONSE.  When it
+// receives a TRANSMIT packet, the engine invokes the onUnpack callback
+// to set the associated output pins.
 //
-// Inside the callbacks, two peer APIs touch the same image buffer:
-//   setBit(ib, byte, bit, v)   — write a bit in the raw buffer
-//   node.setInputBit(byte, bit, v) — write a bit via the engine
-// Both are equally first-class; use whichever reads cleaner. The
-// direct accessors in loop() (setInputBit / outputBit) are a safety
-// net for cases where you want to set or read bits outside callback
-// time.
-//
-// Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
-//   D7 - RX   CMRI RS485 receive
-//   D6 - TX   CMRI RS485 transmit
-//   D3 - TXEN RS422/485 transmit enable
+// Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491) wired as follows:
+//   D7 - RX    CMRI 4-wire RS485 receive
+//   D6 - TX    CMRI 4-wire RS485 transmit
+//   D5 - SCL   I2C (unused in this example)
+//   D4 - SDA   I2C (unused in this example)
+//   D3 - TXEN  RS422/485 transmit enable
+//   D2 -       pushbutton input (active-low)
 //
 // RS485 bus wiring:
 //         R± on the Node routes to the Host's T± and
 //         T± on the Node routes to the Host's R±
 //
-// No OLED, no WiFi, no OTA — just the engine and two pins.
+// No sketch support for OLED, WiFi, OTA or I2C
 
 #include <Arduino.h>
 
 #include "CMRInet.h"               // CMRINode, CMRINodeConfig, IOBuffer
 #include "transport/serial.h"      // SerialCMRITransport
-#include "transport/serialESP32.h" // Esp32SerialPort (auto-detects UART,
-                                   //   calls Serial1.begin() from begin())
+#include "transport/serialESP32.h" // Esp32SerialPort
 
-// ---- Wiring (static; the library never allocates) -------------------------
+// ---- Plumbing --------------------------------------------------------------
 
-CMRInet::Esp32SerialPort port(Serial1, D3, 28800, RX, TX);
+CMRInet::Esp32SerialPort        port(Serial1, /* TXEN */ D3, /* Baud */ 28800, RX, TX);
 CMRInet::SerialCMRITransport    transport(port);
 CMRInet::CMRINode               node(transport);
 
-// ---- Pack / Unpack seam ----------------------------------------------------
+// ---- Pack / Unpack data ----------------------------------------------------
 //
-// onPack is called at P time: fill the input image (ib) the engine
-//   will send as R. The engine guarantees len > 0.
-// onUnpack is called at T time: the engine has stored the output
-//   image (ob) the Host sent; drive hardware from it.
-
+// onPack callback on POLL receipt: read the switches and sensors
 void packInputs(CMRInet::IOBuffer& ib) {
-  ib.setBit(0, 0, (digitalRead(D2) == LOW));  // active-low button
+  ib.setBit(0, 2, (digitalRead(D2) == LOW));  // active-low button
+  // RESPONSE is automatically sent
 }
 
+// onUnpack callback on TRANSMIT receipt:  write outputs.
 void unpackOutputs(CMRInet::IOBuffer& ob) {
-  digitalWrite(LED_BUILTIN, ob.getBit(0, 0) ? HIGH : LOW);
+  digitalWrite(LED_BUILTIN, ob.getBit(0, 1) ? HIGH : LOW);
 }
 
 // ---- Setup -----------------------------------------------------------------
@@ -70,12 +68,10 @@ void setup() {
   digitalWrite(LED_BUILTIN, LOW);
   pinMode(D2, INPUT_PULLUP);
 
-  Serial.begin(115200);  // USB CDC: diagnostic output
-
   CMRInet::CMRINodeConfig cfg;
-  cfg.ua = 30;
-  cfg.nodeType = 'C';
-  cfg.inputBytes = 1;
+  cfg.ua          = 30;
+  cfg.nodeType    = 'C';
+  cfg.inputBytes  = 1;
   cfg.outputBytes = 1;
   node.config(cfg);
   node.onPack(packInputs);
@@ -87,18 +83,4 @@ void setup() {
 
 void loop() {
   node.tick(millis());
-
-  // Periodic diagnostic: show input/output images every 5 s.
-  static uint32_t lastPrintMs = 0;
-  const uint32_t now = millis();
-  if (now - lastPrintMs >= 5000u || lastPrintMs == 0) {
-    Serial.print("SimpleNode UA=");
-    Serial.print(node.UA());
-    Serial.print(" in=");
-    Serial.print(node.inputByte(0), HEX);
-    Serial.print(" out=");
-    Serial.print(node.outputByte(0), HEX);
-    Serial.println();
-    lastPrintMs = now;
-  }
 }
