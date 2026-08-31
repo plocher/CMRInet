@@ -19,7 +19,7 @@ def _base_manifest() -> dict:
             "31": {"expectation": "online", "declared_in": 4, "declared_out": 4},
         },
         "status_snapshot": {
-            "nodes": [
+            "roster": [
                 {"ua": 30, "state": "ONLINE"},
                 {"ua": 31, "state": "ONLINE"},
             ]
@@ -53,7 +53,7 @@ def test_geometry_mismatch_expectation_passes() -> None:
         "declared_in": 1,
         "declared_out": 1,
     }
-    manifest["status_snapshot"]["nodes"][1]["state"] = "MISCONFIGURED"
+    manifest["status_snapshot"]["roster"][1]["state"] = "MISCONFIGURED"
     manifest["node_statuses"]["31"] = {
         "ua": 31,
         "state": "MISCONFIGURED",
@@ -80,7 +80,7 @@ def test_offline_expectation_passes_for_phantom_node() -> None:
         "declared_in": 4,
         "declared_out": 4,
     }
-    manifest["status_snapshot"]["nodes"].append({"ua": 32, "state": "OFFLINE"})
+    manifest["status_snapshot"]["roster"].append({"ua": 32, "state": "OFFLINE"})
     manifest["node_statuses"]["32"] = {
         "ua": 32,
         "state": "OFFLINE",

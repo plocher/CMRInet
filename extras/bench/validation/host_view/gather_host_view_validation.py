@@ -82,41 +82,14 @@ def _collect_dump_lines(ser, timeout_s: float = 15.0) -> list[str]:
     return dump_lines
 
 
-def _read_status_snapshot(ser, timeout_s: float = 3.0) -> Optional[dict]:
-    """Read one host status JSON payload from the tracer shell."""
-    ser.write(b"status\n")
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        line = ser.readline().decode("utf-8", errors="replace").strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            doc = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if doc.get("event") == "status":
-            return doc
-    return None
+def _read_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
+    """Read the host-scope status bundle via the shared tracer client."""
+    return _tracer_client.read_host_status_snapshot(ser, timeout_s=timeout_s)
 
 
 def _read_node_status(ser, ua: int, timeout_s: float = 3.0) -> Optional[dict]:
     """Read one per-node status JSON payload from the tracer shell."""
-    ser.write(f"status {ua}\n".encode("utf-8"))
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        line = ser.readline().decode("utf-8", errors="replace").strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            doc = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if doc.get("event") != "status":
-            continue
-        if doc.get("ua") != ua:
-            continue
-        return doc
-    return None
+    return _tracer_client.read_node_status(ser, ua, timeout_s=timeout_s)
 
 
 def _configure_real_node_traffic(

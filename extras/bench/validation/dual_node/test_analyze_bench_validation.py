@@ -21,7 +21,7 @@ def test_semantic_ua_capture_passes() -> None:
         "PKT t=1102 RX ua=31 mt=R len=3 n=5",
     ]
     status_snapshot = {
-        "nodes": [
+        "roster": [
             {"ua": 30, "state": "ONLINE"},
             {"ua": 31, "state": "ONLINE"},
         ]
@@ -77,7 +77,7 @@ def test_wire_encoded_capture_is_rejected() -> None:
         "PKT t=1102 RX ua=96 mt=R len=3 n=5",
     ]
     status_snapshot = {
-        "nodes": [
+        "roster": [
             {"ua": 30, "state": "ONLINE"},
             {"ua": 31, "state": "ONLINE"},
         ]
@@ -108,7 +108,7 @@ def test_geometry_disagreement_is_reported() -> None:
         "PKT t=1102 RX ua=31 mt=R len=3 n=5",
     ]
     status_snapshot = {
-        "nodes": [
+        "roster": [
             {"ua": 30, "state": "MISCONFIGURED"},
             {"ua": 31, "state": "ONLINE"},
         ]

@@ -44,12 +44,20 @@ class ValidationResult:
 
 
 def _extract_node_states(status_snapshot: Optional[dict]) -> tuple[dict[int, str], list[str]]:
-    """Extract per-UA state from status snapshot and return validation failures."""
+    """Extract per-UA state from status snapshot and return validation failures.
+
+    The live table is `roster` (a list). `nodes` is the integer live-count
+    on the host counters line — never the membership list.
+    """
     if status_snapshot is None:
         return {}, ["status_snapshot missing or null"]
-    nodes = status_snapshot.get("nodes")
+    nodes = status_snapshot.get("roster")
     if not isinstance(nodes, list):
-        return {}, ["status_snapshot missing nodes list"]
+        # Accept legacy fixtures that still used "nodes" as a list.
+        legacy = status_snapshot.get("nodes")
+        nodes = legacy if isinstance(legacy, list) else None
+    if not isinstance(nodes, list):
+        return {}, ["status_snapshot missing roster list"]
     out: dict[int, str] = {}
     for item in nodes:
         if not isinstance(item, dict):

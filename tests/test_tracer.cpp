@@ -388,17 +388,26 @@ static void test_node_status_line_carries_outputs_hex(void) {
 static void test_host_status_reports_the_table_not_one_node(void) {
   TracerRig rig;
   rig.verb("status");
-  const std::string& line = rig.lines.back();
-  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"nodes\":1"),
+  // Bare status is a two-line bundle (no extender registered here):
+  // counters/ledger, then roster. Generators only appear when a sketch
+  // registers a StatusExtender.
+  const std::string* status =
+      findContaining(rig.lines, "\"event\":\"status\"");
+  const std::string* roster =
+      findContaining(rig.lines, "\"event\":\"roster\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(status, "status bundle missing status line");
+  TEST_ASSERT_NOT_NULL_MESSAGE(roster, "status bundle missing roster line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*status, "\"nodes\":1"),
                            "host status did not report the live node count");
-  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"orphaned\":0"),
+  TEST_ASSERT_TRUE_MESSAGE(contains(*status, "\"orphaned\":0"),
                            "host status did not surface orphanedExchanges");
-  TEST_ASSERT_FALSE_MESSAGE(contains(line, "\"inputs\":"),
+  TEST_ASSERT_FALSE_MESSAGE(contains(*status, "\"inputs\":"),
                             "host status leaked a per-node image");
-  // The roster is what makes membership legible, and it speaks the UA.
+  TEST_ASSERT_FALSE_MESSAGE(contains(*status, "\"roster\":"),
+                            "status line should not carry the roster");
   TEST_ASSERT_TRUE_MESSAGE(
-      contains(line, "\"roster\":[{\"ua\":5,"),
-      "host status roster missing or not keyed by the UA");
+      contains(*roster, "\"roster\":[{\"ua\":5,"),
+      "host roster line missing or not keyed by the UA");
 }
 
 // The trace line now carries a uniform field set: wireUA, legal,
@@ -495,8 +504,12 @@ static void test_node_add_and_delete_verbs_move_the_roster(void) {
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"ua\":9"),
                            "node add did not name the UA");
 
+rig.lines.clear();
   rig.verb("status");
-  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"nodes\":2"),
+  const std::string* grown =
+      findContaining(rig.lines, "\"event\":\"status\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(grown, "status bundle missing status line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*grown, "\"nodes\":2"),
                            "roster did not grow");
 
   // Adding the same UA again is a reported rejection, not a no-op.
@@ -613,14 +626,21 @@ static void test_host_status_surfaces_an_orphaned_exchange(void) {
   }
   TEST_ASSERT_TRUE_MESSAGE(polled, "node 5 was never polled");
 
-  TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
+TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
                     rig.verb("node delete 5"));
+  rig.lines.clear();
   rig.verb("status");
-  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"orphaned\":1"),
+  const std::string* status =
+      findContaining(rig.lines, "\"event\":\"status\"");
+  const std::string* roster =
+      findContaining(rig.lines, "\"event\":\"roster\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(status, "status bundle missing status line");
+  TEST_ASSERT_NOT_NULL_MESSAGE(roster, "status bundle missing roster line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*status, "\"orphaned\":1"),
                            "an orphaned exchange was invisible in status");
-  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"nodes\":0"),
+  TEST_ASSERT_TRUE_MESSAGE(contains(*status, "\"nodes\":0"),
                            "the table should now be empty");
-  TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"roster\":[]"),
+  TEST_ASSERT_TRUE_MESSAGE(contains(*roster, "\"roster\":[]"),
                            "an empty table should render an empty roster");
 }
 
@@ -629,12 +649,12 @@ static void test_host_status_surfaces_an_orphaned_exchange(void) {
 static void test_status_line_includes_image_and_version(void) {
   TracerRig rig;
   rig.verb("status");
-  const std::string& line = rig.lines.back();
-  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"event\":\"status\""),
-                           "status did not emit a status line");
-  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"image\":\"test\""),
+  const std::string* line =
+      findContaining(rig.lines, "\"event\":\"status\"");
+  TEST_ASSERT_NOT_NULL_MESSAGE(line, "status did not emit a status line");
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"image\":\"test\""),
                            "status should include image");
-  TEST_ASSERT_TRUE_MESSAGE(contains(line, "\"version\":\"0.0\""),
+  TEST_ASSERT_TRUE_MESSAGE(contains(*line, "\"version\":\"0.0\""),
                            "status should include version");
 }
 

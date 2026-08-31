@@ -95,8 +95,8 @@ constexpr const char* kImage = "xiao_bench_cal";
 constexpr const char* kVersion = "0.1.0";
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
-                                     CALIB_BAUD);
+CMRInet::Esp32SerialPort port(Serial1, kTxenPin, CALIB_BAUD,
+                                     RX /* D7 */, TX /* D6 */);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
 CMRInet::testbed::TracerShell shell;
@@ -185,8 +185,7 @@ void setup() {
     oledOk = false;
   }
 
-  // The CMRI wire: 28800 8N2 on the MAX3491 UART pins.
-  Serial1.begin(CALIB_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
+  // The CMRI wire is configured by Esp32SerialPort::begin() via host.begin().
   transport.setInterByteTimeoutMs(CALIB_INTER_BYTE_TIMEOUT_MS);
 
   // One node. The engine sends I -> T -> P to it; on 2-wire the

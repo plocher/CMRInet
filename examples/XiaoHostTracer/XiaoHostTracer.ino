@@ -190,11 +190,16 @@ constexpr const char* kImage = "xiao_host_tracer";
 // conformance run. Two new events, breaker_open and breaker_close. An
 // analyzer keying on 0.8.x will not find these fields, which is why the
 // minor bumps rather than the patch.
-constexpr const char* kVersion = "0.9.0"; // #87: degraded lane + breaker telemetry
+// 0.9.1: bare `status` is a multi-line bundle (status/roster/generators)
+// so CDC no longer truncates the host ledger under backpressure.
+// 0.9.2: Esp32SerialPort ctor is (stream, txen, baud, rx, tx) — the
+// leftover UART_NUM_1 arg made baud=D3 and pins=28800, which the ESP
+// UART driver rejected as "baud rate unachievable" and left polls=0.
+constexpr const char* kVersion = "0.9.2"; // Esp32SerialPort ctor args
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
-CMRInet::Esp32SerialPort port(Serial1, UART_NUM_1, kTxenPin,
-                                     TRACER_BAUD);
+CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_BAUD,
+                                     RX /* D7 */, TX /* D6 */);
 CMRInet::SerialCMRITransport transport(port);
 CMRInet::CMRIHost host(transport);
 CMRInet::testbed::TracerShell engine;
@@ -761,8 +766,10 @@ void setup() {
   Serial.setRxBufferSize(1024);
 #endif
 
-  // The CMRI wire: 28800 8N2 on the MAX3491 UART pins.
-  Serial1.begin(TRACER_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
+  // The CMRI wire is configured by Esp32SerialPort::begin() (baud,
+  // 8N2, RX/TX pins) when host.begin()/lazyBegin() runs. Do not call
+  // Serial1.begin() here — a second begin with different args races the
+  // port and can leave the UART unusable.
   // Tick-gap tolerance; see the header comment. Survives begin().
   transport.setInterByteTimeoutMs(TRACER_INTER_BYTE_TIMEOUT_MS);
 

@@ -87,82 +87,14 @@ def _collect_dump_lines(ser, timeout_s: float = 15.0) -> list[str]:
     return dump_lines
 
 
-def _read_status_snapshot(ser, timeout_s: float = 5.0) -> Optional[dict]:
-    """Read one host status JSON payload from the tracer shell.
-
-    The host-scoped status line (roster + generators + degraded-lane
-    ledger) is longer than a per-node line and can be truncated by CDC
-    backpressure (#86/#99). The degraded-lane ledger fields
-    (degradedGrants, degradedSlotDenials, etc.) appear before the
-    roster/generators in the JSON, so they survive truncation. Try full
-    JSON parse first; fall back to regex extraction of the ledger
-    fields from a truncated line.
-    """
-    ledger_fields = (
-        "degradedGrants",
-        "degradedSlotDenials",
-        "degradedBandwidthDenials",
-        "degradedClampBypasses",
-    )
-    for _attempt in range(2):
-        ser.reset_input_buffer()
-        ser.write(b"status\n")
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            line = ser.readline().decode("utf-8", errors="replace").strip()
-            if not line.startswith("{"):
-                continue
-            if '"event":"status"' not in line:
-                continue
-            # Distinguish host-scoped from per-node status: the
-            # host-scoped line carries "roster" (and "degradedGrants");
-            # per-node lines carry "present":true but no roster. Note
-            # the roster array itself contains "ua": entries, so checking
-            # for "ua": would wrongly skip the host-scoped line.
-            if '"roster"' not in line and '"degradedGrants"' not in line:
-                continue
-            # Try full JSON parse first.
-            try:
-                doc = json.loads(line)
-                if doc.get("event") == "status":
-                    return doc
-            except json.JSONDecodeError:
-                pass
-            # Fallback: the line was truncated, but the ledger fields
-            # appear before the roster/generators that got cut. Extract
-            # them with regex, same pattern sync_and_validate_boot uses
-            # for image/version on truncated lines.
-            doc = {"event": "status", "truncated": True}
-            ok = True
-            for field in ledger_fields:
-                m = re.search(rf'"{field}":(\d+)', line)
-                if m:
-                    doc[field] = int(m.group(1))
-                else:
-                    ok = False
-            if ok:
-                return doc
-    return None
+def _read_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
+    """Read the host-scope status bundle via the shared tracer client."""
+    return _tracer_client.read_host_status_snapshot(ser, timeout_s=timeout_s)
 
 
 def _read_node_status(ser, ua: int, timeout_s: float = 3.0) -> Optional[dict]:
     """Read one per-node status JSON payload from the tracer shell."""
-    ser.write(f"status {ua}\n".encode("utf-8"))
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        line = ser.readline().decode("utf-8", errors="replace").strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            doc = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if doc.get("event") != "status":
-            continue
-        if doc.get("ua") != ua:
-            continue
-        return doc
-    return None
+    return _tracer_client.read_node_status(ser, ua, timeout_s=timeout_s)
 
 
 def main() -> int:
