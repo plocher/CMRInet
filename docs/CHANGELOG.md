@@ -5,6 +5,10 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Changed
+- XiaoNode OLED restored to the donor per-bit I/O grid with change
+  halos, TX/RX spinners, and OTA screens (`NodeDisplay`), replacing the
+  interim hex status panel. Local expander-table and NODE_ID edits are
+  kept.
 - Host sketches (`XiaoHostTracer`, `SimpleHost`, `XiaoBenchCal`,
   `XiaoBenchEchoCancel`) updated to the `Esp32SerialPort(stream, txen,
   baud, rx, tx)` constructor. A leftover `UART_NUM_1` positional arg was
