@@ -962,9 +962,10 @@ node->setEnabled(false);                        // delete is also legal (D5)
 // ---- NODE (device) sketch ----
 CMRInet::CMRINodeConfig cfg{ .ua = 5, .nodeType = 'C',
                              .inputBytes = 2, .outputBytes = 3 };
-CMRInet::CMRINode me(transport, cfg);           // engine's OWN types
-me.pack(fillIB, nullptr);                       // P time: fill input image
-me.unpack(applyOB, nullptr);                    // T time: drive pins from OB
+CMRInet::CMRINode me(transport);
+me.config(cfg);                                 // geometry before begin()
+me.onPack(fillIB);                              // P time: fill input image
+me.onUnpack(applyOB);                           // T time: drive pins from OB
 me.begin();
 // loop(): me.setInputBit(byte, bit, v); me.tick(millis());
 // no RemoteNodeHandle here — a device holds no views of other nodes
@@ -975,14 +976,22 @@ the `RemoteNode*` product family; a device sketch IS the machinery
 and touches only `CMRINode` and its own `CMRINode*` types.
 
 `addRemoteNode()` returns per-call `ConfigStatus`, not a handle;
-handles come from `node(UA)` at point of use (D5). The `pack`/`unpack`
-seam is function-pointer + context, not cpNode-style globals, so a
-future sibling library can own both callbacks with the sketch never
-touching bytes (ADR-0004).
+handles come from `node(UA)` at point of use (D5). The `onPack`/`onUnpack`
+seam is function-pointer + context (with and without ctx overloads),
+not cpNode-style globals, so a future sibling library can own both
+callbacks with the sketch never touching bytes (ADR-0004). Pack and
+unpack handlers receive `IOBuffer&` and may assume a non-empty image
+when called (the engine skips zero-length pack/unpack).
 
 Open items to settle during tracer-bullet implementation:
 1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
-   the bench. `forceTransmit()` exists either way.
+   the bench. `forceTransmit()` exists either way. Bench note (Node
+   M1–M5 lock-in): dense full-T (e.g. sub-second dirty bitwalk) is a
+   known trigger for elevated Host `noReplies` while steady P/R
+   turnaround stays ~6–7 ms and wire-level R usually still exists.
+   Mechanism open — Host post-T / RX / reply-gate path, not Node pack
+   I2C cost. Tracked as a follow-up issue; do not treat SimpleHost's
+   30 s demo bitwalk as the product T policy.
 2. Per-node input-change callback, or polled-only handle. Start
    polled-only. Add the callback only if diff-scanning hurts.
 3. Counter granularity for conformance faults (D14). Deferred

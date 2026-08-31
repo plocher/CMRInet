@@ -81,8 +81,10 @@ node. The sketch reads a pushbutton into an input bit and drives an LED
 from an output bit, using the direct accessors in `loop()`.
 
 For real layout I/O on I2C expanders, see `examples/XiaoNode/XiaoNode.ino`
-— the full-featured Node with OLED status, WiFi OTA, and the pack/unpack
-callback pattern for MCP23017 expander I/O.
+— the full-featured Node with OLED status, WiFi OTA, and the
+`onPack`/`onUnpack` callback pattern for MCP23017 expander I/O. Toggle
+`USE_OLED` / `USE_OTA` at the top of the sketch; put WiFi credentials in
+`secrets.h` (see `secrets.h.example`), not in the committed sources.
 
 `examples/TracerNode` is the bench C&C test mule for internal validation
 against the Host tracer.
@@ -111,7 +113,7 @@ against the Host tracer.
   carries the seam (`CMRITransport.h`); a sketch includes the
   implementation it chooses.
 - `examples/SimpleHost` — the front-door Host tutorial (Xiao ESP32-C6,
-  OLED, behavior-only).
+  OLED with segmented flush, miss/error health rows, behavior-only).
 - `examples/SimpleNode` — the front-door Node tutorial (Xiao ESP32-C6,
   pack/unpack seam, minimal GPIO).
 - `examples/XiaoHostTracer` — the bench R&D tracer (Xiao ESP32-C6, USB

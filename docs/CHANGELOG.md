@@ -4,11 +4,28 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- `Ssd1306SegmentedFlush` (`src/Ssd1306SegmentedFlush.h`): non-blocking
+  SSD1306 push used by SimpleHost, XiaoHostTracer, XiaoSniffer, XiaoNode,
+  and bench sketches so a full-frame `display()` (~25 ms I2C stall) cannot
+  own the Host/Node schedule.
+- Host status panel rolling **miss** counters (`noReplies`) beside errors
+  in `SimpleHostMetrics` / OLED rows (`m` / `e`); online rows drop the
+  redundant ON tag.
+
 ### Changed
 - XiaoNode OLED restored to the donor per-bit I/O grid with change
   halos, TX/RX spinners, and OTA screens (`NodeDisplay`), replacing the
-  interim hex status panel. Local expander-table and NODE_ID edits are
-  kept.
+  interim hex status panel. Display API takes sketch-owned expander
+  geometry (`update(expanders, count, portState)`); panel clamps at
+  max 8 expanders. OTA first-join WiFi times out (~30 s) to FAILED
+  instead of spinning forever. IOX reads use donor stop-then-requestFrom
+  shape (repeated-start failed on this bench hardware).
+- SimpleHost demo fast bitwalk default slowed to 30 s: sub-second full-T
+  dirty rates thrash the Host schedule and inflate `noReplies` on the
+  bench (open follow-up; not a Node pack/I2C floor).
+- DESIGN Node strawman: `config()` + `onPack`/`onUnpack` + `IOBuffer&`
+  (was `pack`/`unpack`).
 - Host sketches (`XiaoHostTracer`, `SimpleHost`, `XiaoBenchCal`,
   `XiaoBenchEchoCancel`) updated to the `Esp32SerialPort(stream, txen,
   baud, rx, tx)` constructor. A leftover `UART_NUM_1` positional arg was
