@@ -526,10 +526,11 @@ static void test_echo_cancel_default_auto(void) {
                     SerialCMRITransport::EchoCancelMode::kAuto);
 }
 
-// AlwaysOn: RX bytes that arrive while TXEN is asserted (kWriting or
-// kDraining) are discarded at the byte level — the decoder never sees
-// them. Use a write limit to keep kWriting alive across ticks, then
-// let it drain and confirm the discard still holds through deassert.
+// AlwaysOn: own-frame echo (one wire-frame of RX) is discarded while
+// TXEN is up — writing and draining. Use a write limit so kWriting
+// spans ticks; feed the echo in two chunks that still sum to one frame.
+// Surplus past the budget is intentional Node-R territory (#112) and is
+// covered by test_echo_cancel_feeds_early_reply_after_own_frame_budget.
 static void test_echo_cancel_on_discards_rx_through_drain(void) {
   FakeSerialPort port;
   port.setWriteLimit(2);  // accept 2 bytes/call -> kWriting persists
@@ -541,23 +542,17 @@ static void test_echo_cancel_on_discards_rx_through_drain(void) {
   TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
   uint8_t echo[16];
   const size_t n = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+  TEST_ASSERT_TRUE(n >= 4);
 
-  // kWriting phase: discard. (tick 1: pumpTransmit_ writes 2,
-  // txWritten_=4, still kWriting.)
-  port.queueRx(echo, n);
+  // kWriting: first half of own-frame echo discarded.
+  port.queueRx(echo, n / 2);
   t.tick(1);
 
-  // kDraining phase (all bytes accepted): discard still holds.
-  // tick 2: pumpTransmit_ writes the last 2, txWritten_=6 ->
-  // kDraining, then pumpReceive_ discards.
-  port.queueRx(echo, n);
+  // Still TXEN up / draining: remainder of the same frame discarded.
+  port.queueRx(echo + (n / 2), n - (n / 2));
   t.tick(2);
-  // Do NOT reach tick 3: drainDueMs_ = wireTime(3) + oneCharTime(0) = 3,
-  // so the drain completes at tick 3 and pumpReceive_ would feed the
-  // decoder in kIdle. Stopping at tick 2 keeps txState_ = kDraining
-  // for the assertion.
 
-  // The whole echo was discarded; nothing decoded.
+  // Own-frame budget consumed; nothing decoded.
   CMRIPacket got;
   TEST_ASSERT_FALSE(t.receivePacket(got));
   TEST_ASSERT_EQUAL_UINT32(0, t.decoderStatistics().framesDecoded);
@@ -652,6 +647,41 @@ static void test_echo_cancel_auto_arms_on_first_rx_during_tx(void) {
   TEST_ASSERT_EQUAL_UINT32(n, t.rxDuringTx());
 }
 
+// issue #112: own-frame budget only. AlwaysOn discards one wire-frame of
+// echo, then feeds surplus RX in the same TXEN window — a fast Node's R
+// that starts while ETX still drains (interop 2.3.15). Whole-window
+// discard produced empty 250 ms Host gates with R on the wire.
+static void test_echo_cancel_feeds_early_reply_after_own_frame_budget(void) {
+  FakeSerialPort port;
+  port.setWriteLimit(2);
+  SerialCMRITransport t(port);
+  t.setEchoCancelMode(SerialCMRITransport::EchoCancelMode::kAlwaysOn);
+  t.begin();
+  t.tick(0);
+
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  uint8_t echo[16];
+  const size_t nEcho = encodeInto(makePacket(5, 'P'), echo, sizeof(echo));
+  uint8_t replyWire[32];
+  const size_t nReply =
+      encodeInto(makePacket(5, 'R', /*body*/ nullptr, 0), replyWire,
+                 sizeof(replyWire));
+
+  // kWriting: own-frame echo discarded (budget = nEcho).
+  port.queueRx(echo, nEcho);
+  t.tick(1);
+
+  // Still draining / TXEN up: early R past the budget must decode.
+  port.queueRx(replyWire, nReply);
+  t.tick(2);
+
+  CMRIPacket got;
+  TEST_ASSERT_TRUE_MESSAGE(t.receivePacket(got),
+                           "early R after own-frame echo was discarded");
+  TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(5 + kWireUAOffset), got.wireUA);
+  TEST_ASSERT_EQUAL_HEX8('R', got.mt);
+}
+
 // ------------------------------------------------------------------- main
 
 int main(void) {
@@ -682,5 +712,6 @@ int main(void) {
   RUN_TEST(test_echo_cancel_discard_holds_across_drain_complete_tick);
   RUN_TEST(test_echo_cancel_off_feeds_rx_while_writing);
   RUN_TEST(test_echo_cancel_auto_arms_on_first_rx_during_tx);
+  RUN_TEST(test_echo_cancel_feeds_early_reply_after_own_frame_budget);
   return UNITY_END();
 }
