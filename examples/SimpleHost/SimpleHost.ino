@@ -58,6 +58,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "SimpleHostMetrics.h"          // pure display-metrics helpers
+#include "Ssd1306SegmentedFlush.h"      // non-blocking OLED push
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
@@ -66,6 +67,7 @@ constexpr uint32_t kDisplayRefreshMs = 150;   // redraw interval
 constexpr uint32_t kErrorWindowMs     = 5000; // rolling error count window (long enough that a transient burst stays visible)
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 #endif
 
 // ---- helpers
@@ -99,7 +101,10 @@ constexpr int     kCMRI_BAUD = 28800;
 
 constexpr uint32_t kBitwalkPeriodMs = 1000;  // one step per second
 constexpr size_t   kBitwalkByte     = 5;      // the byte to slow walk
-constexpr uint32_t kFastBitwalkPeriodMs = 250;  // faster
+// Full-T on every dirty bit. Sub-second periods thrash the Host schedule
+// and inflate noReplies on this bus (see follow-up issue on T/P timing).
+// 30 s keeps the demo visible without the miss floor.
+constexpr uint32_t kFastBitwalkPeriodMs = 30000;
 constexpr size_t   kFastBitwalkByte = 3;      // the byte to fast walk
 
 // Input toggle demo: toggle this output on each rising edge of the trigger.
@@ -118,7 +123,7 @@ struct NodeInfo {
 
 NodeInfo nodeTable[] = {
   {30,  7,  7},   // Node 30: 2 onboard phantom + 1 IOX32 + 3 IOX boards, all configured as 8IN/8OUT per expander
-  {31,  4,  4},   // Node 31: 2 onboard phantom + 1 IOX board
+  // {31,  3,  3},   // Node 31: 2 onboard phantom + 1 IOX board
 };
 constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
 
@@ -160,30 +165,32 @@ CMRInet::examples::HostStatusPanel panel;
 
 /// Draw the host status panel. Layout (textSize 1 unless noted):
 ///   HOST           <cadence>      (alternates c/s ↔ ms/cycle every 5 s)
-///   UA30:ON     <lat>  <e>err
-///   UA31:OFF  <lat>  <e>err
-/// Numbers are right-justified in fixed-width fields so columns line up
-/// vertically. Redrawn on a timer; no dirty tracking.
+///   P:nnnn R:nnnn m:nn            (host totals this redraw / 5s misses)
+///   UA30  165ms  12m  0e          (online: no redundant ON tag)
+///   UA31 OFF  ---ms   5m  0e      (non-online keeps compact tag)
+/// Misses (noReplies / reply-gate timeouts) are first-class; the old
+/// "0err" line only tracked malformed replies and stayed zero through
+/// TXEN stutters. Redrawn on a timer; no dirty tracking.
 void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
 
-  // Feed the panel the current cumulative counters; it detects deltas
-  // and records timestamps in its rolling windows.
-  const uint32_t pollsSent = host.statistics().pollsSent;
+  const auto& hs = host.statistics();
   uint32_t nodeErrs[kNodeCount] = {};
+  uint32_t nodeMisses[kNodeCount] = {};
   for (size_t i = 0; i < kNodeCount; ++i) {
     CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
-    nodeErrs[i] = (n != nullptr) ? n->statistics().errors : 0;
+    if (n != nullptr) {
+      nodeErrs[i] = n->statistics().errors;
+      nodeMisses[i] = n->statistics().noReplies;
+    }
   }
-  panel.sample(now, pollsSent, nodeErrs, kNodeCount);
+  panel.sample(now, hs.pollsSent, hs.repliesAccepted,
+               nodeErrs, nodeMisses, kNodeCount);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  // Header line: "HOST" at size 2, cadence right-justified at 1.
-  // The panel alternates between cycles/sec and ms/cycle every 5 s
-  // (both views of the same smoothed 10 s rate).
   display.setTextSize(2);
   display.setCursor(0, 0);
   display.print(F("HOST"));
@@ -193,22 +200,27 @@ void drawHostStatus() {
   display.setCursor(60, 4);
   display.print(header);
 
-  // One row per node: UA, state, latency, recent-error count -- all
-  // right-justified so the columns align.
+  char totals[24];
+  panel.hostTotalsText(totals, sizeof(totals), now);
+  display.setCursor(0, 18);
+  display.print(totals);
+
   for (size_t i = 0; i < kNodeCount; ++i) {
     CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
+    const bool online =
+        (n != nullptr) && (n->state() == CMRInet::RemoteNodeState::kOnline);
     const char* tag =
         (n != nullptr) ? CMRInet::remoteNodeStateTag(n->state()) : "---";
     const uint32_t latMs = (n != nullptr)
         ? n->statistics().lastTurnaroundMs : 0;
     char row[24];
     panel.nodeRowText(row, sizeof(row), now, i,
-                      nodeTable[i].UA, tag, latMs);
-    display.setTextSize(1);
-    display.setCursor(0, 20 + i * 10);
+                      nodeTable[i].UA, online, tag, latMs);
+display.setCursor(0, 30 + static_cast<int>(i) * 12);
     display.print(row);
   }
-  display.display();
+  // Segmented I2C push — never call display.display() (full ~25 ms stall).
+  oledFlush.markDirty();
 }
 #endif
 
@@ -290,9 +302,10 @@ void setup() {
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
-      display.print(F("addRemoteNode\nrejected:\n"));
+display.print(F("addRemoteNode\nrejected:\n"));
       display.print(CMRInet::configStatusString(configStatus));
-      display.display();
+      oledFlush.markDirty();
+      oledFlush.serviceUntilIdle();  // halt path: finish the frame now
     }
 #endif
     for (;;) {
@@ -347,11 +360,13 @@ void loop() {
   }
 
 #if USE_OLED
-  // Redraw screen on a timer. 
+  // Paint on a timer; drain one I2C chunk every loop so the push never
+  // owns the Host schedule the way display.display() did.
   if (now - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0) {
     drawHostStatus();
     lastDisplayMs = now;
   }
+  oledFlush.service();
 #endif
 }
 

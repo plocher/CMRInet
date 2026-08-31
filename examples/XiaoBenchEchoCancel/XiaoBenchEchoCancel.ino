@@ -43,6 +43,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "SimpleHostMetrics.h"  // shared HostStatusPanel
+#include "Ssd1306SegmentedFlush.h"  // non-blocking OLED push
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
@@ -54,44 +55,11 @@ char displayLine1[22] = {0};
 char displayLine2[22] = {0};
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 bool oledOk = false;
 uint32_t lastDisplayMs = 0;
 CMRInet::examples::HostStatusPanel panel;
 
-// Non-blocking incremental display update (#11): display.display() blocks
-// ~25ms (1024-byte I2C push), so the framebuffer is sent in 32-byte chunks
-// across loop iterations instead. Keeps the poll cadence honest.
-bool displayDirty = false;
-size_t displayChunkOffset = 0;
-const size_t kDisplayChunkSize = 32;
-const size_t kDisplayTotalBytes = (128 * 64) / 8;  // 1024 bytes
-
-void updateDisplayIncremental() {
-  if (!displayDirty || !oledOk) return;
-  if (displayChunkOffset == 0) {
-    Wire.beginTransmission(kScreenAddr);
-    Wire.write((uint8_t)0x00);
-    Wire.write(0x21); Wire.write(0); Wire.write(127);
-    Wire.endTransmission();
-    Wire.beginTransmission(kScreenAddr);
-    Wire.write((uint8_t)0x00);
-    Wire.write(0x22); Wire.write(0); Wire.write(0xFF);
-    Wire.endTransmission();
-  }
-  Wire.beginTransmission(kScreenAddr);
-  Wire.write((uint8_t)0x40);
-  size_t end = displayChunkOffset + kDisplayChunkSize;
-  if (end > kDisplayTotalBytes) end = kDisplayTotalBytes;
-  for (size_t i = displayChunkOffset; i < end; ++i) {
-    Wire.write(display.getBuffer()[i]);
-  }
-  Wire.endTransmission();
-  displayChunkOffset = end;
-  if (displayChunkOffset >= kDisplayTotalBytes) {
-    displayChunkOffset = 0;
-    displayDirty = false;
-  }
-}
 
 // Build-time knobs.
 #ifndef ECHOCALC_UA
@@ -233,9 +201,10 @@ void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
   CMRInet::RemoteNodeHandle* node = host.node(ECHOCALC_UA);
-  const uint32_t pollsSent = host.statistics().pollsSent;
+  const auto& hs = host.statistics();
   uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
-  panel.sample(now, pollsSent, nodeErrs, 1);
+  uint32_t nodeMisses[1] = {node ? node->statistics().noReplies : 0};
+  panel.sample(now, hs.pollsSent, hs.repliesAccepted, nodeErrs, nodeMisses, 1);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -249,7 +218,7 @@ void drawHostStatus() {
   display.print(header);
 
   // echo-cancel state line
-  display.setCursor(0, 20);
+  display.setCursor(0, 18);
   display.print(F("echo "));
   using M = CMRInet::SerialCMRITransport::EchoCancelMode;
   const char* modeTag =
@@ -257,12 +226,14 @@ void drawHostStatus() {
       (transport.echoCancelMode() == M::kAlwaysOn) ? "ON" : "off";
   display.print(modeTag);
 
+  const bool online =
+      (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
   const char* tag =
       (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr) ? node->statistics().lastTurnaroundMs : 0;
   char row[24];
-  panel.nodeRowText(row, sizeof(row), now, 0, ECHOCALC_UA, tag, latMs);
-  display.setCursor(0, 32);
+  panel.nodeRowText(row, sizeof(row), now, 0, ECHOCALC_UA, online, tag, latMs);
+  display.setCursor(0, 30);
   display.print(row);
 
   // reject/unsolicited counters — the defect signal on the panel
@@ -280,7 +251,7 @@ void drawHostStatus() {
     display.setCursor(0, 56);
     display.print(displayLine2);
   }
-  displayDirty = true;
+  oledFlush.markDirty();
 }
 
 // ---- sketch-local verb: echocancel on|off -------------------------------
@@ -471,5 +442,5 @@ void loop() {
     drawHostStatus();
     lastDisplayMs = nowMs;
   }
-  updateDisplayIncremental();
+  if (oledOk) { oledFlush.service(); }
 }
