@@ -1,16 +1,17 @@
 // SimpleHostMetrics.h — pure, platform-neutral helpers the SimpleHost
 // example's OLED status panel uses: a rolling count of events inside a
-// time window (for "recent errors"), a rolling count-per-second rate
-// (for polling cadence), and a fixed-width latency formatter. None of
-// this depends on the Arduino runtime or the display library; it is
-// shared between the example sketch and the desktop test suite so the
-// arithmetic is verifiable under a deterministic mock clock.
+// time window (for "recent errors" / "recent misses"), a rolling
+// count-per-second rate (for polling cadence), and a fixed-width latency
+// formatter. None of this depends on the Arduino runtime or the display
+// library; it is shared between the example sketch and the desktop test
+// suite so the arithmetic is verifiable under a deterministic mock clock.
 
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 namespace CMRInet {
 namespace examples {
@@ -137,14 +138,29 @@ inline void latencyText(char* buf, size_t len, uint32_t ms) {
   snprintf(buf, len, "%4lums", static_cast<unsigned long>(ms));
 }
 
+/// Clamp a counter for a fixed-width field (2 or 3 digits). Values at
+/// or above the max print as the max (e.g. 99, 999) so columns stay put.
+inline unsigned clampCount(uint32_t v, unsigned maxShown) {
+  return (v > maxShown) ? maxShown : static_cast<unsigned>(v);
+}
+
 /// The shared Host status panel logic: owns the rolling metric state
-/// (polling rate, per-node error windows) and formats the header and
-/// per-node row strings a sketch renders to its display. Pure — no
-/// display or Arduino dependency — so the arithmetic and alternation
-/// timing are verifiable under a deterministic mock clock. The sketch
-/// calls sample() on each redraw with the current host/node counters,
-/// then reads headerText()/nodeRowText() and feeds the strings to its
-/// display at the cursor positions it chooses.
+/// (polling rate, per-node error and miss windows) and formats the
+/// header, host-totals, and per-node row strings a sketch renders to
+/// its display. Pure — no display or Arduino dependency — so the
+/// arithmetic and alternation timing are verifiable under a
+/// deterministic mock clock.
+///
+/// Layout contract (21-char rows, 6px font on 128px):
+///   HOST           <cadence>          // size-2 HOST + size-1 rate
+///   P:nnnn R:nnnn m:nn                // host totals (this window)
+///   UA30  165ms  12m  0e              // online: no state tag
+///   UA31 OFF  ---ms   5m  0e          // non-online: compact tag
+///
+/// "ON" is omitted when the node is online — live counters already say
+/// the node is answering. Misses (noReplies) are first-class: the
+/// previous "0err" line tracked only malformed replies and stayed at
+/// zero through reply-gate timeouts that still stall TXEN.
 class HostStatusPanel {
  public:
   static constexpr size_t kMaxNodes = 16;
@@ -153,35 +169,70 @@ class HostStatusPanel {
 
   void reset() {
     pollRate_.reset(0);
-    for (size_t i = 0; i < kMaxNodes; ++i) nodeErrors_[i].reset();
-    for (size_t i = 0; i < kMaxNodes; ++i) prevNodeErrors_[i] = 0;
+    for (size_t i = 0; i < kMaxNodes; ++i) {
+      nodeErrors_[i].reset();
+      nodeMisses_[i].reset();
+      prevNodeErrors_[i] = 0;
+      prevNodeMisses_[i] = 0;
+    }
+    prevPollsSent_ = 0;
+    prevRepliesAccepted_ = 0;
+    windowPolls_ = 0;
+    windowReplies_ = 0;
+    haveBaseline_ = false;
   }
 
-  /// Feed the panel the current cumulative counters on each redraw.
-  /// `pollsSent` is CMRIHost::statistics().pollsSent; `nodeErrorCounts`
-  /// is an array of per-node statistics().errors values, one per node
-  /// up to `nodeCount`. The panel detects deltas and records timestamps.
-  void sample(uint32_t nowMs, uint32_t pollsSent,
-              const uint32_t* nodeErrorCounts, size_t nodeCount) {
+  /// Feed the panel current cumulative counters on each redraw.
+  ///
+  /// Host: `pollsSent` / `repliesAccepted` from CMRIHost::statistics().
+  /// Per node (parallel arrays, length `nodeCount`):
+  ///   nodeErrorCounts  — statistics().errors   (malformed replies)
+  ///   nodeMissCounts   — statistics().noReplies (reply-gate timeouts)
+  /// Either node array may be null (treated as all zeros).
+  void sample(uint32_t nowMs, uint32_t pollsSent, uint32_t repliesAccepted,
+              const uint32_t* nodeErrorCounts, const uint32_t* nodeMissCounts,
+              size_t nodeCount) {
     pollRate_.sample(nowMs, pollsSent);
+
+    if (!haveBaseline_) {
+      prevPollsSent_ = pollsSent;
+      prevRepliesAccepted_ = repliesAccepted;
+      haveBaseline_ = true;
+    } else {
+      // Rolling window totals: on each sample, credit the delta since
+      // the previous sample into a short-lived accumulator that the
+      // host-totals line reads. We also feed miss deltas into the
+      // per-node ErrorWindows so "12m" is last-5s, not lifetime.
+      if (pollsSent >= prevPollsSent_) {
+        windowPolls_ = pollsSent - prevPollsSent_;
+      }
+      if (repliesAccepted >= prevRepliesAccepted_) {
+        windowReplies_ = repliesAccepted - prevRepliesAccepted_;
+      }
+      prevPollsSent_ = pollsSent;
+      prevRepliesAccepted_ = repliesAccepted;
+    }
+
     for (size_t i = 0; i < nodeCount && i < kMaxNodes; ++i) {
-      if (nodeErrorCounts == nullptr) continue;
-      while (nodeErrorCounts[i] != prevNodeErrors_[i]) {
-        nodeErrors_[i].onEvent(nowMs);
-        ++prevNodeErrors_[i];
+      if (nodeErrorCounts != nullptr) {
+        while (nodeErrorCounts[i] != prevNodeErrors_[i]) {
+          nodeErrors_[i].onEvent(nowMs);
+          ++prevNodeErrors_[i];
+        }
+      }
+      if (nodeMissCounts != nullptr) {
+        while (nodeMissCounts[i] != prevNodeMisses_[i]) {
+          nodeMisses_[i].onEvent(nowMs);
+          ++prevNodeMisses_[i];
+        }
       }
     }
   }
 
-  /// Format the header line: alternates between "XX.Xc/s" (cycles per
-  /// second) and "XXXms" (ms per cycle) every kAltPeriodMs, so both
-  /// views of the same underlying rate are visible without crowding.
-  /// A stalled engine (no polls in the window) shows "---ms".
+  /// Format the header cadence: alternates "XXXc/s" and "XXXms" every
+  /// kAltPeriodMs. Stalled engine shows "---ms".
   void headerText(char* buf, size_t len, uint32_t nowMs) const {
     if ((nowMs / kAltPeriodMs) % 2 == 0) {
-      // Integer c/s (rounded, not one-decimal) to cut visual jitter: a
-      // smoothed 10 s rate still wobbles in the tenths, and the eye reads
-      // a stable whole number far more easily.
       const float cps = pollRate_.cyclesPerSecondAt(nowMs);
       snprintf(buf, len, "%uc/s", static_cast<unsigned>(cps + 0.5f));
     } else {
@@ -194,28 +245,71 @@ class HostStatusPanel {
     }
   }
 
-  /// Format one per-node row: "UAxx:STATE  XXXms  XXerr" — state tag,
-  /// right-justified latency, and right-justified rolling error count,
-  /// all in fixed-width fields so columns align across rows.
-  /// `stateTag` is the 3-char state string the sketch computes (e.g.
-  /// "ON ", "OFF", "---"). `turnaroundMs` is the node's
-  /// statistics().lastTurnaroundMs.
+  /// Host-scope totals for the calibration line:
+  /// "P:nnnn R:nnnn m:nn" — polls/replies since last sample (≈ redraw),
+  /// and misses in the last kErrorWindowMs across all nodes.
+  /// Inter-sample P/R shows the bus is moving without burning digits on
+  /// a lifetime counter; m is the same rolling window the node rows use.
+  void hostTotalsText(char* buf, size_t len, uint32_t nowMs) const {
+    uint32_t missSum = 0;
+    for (size_t i = 0; i < kMaxNodes; ++i) {
+      missSum += nodeMisses_[i].countInLastMs(nowMs, kErrorWindowMs);
+    }
+    snprintf(buf, len, "P:%u R:%u m:%u",
+             clampCount(windowPolls_, 9999),
+             clampCount(windowReplies_, 9999),
+             clampCount(missSum, 99));
+  }
+
+  /// One per-node row.
+  ///
+  /// Online (`online == true`): no state tag — counters are the proof.
+  ///   "UA30  165ms  12m  0e"
+  /// Non-online: compact 3-char tag kept so OFF/CFG/DEG stay visible.
+  ///   "UA31 OFF  ---ms   5m  0e"
+  ///
+  /// `stateTag` is still required for the non-online form (e.g. from
+  /// remoteNodeStateTag). `turnaroundMs` is lastTurnaroundMs.
   void nodeRowText(char* buf, size_t len, uint32_t nowMs, size_t nodeIndex,
-                   uint8_t UA, const char* stateTag,
+                   uint8_t UA, bool online, const char* stateTag,
                    uint32_t turnaroundMs) const {
     char lat[8];
-    latencyText(lat, sizeof(lat), turnaroundMs);
+    if (online) {
+      latencyText(lat, sizeof(lat), turnaroundMs);
+    } else {
+      // No meaningful turnaround when the node is not answering.
+      snprintf(lat, sizeof(lat), "  ---");
+    }
     const uint32_t recentErrs = (nodeIndex < kMaxNodes)
         ? nodeErrors_[nodeIndex].countInLastMs(nowMs, kErrorWindowMs)
         : 0;
-    snprintf(buf, len, "UA%u:%s %s %2uerr", UA,
-             stateTag ? stateTag : "---", lat, static_cast<unsigned>(recentErrs));
+    const uint32_t recentMisses = (nodeIndex < kMaxNodes)
+        ? nodeMisses_[nodeIndex].countInLastMs(nowMs, kErrorWindowMs)
+        : 0;
+    const unsigned e = clampCount(recentErrs, 99);
+    const unsigned m = clampCount(recentMisses, 999);
+    if (online) {
+      // "UA30  165ms  12m  0e" — tag omitted on purpose.
+      // lat already includes the "ms" suffix from latencyText().
+      snprintf(buf, len, "UA%u %s %3um %2ue", UA, lat, m, e);
+    } else {
+      const char* tag = (stateTag != nullptr) ? stateTag : "---";
+      // "UA31 OFF   ---  5m  0e"
+      snprintf(buf, len, "UA%u %s %s %3um %2ue", UA, tag, lat, m, e);
+    }
   }
 
  private:
   PollRate pollRate_;
   ErrorWindow nodeErrors_[kMaxNodes] = {};
+  ErrorWindow nodeMisses_[kMaxNodes] = {};
   uint32_t prevNodeErrors_[kMaxNodes] = {};
+  uint32_t prevNodeMisses_[kMaxNodes] = {};
+  uint32_t prevPollsSent_ = 0;
+  uint32_t prevRepliesAccepted_ = 0;
+  uint32_t windowPolls_ = 0;
+  uint32_t windowReplies_ = 0;
+  bool haveBaseline_ = false;
 };
 
 }  // namespace examples

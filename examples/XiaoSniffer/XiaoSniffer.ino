@@ -46,6 +46,7 @@
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "Ssd1306SegmentedFlush.h"
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
@@ -96,6 +97,7 @@ constexpr int kScreenW = 128;
 constexpr int kScreenH = 64;
 constexpr int kScreenAddr = 0x3C;
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 bool oledOk = false;
 #endif
 
@@ -203,7 +205,8 @@ void drawSplash() {
   display.print(kVersion);
   display.setCursor(0, 40);
   display.print(F("listening..."));
-  display.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();  // boot splash before listening
 }
 
 void drawStatus() {
@@ -252,7 +255,7 @@ void drawStatus() {
   } else {
     display.print(F("last: -"));
   }
-  display.display();
+  oledFlush.markDirty();
 }
 #endif
 
@@ -344,6 +347,9 @@ void loop() {
   if (now - lastDisplayMs >= SNIFFER_DISPLAY_INTERVAL_MS) {
     drawStatus();
     lastDisplayMs = now;
+  }
+  if (oledOk) {
+    oledFlush.service();
   }
 #endif
 }

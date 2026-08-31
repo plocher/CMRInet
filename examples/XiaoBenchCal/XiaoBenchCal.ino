@@ -62,6 +62,7 @@ void drawStatus();
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "SimpleHostMetrics.h"          // shared HostStatusPanel
+#include "Ssd1306SegmentedFlush.h"      // non-blocking OLED push
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
@@ -69,6 +70,7 @@ constexpr int      kScreenAddr    = 0x3C;
 constexpr uint32_t kDisplayRefreshMs = 150;
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 bool oledOk = false;
 uint32_t lastDisplayMs = 0;
 CMRInet::examples::HostStatusPanel panel;
@@ -129,11 +131,19 @@ void drawSplash() {
   display.print(kVersion);
   display.setCursor(0, 40);
   display.print(F("polling..."));
-  display.display();
+  oledFlush.markDirty();
+  oledFlush.serviceUntilIdle();
 }
 
 void drawStatus() {
   if (!oledOk) return;
+  const uint32_t now = millis();
+  const CMRInet::RemoteNodeHandle* node = host.node(CALIB_UA);
+  const auto& hs = host.statistics();
+  uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
+  uint32_t nodeMisses[1] = {node ? node->statistics().noReplies : 0};
+  panel.sample(now, hs.pollsSent, hs.repliesAccepted, nodeErrs, nodeMisses, 1);
+
   display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
@@ -141,21 +151,27 @@ void drawStatus() {
   display.print(F("HOST"));
   display.setTextSize(1);
   char header[16];
-  panel.headerText(header, sizeof(header), millis());
+  panel.headerText(header, sizeof(header), now);
   display.setCursor(60, 4);
   display.print(header);
-  const CMRInet::RemoteNodeHandle* node = host.node(CALIB_UA);
+
+  char totals[24];
+  panel.hostTotalsText(totals, sizeof(totals), now);
+  display.setCursor(0, 18);
+  display.print(totals);
+
+  const bool online =
+      (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
   const char* tag =
       (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr)
       ? node->statistics().lastTurnaroundMs : 0;
   char row[24];
-  panel.nodeRowText(row, sizeof(row), millis(), 0,
-                    CALIB_UA, tag, latMs);
-  display.setTextSize(1);
-  display.setCursor(0, 20);
+  panel.nodeRowText(row, sizeof(row), now, 0,
+                    CALIB_UA, online, tag, latMs);
+  display.setCursor(0, 30);
   display.print(row);
-  display.display();
+  oledFlush.markDirty();
 }
 
 void setup() {
@@ -220,5 +236,8 @@ void loop() {
   if (oledOk && (millis() - lastDisplayMs) >= kDisplayRefreshMs) {
     drawStatus();
     lastDisplayMs = millis();
+  }
+  if (oledOk) {
+    oledFlush.service();
   }
 }

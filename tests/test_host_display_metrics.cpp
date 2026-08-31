@@ -104,7 +104,7 @@ static void test_panel_header_alternates_rate_then_interval(void) {
   uint32_t polls = 0;
   for (uint32_t t = 0; t < 10000; t += 100) {
     ++polls;
-    p.sample(t, polls, nullptr, 0);
+    p.sample(t, polls, polls, nullptr, nullptr, 0);
   }
   char buf[16];
   // t=4999 is in the first 5 s window -> rate view (c/s)
@@ -132,28 +132,53 @@ static void test_panel_header_shows_stalled_when_no_polls(void) {
                            "stalled panel should show --- sentinel");
 }
 
-static void test_panel_node_row_formats_state_latency_errors(void) {
+static void test_panel_node_row_online_omits_state_tag(void) {
   HostStatusPanel p;
   p.reset();
-  // One node, no errors yet.
   uint32_t errs[] = {0};
-  p.sample(0, 0, errs, 1);
+  uint32_t misses[] = {0};
+  p.sample(0, 0, 0, errs, misses, 1);
   char buf[24];
-  p.nodeRowText(buf, sizeof(buf), 100, 0, 30, "ON ", 6);
-  // Expected: "UA30:ON     6ms  0err"
-  TEST_ASSERT_EQUAL_STRING("UA30:ON     6ms  0err", buf);
+  // Online: no ON tag — counters are the proof the node is answering.
+  p.nodeRowText(buf, sizeof(buf), 100, 0, 30, /*online=*/true, "ON ", 6);
+  TEST_ASSERT_EQUAL_STRING("UA30    6ms   0m  0e", buf);
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "ON") == nullptr,
+                           "online row must not carry a redundant ON tag");
 }
 
-static void test_panel_node_row_right_justifies_columns(void) {
+static void test_panel_node_row_offline_keeps_tag_and_misses(void) {
   HostStatusPanel p;
   p.reset();
   uint32_t errs[] = {0};
-  p.sample(0, 0, errs, 1);
+  uint32_t misses[] = {0};
+  p.sample(0, 0, 0, errs, misses, 1);
+  // Two miss events in the window.
+  misses[0] = 2;
+  p.sample(100, 10, 8, errs, misses, 1);
   char buf[24];
-  // Large latency and error count — both should be right-justified.
-  p.nodeRowText(buf, sizeof(buf), 100, 0, 31, "OFF", 273);
-  // Expected: "UA31:OFF  273ms  0err"  (still 0 errors, window just opened)
-  TEST_ASSERT_EQUAL_STRING("UA31:OFF  273ms  0err", buf);
+  p.nodeRowText(buf, sizeof(buf), 100, 0, 31, /*online=*/false, "OFF", 273);
+  // Offline keeps the compact tag; turnaround is blanked.
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "UA31") != nullptr, "UA missing");
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "OFF") != nullptr, "offline tag missing");
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "2m") != nullptr || strstr(buf, "  2m") != nullptr,
+                           "miss count missing");
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "0e") != nullptr, "error count missing");
+}
+
+static void test_panel_host_totals_show_poll_reply_miss(void) {
+  HostStatusPanel p;
+  p.reset();
+  uint32_t errs[] = {0};
+  uint32_t misses[] = {0};
+  p.sample(0, 0, 0, errs, misses, 1);
+  misses[0] = 3;
+  p.sample(150, 40, 37, errs, misses, 1);
+  char buf[24];
+  p.hostTotalsText(buf, sizeof(buf), 150);
+  // Inter-sample deltas: P +40, R +37, m = rolling misses (3).
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "P:40") != nullptr, "poll delta missing");
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "R:37") != nullptr, "reply delta missing");
+  TEST_ASSERT_TRUE_MESSAGE(strstr(buf, "m:3") != nullptr, "miss total missing");
 }
 
 // ------------------------------------------------------------------- runner
@@ -169,7 +194,8 @@ int main(void) {
   RUN_TEST(test_latency_text_fixed_width_right_justified);
   RUN_TEST(test_panel_header_alternates_rate_then_interval);
   RUN_TEST(test_panel_header_shows_stalled_when_no_polls);
-  RUN_TEST(test_panel_node_row_formats_state_latency_errors);
-  RUN_TEST(test_panel_node_row_right_justifies_columns);
+  RUN_TEST(test_panel_node_row_online_omits_state_tag);
+  RUN_TEST(test_panel_node_row_offline_keeps_tag_and_misses);
+  RUN_TEST(test_panel_host_totals_show_poll_reply_miss);
   return UNITY_END();
 }

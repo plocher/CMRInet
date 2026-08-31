@@ -52,6 +52,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "SimpleHostMetrics.h"          // shared HostStatusPanel
+#include "Ssd1306SegmentedFlush.h"      // non-blocking OLED push
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
@@ -63,60 +64,10 @@ char displayLine1[22] = {0};
 char displayLine2[22] = {0};
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 bool oledOk = false;
 uint32_t lastDisplayMs = 0;
 CMRInet::examples::HostStatusPanel panel;
-
-// #11: Non-blocking incremental display update
-bool displayDirty = false;
-size_t displayChunkOffset = 0;
-const size_t kDisplayChunkSize = 32; // 32 bytes per loop iteration
-const size_t kDisplayTotalBytes = (128 * 64) / 8; // 1024 bytes
-
-void updateDisplayIncremental() {
-  if (!displayDirty || !oledOk) return;
-  
-  // If we're starting a new update, send the commands to set the address
-  if (displayChunkOffset == 0) {
-    // Send commands to set the page and column address
-    Wire.beginTransmission(kScreenAddr);
-    Wire.write((uint8_t)0x00); // Co = 0, D/C = 0 (command)
-    Wire.write(0x21); // Column start address
-    Wire.write(0);    // Column start
-    Wire.write(127);  // Column end
-    Wire.endTransmission();
-    
-    Wire.beginTransmission(kScreenAddr);
-    Wire.write((uint8_t)0x00); // Co = 0, D/C = 0 (command)
-    Wire.write(0x22); // Page start address
-    Wire.write(0);    // Page start
-    Wire.write(0xFF); // Page end
-    Wire.endTransmission();
-  }
-  
-  // Send the next chunk of the framebuffer
-  Wire.beginTransmission(kScreenAddr);
-  Wire.write((uint8_t)0x40); // Co = 0, D/C = 1
-  
-  size_t end = displayChunkOffset + kDisplayChunkSize;
-  if (end > kDisplayTotalBytes) {
-    end = kDisplayTotalBytes;
-  }
-  
-  for (size_t i = displayChunkOffset; i < end; i++) {
-    Wire.write(display.getBuffer()[i]);
-  }
-  
-  Wire.endTransmission();
-  
-  displayChunkOffset = end;
-  
-  // If we've sent the whole buffer, we're done
-  if (displayChunkOffset >= kDisplayTotalBytes) {
-    displayChunkOffset = 0;
-    displayDirty = false;
-  }
-}
 
 // The OLED state tag comes from CMRInet::remoteNodeStateTag(), beside
 // the enum in RemoteNodeHandle.h -- one rendering, inside the library's
@@ -698,9 +649,10 @@ void drawHostStatus() {
   // this node at runtime now, and a cached handle would keep drawing a
   // tombstone -- or a different device that reused its slot (D5).
   CMRInet::RemoteNodeHandle* node = host.node(TRACER_UA);
-  const uint32_t pollsSent = host.statistics().pollsSent;
+  const auto& hs = host.statistics();
   uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
-  panel.sample(now, pollsSent, nodeErrs, 1);
+  uint32_t nodeMisses[1] = {node ? node->statistics().noReplies : 0};
+  panel.sample(now, hs.pollsSent, hs.repliesAccepted, nodeErrs, nodeMisses, 1);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -713,15 +665,22 @@ void drawHostStatus() {
   display.setCursor(60, 4);
   display.print(header);
 
+  char totals[24];
+  panel.hostTotalsText(totals, sizeof(totals), now);
+  display.setCursor(0, 18);
+  display.print(totals);
+
+  const bool online =
+      (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
   const char* tag =
       (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
   const uint32_t latMs = (node != nullptr)
       ? node->statistics().lastTurnaroundMs : 0;
   char row[24];
   panel.nodeRowText(row, sizeof(row), now, 0,
-                    TRACER_UA, tag, latMs);
+                    TRACER_UA, online, tag, latMs);
   display.setTextSize(1);
-  display.setCursor(0, 20);
+  display.setCursor(0, 30);
   display.print(row);
   
   // #64: print the bottom two lines if set
@@ -729,12 +688,12 @@ void drawHostStatus() {
     display.setCursor(0, 48);
     display.print(displayLine1);
   }
-  if (displayLine2[0] != '\0') {
+if (displayLine2[0] != '\0') {
     display.setCursor(0, 56);
     display.print(displayLine2);
   }
-  
-  displayDirty = true;
+
+  oledFlush.markDirty();
 }
 
 void setup() {
@@ -949,12 +908,12 @@ void loop() {
     }
   }
 
-  // Redraw the OLED on a timer.
-  if (nowMs - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0) {
+// Paint on a timer; drain one I2C chunk every loop.
+  if (oledOk && (nowMs - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0)) {
     drawHostStatus();
     lastDisplayMs = nowMs;
   }
-  
-  // Process the display update incrementally
-  updateDisplayIncremental();
+  if (oledOk) {
+    oledFlush.service();
+  }
 }

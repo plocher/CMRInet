@@ -99,10 +99,12 @@ inline const char* remoteNodeStateString(RemoteNodeState state) {
 ///
 /// CONTRACT: exactly three characters, always, space-padded where the
 /// abbreviation is shorter. Callers align columns against that width --
-/// HostStatusPanel::nodeRowText() lays out "UAxx:TAG <lat> <n>err", and
-/// a two- or four-character tag shifts every field after it. A new
-/// enumerator must therefore pick a three-character abbreviation, not
-/// the shortest string that happens to read well.
+/// HostStatusPanel::nodeRowText() keeps the tag only for non-online
+/// rows ("UA31 OFF  ---ms  5m  0e"); online rows omit it. A two- or
+/// four-character tag still shifts every field after it on the
+/// non-online form. A new enumerator must therefore pick a three-
+/// character abbreviation, not the shortest string that happens to
+/// read well.
 ///
 /// Not derivable from remoteNodeStateString() by truncation:
 /// "MISCONFIGURED" and "OFFLINE" would both yield "OFF". Hence two
