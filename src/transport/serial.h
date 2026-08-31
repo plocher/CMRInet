@@ -259,20 +259,19 @@ class SerialCMRITransport : public CMRITransport {
   uint32_t drainDueMs_ = 0;
   // Deferred txState_ flip: latched by pumpTransmit_ on drain-complete,
   // committed in tick() after pumpReceive_. TXEN has already dropped
-  // when this is set; echo discard must NOT treat pending-idle as
-  // "still transmitting" (issue #112: a fast Node's R can start the
-  // instant TXEN falls, and discarding through the rest of the tick
-  // ate those replies).
+  // when this is set. Echo discard may finish the own-frame budget on
+  // this tick, then must feed any further RX — a prompt R arrives only
+  // after deassert (interop 2.3.15 / E10), not during ETX drain (#112).
   // The seed of a general deferred-state-commit pattern; see
   // the TickState tech-debt issue.
   bool pendingIdle_ = false;
 
   /// Own-frame echo budget (issue #112 / ADR-0003). Set to the staged
   /// wire-frame length when a send is accepted. While discard is active,
-  /// at most this many RX bytes are thrown away (the Host's own echo).
-  /// Further RX in the TXEN window — a fast Node's R that starts while
-  /// ETX still drains (interop 2.3.15) — is fed to the decoder. Zero
-  /// when idle or the budget is exhausted.
+  /// at most this many RX bytes are thrown away (the Host's own echo on
+  /// a misconfigured 2-wire driver). Surplus RX is fed to the decoder.
+  /// A legitimate R cannot start until the Node has ETX and only reaches
+  /// the Host after TXEN deasserts (E10). Zero when idle or exhausted.
   size_t echoDiscardRemaining_ = 0;
 
   uint32_t lastTickMs_ = 0;

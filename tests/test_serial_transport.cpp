@@ -529,8 +529,8 @@ static void test_echo_cancel_default_auto(void) {
 // AlwaysOn: own-frame echo (one wire-frame of RX) is discarded while
 // TXEN is up — writing and draining. Use a write limit so kWriting
 // spans ticks; feed the echo in two chunks that still sum to one frame.
-// Surplus past the budget is intentional Node-R territory (#112) and is
-// covered by test_echo_cancel_feeds_early_reply_after_own_frame_budget.
+// Surplus past the budget is not endless echo (#112) and is covered by
+// test_echo_cancel_feeds_early_reply_after_own_frame_budget.
 static void test_echo_cancel_on_discards_rx_through_drain(void) {
   FakeSerialPort port;
   port.setWriteLimit(2);  // accept 2 bytes/call -> kWriting persists
@@ -648,9 +648,11 @@ static void test_echo_cancel_auto_arms_on_first_rx_during_tx(void) {
 }
 
 // issue #112: own-frame budget only. AlwaysOn discards one wire-frame of
-// echo, then feeds surplus RX in the same TXEN window — a fast Node's R
-// that starts while ETX still drains (interop 2.3.15). Whole-window
-// discard produced empty 250 ms Host gates with R on the wire.
+// self-echo, then feeds surplus RX. A Node cannot start R until it has
+// ETX; R reaches the Host only after TXEN deasserts (interop 2.3.15 /
+// E10). Surplus past the own-frame budget must still decode (not be
+// treated as endless echo). Whole-window discard produced empty 250 ms
+// Host gates with R present on the wire under dense full-T.
 static void test_echo_cancel_feeds_early_reply_after_own_frame_budget(void) {
   FakeSerialPort port;
   port.setWriteLimit(2);
@@ -671,13 +673,14 @@ static void test_echo_cancel_feeds_early_reply_after_own_frame_budget(void) {
   port.queueRx(echo, nEcho);
   t.tick(1);
 
-  // Still draining / TXEN up: early R past the budget must decode.
+  // Budget exhausted: surplus RX (here a full R frame) must decode,
+  // not be swallowed as continued echo.
   port.queueRx(replyWire, nReply);
   t.tick(2);
 
   CMRIPacket got;
   TEST_ASSERT_TRUE_MESSAGE(t.receivePacket(got),
-                           "early R after own-frame echo was discarded");
+                           "surplus RX after own-frame echo was discarded");
   TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(5 + kWireUAOffset), got.wireUA);
   TEST_ASSERT_EQUAL_HEX8('R', got.mt);
 }

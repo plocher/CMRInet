@@ -5,11 +5,13 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Fixed
-- Serial echo-cancel no longer discards a fast Node's R that starts while
-  Host TXEN is still draining (issue #112). Discard is limited to one
-  own-frame wire length (Auto still arms permanently after the first
-  RX-during-TX). Dense full-T empty 250 ms gates with R on the wire were
-  the bench symptom.
+- Serial echo-cancel discards at most one own-frame wire length of
+  self-echo (issue #112). A Node cannot begin R until it has ETX; the
+  reply arrives after Host TXEN deasserts (interop 2.3.15 / E10), so
+  post-deassert RX must not be treated as endless echo. Auto still arms
+  permanently after the first RX-during-TX. Dense full-T empty 250 ms
+  gates with R on the wire were the bench symptom. The one-char drain
+  hold for trailing ETX is unchanged.
 
 ### Added
 - Host dense full-T instrumentation (issue #112): `kExchangeComplete`

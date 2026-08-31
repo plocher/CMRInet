@@ -50,12 +50,12 @@ void SerialCMRITransport::begin() {
 
 void SerialCMRITransport::tick(uint32_t nowMs) {
   lastTickMs_ = nowMs;
-  // Tick consistency (ADR-0003): pumpTransmit_ may detect
-  // drain-complete mid-tick and latch pendingIdle_ without
-  // flipping txState_, so pumpReceive_ sees the pre-flip
-  // state (kDraining) for the whole tick and the echo
-  // discard stays active. The flip commits after
-  // pumpReceive_ — one truth, no mid-tick race.
+  // Tick consistency (ADR-0003 / #112): pumpTransmit_ may detect
+  // drain-complete mid-tick, drop TXEN, and latch pendingIdle_
+  // without flipping txState_ yet. pumpReceive_ then finishes any
+  // remaining own-frame echo budget and feeds post-deassert RX
+  // (a prompt R arrives only after TXEN falls — E10). The flip
+  // commits after pumpReceive_ — one truth, no mid-tick race.
   pendingIdle_ = false;
   pumpTransmit_(nowMs);
   pumpReceive_(nowMs);
@@ -82,9 +82,10 @@ bool SerialCMRITransport::sendPacket(const CMRIPacket& packet) {
   txLength_ = n;
   txWritten_ = 0;
   // Own-frame echo budget: discard at most one wire-frame of RX while
-  // TXEN is up. A fast Node may start R before TXEN drops (interop
-  // 2.3.15); those bytes are not echo and must reach the decoder
-  // (issue #112 dense-T empty-gate misses).
+  // transmitting (2-wire self-echo under misconfigured !RE). A Node
+  // cannot begin R until it has received ETX, so a legitimate reply
+  // arrives only after TXEN deasserts (interop 2.3.15 / E10) — never
+  // treat post-deassert RX as echo (issue #112).
   echoDiscardRemaining_ = n;
   stats_.packetsSent++;
 
@@ -140,9 +141,12 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
     // only know their buffer; the port's own answer covers late
     // chunks still sitting in its FIFO (see header).
     //
-    // TXEN drops now (wire discipline). txState_ flip is deferred via
-    // pendingIdle_ so pumpReceive_ can finish the own-frame echo budget
-    // on this tick, then accept any surplus as early Node R (#112).
+    // TXEN drops now (wire discipline). The one-char drain hold above
+    // covers trailing ETX in the shift register. txState_ flip is
+    // deferred via pendingIdle_ so pumpReceive_ can finish any remaining
+    // own-frame echo budget on this tick, then accept post-deassert RX
+    // (including a prompt R) rather than treating the whole tick as
+    // still-echo (issue #112).
     if (timeReached(nowMs, drainDueMs_) && port_.transmitDrained()) {
       port_.setTransmitEnable(false);
       pendingIdle_ = true;  // commit the flip after pumpReceive_
@@ -154,13 +158,13 @@ void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
   // Echo cancellation (issue #104, ADR-0003; issue #112):
   // on a 2-wire bus with !RE tied active, the Host hears its own
   // TX echo. Discard only that echo — at most one wire-frame of
-  // RX per send (echoDiscardRemaining_) — and only while TXEN is
-  // still actually asserted.
+  // RX per send (echoDiscardRemaining_).
   //
-  // A fast Node may begin R while the Host's ETX still drains
-  // (interop 2.3.15, E10). Those bytes are not echo. Discarding
-  // the entire TXEN window ate legitimate replies under dense full-T
-  // and produced empty 250 ms gates with R present on the wire.
+  // Wire physics / interop 2.3.15 + E10: a Node cannot begin R until it
+  // has received the poll's ETX. The reply therefore arrives at the Host
+  // after TXEN deasserts, not while ETX drains. Whole-window discard that
+  // kept treating the drain-complete tick as "still transmitting" could
+  // throw away a prompt post-deassert R (dense full-T empty gates, #112).
   //
   // Modes (ADR-0003):
   // - AlwaysOn: length-limited discard of own-frame echo.
@@ -168,9 +172,8 @@ void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
   // - AlwaysOff: never discard; feed the decoder.
   //
   // Discard window = TXEN up, OR the drain-complete tick (pendingIdle_)
-  // while own-frame budget remains. After TXEN falls, finish eating the
-  // rest of our echo, then feed any surplus (early Node R). Fully idle
-  // ticks with no budget left feed everything.
+  // while own-frame budget remains. After the budget is done (or TXEN is
+  // down with no residual budget), feed RX to the decoder.
   const bool txenUp =
       (txState_ != TxState::kIdle) && !pendingIdle_;
   const bool discardActive =
@@ -186,8 +189,8 @@ void SerialCMRITransport::pumpReceive_(uint32_t nowMs) {
         // Own-frame echo: throw away, do not feed the decoder.
         --echoDiscardRemaining_;
       } else if (discardActive) {
-        // Budget exhausted: early Node R (or noise past the echo).
-        // Feed the decoder — this is the #112 fix vs whole-window discard.
+        // Budget exhausted (or post-deassert surplus): not own-frame echo.
+        // Feed the decoder — #112 vs discarding the whole TXEN-shaped window.
         if (decoder_.feed(static_cast<uint8_t>(byte), nowMs)) {
           drainDecoder_();
         }

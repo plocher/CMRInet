@@ -149,8 +149,9 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.10.0 (#112): dense full-T Host belief timeline — live miss/reject/
 // xchg/unsolicited during `run`, gate/kind on those lines, transport
 // snapshot on miss/reject, T body `fp` on packet traces.
-// 0.10.1 (#112): echo-cancel discards only own-frame wire length so a
-// fast Node R that starts while ETX drains is not eaten (interop 2.3.15).
+// 0.10.1 (#112): echo-cancel discards only own-frame wire length;
+// post-deassert RX (incl. prompt R after ETX, interop 2.3.15 / E10)
+// is not treated as endless self-echo. One-char drain hold unchanged.
 constexpr const char* kVersion = "0.10.1"; // #112 own-frame echo budget
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
