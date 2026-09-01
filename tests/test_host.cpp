@@ -460,6 +460,39 @@ static void test_reply_gate_opens_at_send_complete_not_accept(void) {
   TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().noReplies);
 }
 
+// issue #112: a fast Node's R can land in the RX queue while the Host is
+// still in kAwaitSendComplete (transport.tick completed TX this same
+// tick; drainReceive_ runs before runSchedule_ arms the reply gate).
+// That R is the solicited poll reply — not unsolicited — and must close
+// the exchange without a 250 ms false miss.
+static void test_poll_r_accepted_during_await_send_complete(void) {
+  Rig rig;
+  ListenerLog log;
+  rig.host.onEvent(recordEvent, &log);
+  uint32_t base = primeToPoll(rig);
+
+  // Hold sendComplete false for a few ms so drainReceive_ sees the R
+  // while phase is still kAwaitSendComplete.
+  rig.transport.setSendLatencyMs(5);
+  runUntil(rig.host, base, base);  // P accepted; not yet complete
+  TEST_ASSERT_EQUAL_UINT32(1, rig.host.statistics().pollsSent);
+
+  const CMRIHostStatistics before = rig.host.statistics();
+  TEST_ASSERT_TRUE(rig.transport.injectPacketAt(
+      makePacket(5, 'R', kInputsA5, sizeof(kInputsA5)), base + 2));
+  runUntil(rig.host, base + 1, base + 6);
+
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+      before.unsolicitedPackets, rig.host.statistics().unsolicitedPackets,
+      "fast R during kAwaitSendComplete must not count as unsolicited");
+  TEST_ASSERT_EQUAL_INT(0, log.unsolicited);
+  TEST_ASSERT_EQUAL_UINT32(1, rig.node->statistics().exchanges);
+  TEST_ASSERT_EQUAL_UINT32(0, rig.node->statistics().noReplies);
+  TEST_ASSERT_EQUAL_INT(1, log.accepted);
+  TEST_ASSERT_EQUAL_HEX8(0xA5, rig.node->inputByte(0));
+  TEST_ASSERT_EQUAL(RemoteNodeState::kOnline, rig.node->state());
+}
+
 // ------------------------------------------------------- reply verification
 
 static void test_wrong_ua_reply_is_rejected(void) {
@@ -2866,6 +2899,7 @@ int main(void) {
   RUN_TEST(test_default_reply_gate_is_250ms);
   RUN_TEST(test_policy_overrides_reply_gate);
   RUN_TEST(test_reply_gate_opens_at_send_complete_not_accept);
+  RUN_TEST(test_poll_r_accepted_during_await_send_complete);
   RUN_TEST(test_wrong_ua_reply_is_rejected);
   RUN_TEST(test_wrong_mt_reply_is_rejected);
   RUN_TEST(test_wrong_length_reply_counts_error_without_commit);

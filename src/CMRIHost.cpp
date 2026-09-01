@@ -391,8 +391,19 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
       rejectIllegalWireUA_(rx, nowMs);
       continue;
     }
-    if (phase_ != Phase::kAwaitWait ||
-        outboundKind_ != OutboundKind::kPoll) {
+    // Outstanding POLL owns the next matching R once P is the in-flight
+    // exchange — including kAwaitSendComplete, before the reply gate is
+    // armed (issue #112). A fast Node's R can sit in the RX queue in the
+    // same tick transport.tick() finishes TX; drainReceive_ runs before
+    // runSchedule_ advances phase to kAwaitWait. Treating that R as
+    // unsolicited then timing out the gate is a false miss.
+    //
+    // Still unsolicited: idle, I settle, T gap, or any non-poll outbound.
+    const bool pollInFlight =
+        outboundKind_ == OutboundKind::kPoll &&
+        (phase_ == Phase::kAwaitWait ||
+         phase_ == Phase::kAwaitSendComplete);
+    if (!pollInFlight) {
       // Unsolicited: counted always; event carries phase/kind so a dense-T
       // capture can pair "R on wire" with Host belief (issue #112).
       ++statistics_.unsolicitedPackets;
@@ -409,8 +420,6 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
           event.gateArmedMs = gateArmedMs_;
           event.gateMs = nowMs - gateArmedMs_;
         }
-        // Attribute only when a live exchange still owns a node; otherwise
-        // leave node null (idle / orphan / pre-send).
         if (!exchangeOrphaned_ && phase_ != Phase::kIdle &&
             occupied_[polledIndex_]) {
           event.node = &nodes_[polledIndex_];
@@ -429,6 +438,11 @@ void CMRIHost::drainReceive_(uint32_t nowMs) {
       // VALIDATION: Design v1.2 D5: any reply to an orphaned exchange is
       // discarded and nothing is attributed to any node.
       continue;
+    }
+    // R arrived before runSchedule_ armed the gate (same-tick complete).
+    // Stamp the arm so turnaround is defined, not nowMs - 0.
+    if (phase_ == Phase::kAwaitSendComplete && gateArmedMs_ == 0) {
+      gateArmedMs_ = nowMs;
     }
     RemoteNodeHandle& node = nodes_[polledIndex_];
     // Verify the reply is from the node we polled and that it is an R.

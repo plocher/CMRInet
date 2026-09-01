@@ -136,18 +136,23 @@ void SerialCMRITransport::pumpTransmit_(uint32_t nowMs) {
     }
   }
   if (txState_ == TxState::kDraining) {
-    // Step 3 and 4: flush to full drain, then deassert at once. Both
-    // detectors must agree: the wire-time estimate covers ports that
-    // only know their buffer; the port's own answer covers late
-    // chunks still sitting in its FIFO (see header).
+    // Step 3 and 4: flush to full drain, then deassert at once.
     //
-    // TXEN drops now (wire discipline). The one-char drain hold above
-    // covers trailing ETX in the shift register. txState_ flip is
-    // deferred via pendingIdle_ so pumpReceive_ can finish any remaining
-    // own-frame echo budget on this tick, then accept post-deassert RX
-    // (including a prompt R) rather than treating the whole tick as
-    // still-echo (issue #112).
-    if (timeReached(nowMs, drainDueMs_) && port_.transmitDrained()) {
+    // Hardware-truth ports (Esp32SerialPort): transmitDrained() is the
+    // shift register. Trust it alone — the wire-time estimate must not
+    // veto silicon (issue #112). That is why Esp32SerialPort exists.
+    //
+    // Estimate-only ports: require estimate elapsed AND transmitDrained()
+    // (buffer empty may be optimistic by ignorance; estimate covers the
+    // shift register the port cannot see).
+    //
+    // txState_ flip is deferred via pendingIdle_ so pumpReceive_ can
+    // finish any remaining own-frame echo budget this tick.
+    const bool drained = port_.transmitDrained();
+    const bool estimateOk = timeReached(nowMs, drainDueMs_);
+    const bool done =
+        drained && (port_.hardwareTransmitDrain() || estimateOk);
+    if (done) {
       port_.setTransmitEnable(false);
       pendingIdle_ = true;  // commit the flip after pumpReceive_
     }
