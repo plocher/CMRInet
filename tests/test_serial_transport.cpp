@@ -68,6 +68,7 @@ class FakeSerialPort : public SerialPort {
   }
 
   bool transmitDrained() const override { return drained_; }
+  bool hardwareTransmitDrain() const override { return hwDrain_; }
 
   void setTransmitEnable(bool enabled) override {
     txen_ = enabled;
@@ -89,6 +90,7 @@ class FakeSerialPort : public SerialPort {
 
   void setWriteLimit(size_t limit) { writeLimit_ = limit; }  // 0 = unlimited
   void setDrained(bool drained) { drained_ = drained; }
+  void setHardwareTransmitDrain(bool hw) { hwDrain_ = hw; }
   void setHardwareErrorCount(uint32_t count) { hardwareErrors_ = count; }
 
   bool txenAsserted() const { return txen_; }
@@ -116,6 +118,7 @@ class FakeSerialPort : public SerialPort {
   size_t eventCount_ = 0;
   size_t writeLimit_ = 0;  // 0 = accept everything
   bool drained_ = true;
+  bool hwDrain_ = false;  // when true, transport trusts drain without estimate
   bool txen_ = false;
   uint32_t byteMicros_ = 500;  // 2000 chars/s: easy math (6 bytes = 3 ms)
   uint32_t hardwareErrors_ = 0;
@@ -214,6 +217,42 @@ static void test_txen_holds_until_port_reports_drained(void) {
   t.tick(kPollWireMs + 6);
   TEST_ASSERT_TRUE(t.sendComplete());
   TEST_ASSERT_FALSE(port.txenAsserted());
+}
+
+// issue #112: hardware-truth drain wins without waiting out the estimate.
+static void test_txen_drops_on_hardware_drain_before_estimate(void) {
+  FakeSerialPort port;
+  port.setHardwareTransmitDrain(true);
+  // Hold the shift register occupied through send so pumpTransmit_ inside
+  // sendPacket cannot finish the drain before the estimate would matter.
+  port.setDrained(false);
+  SerialCMRITransport t(port);
+  t.begin();
+  t.tick(0);
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  TEST_ASSERT_TRUE(port.txenAsserted());
+  TEST_ASSERT_FALSE(t.sendComplete());
+
+  // Estimate for a 6-byte frame is kPollWireMs (+ oneChar); at t=0 the
+  // estimate has not elapsed. HW drain true + drained → TXEN drops anyway.
+  port.setDrained(true);
+  t.tick(0);
+  TEST_ASSERT_TRUE_MESSAGE(t.sendComplete(),
+                           "HW drain should complete without estimate wait");
+  TEST_ASSERT_FALSE(port.txenAsserted());
+
+  // Control: without HW drain, the same t=0 tick must still hold TXEN.
+  FakeSerialPort estimateOnly;
+  estimateOnly.setDrained(false);
+  SerialCMRITransport t2(estimateOnly);
+  t2.begin();
+  t2.tick(0);
+  TEST_ASSERT_TRUE(t2.sendPacket(makePacket(5, 'P')));
+  estimateOnly.setDrained(true);
+  t2.tick(0);
+  TEST_ASSERT_FALSE_MESSAGE(t2.sendComplete(),
+                            "estimate-only port must wait out wire time");
+  TEST_ASSERT_TRUE(estimateOnly.txenAsserted());
 }
 
 static void test_send_backpressure_while_draining(void) {
@@ -692,6 +731,7 @@ int main(void) {
   RUN_TEST(test_idle_reports_send_complete);
   RUN_TEST(test_send_writes_frame_with_txen_discipline);
   RUN_TEST(test_txen_holds_until_port_reports_drained);
+  RUN_TEST(test_txen_drops_on_hardware_drain_before_estimate);
   RUN_TEST(test_send_backpressure_while_draining);
   RUN_TEST(test_send_rejects_oversized_body);
   RUN_TEST(test_chunked_write_completes_across_ticks);

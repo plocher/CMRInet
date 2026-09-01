@@ -26,10 +26,11 @@
 //
 // This subclass answers transmitDrained() from the UART hardware:
 // uart_wait_tx_done() with a zero timeout is a non-blocking poll that
-// reports whether the TX FIFO and shift register are both empty. The
-// transport still ANDs this with its wire-time estimate; TXEN now
-// holds through any stall and drops as soon as the last stop bit has
-// left the wire.
+// reports whether the TX FIFO and shift register are both empty.
+// hardwareTransmitDrain() is true, so SerialCMRITransport drops TXEN
+// on that answer alone (issue #112) — the wire-time estimate is not a
+// second veto on register truth. Stalls that delay the UART keep
+// transmitDrained() false until the last stop bit has left the wire.
 //
 // Platform guard: the whole file is inside #if defined(ARDUINO) &&
 // defined(ARDUINO_ARCH_ESP32). That is a platform guard on a
@@ -57,10 +58,9 @@
 namespace CMRInet {
 
 /// StreamSerialPort whose drain answer is the ESP32 UART's own
-/// TX-done status instead of the software buffer level. The transport's
-/// wire-time estimate still ANDs with this answer (Design v1.1 D13: the
-/// estimate never outlives a real drain, so the conjunction costs
-/// nothing and covers ports that are optimistic by ignorance).
+/// TX-done status instead of the software buffer level. Reports
+/// hardwareTransmitDrain() so the transport trusts this answer without
+/// waiting out the software wire-time estimate (issue #112).
 ///
 /// The constructor takes a HardwareSerial and auto-detects the UART
 /// number (&Serial1 → UART_NUM_1, etc.), so the sketch never passes
@@ -115,6 +115,9 @@ class Esp32SerialPort : public StreamSerialPort {
   bool transmitDrained() const override {
     return uart_wait_tx_done(uartNum_, 0) == ESP_OK;
   }
+
+  /// Shift-register complete — transport may drop TXEN on this alone.
+  bool hardwareTransmitDrain() const override { return true; }
 
  private:
   HardwareSerial& hwStream_;

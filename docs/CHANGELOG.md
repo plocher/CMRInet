@@ -5,6 +5,16 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Fixed
+- Host accepts a matching R while an outstanding P is still in
+  `kAwaitSendComplete` (issue #112). `drainReceive_` runs before
+  `runSchedule_` arms the reply gate; a fast Node's R in that window was
+  counted unsolicited and the gate then timed out as a false miss (UA31
+  dual-node bench). Orphaned in-flight polls still discard the reply
+  without attribution (D5).
+- Serial TXEN drain: when `SerialPort::hardwareTransmitDrain()` is true
+  (Esp32SerialPort), `transmitDrained()` alone ends the drain — the
+  wire-time estimate no longer vetoes shift-register truth (issue #112).
+  Estimate-only ports still require estimate AND buffer empty.
 - Serial echo-cancel discards at most one own-frame wire length of
   self-echo (issue #112). A Node cannot begin R until it has ETX; the
   reply arrives after Host TXEN deasserts (interop 2.3.15 / E10), so

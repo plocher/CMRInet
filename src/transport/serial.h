@@ -18,14 +18,13 @@
 // until the last byte leaves the shift register, then drop TXEN at
 // once. Nothing here blocks (Design v1.1 D6), so "flush" is a
 // non-blocking drain detector polled from tick(): TXEN drops when the
-// wire-time estimate for the accepted bytes has elapsed AND the port
-// reports its transmit path empty. A port with hardware drain
-// knowledge tightens the timing; a buffer-only port is covered by the
-// estimate, which includes the shift register. The conjunction is
-// kept even for hardware-truth ports: the estimate never outlives a
-// real drain, so it costs nothing and covers ports whose drain answer
-// is optimistic by ignorance (Design v1.1 D13; see the seam contract
-// on SerialPort::transmitDrained()).
+// port reports transmitDrained(). Hardware-truth ports
+// (hardwareTransmitDrain() true, e.g. Esp32SerialPort) trust that
+// answer alone — the wire-time estimate must not veto shift-register
+// truth (issue #112). Estimate-only ports still require the estimate
+// elapsed AND buffer empty: buffer empty may be optimistic by
+// ignorance, and the estimate covers the shift register the port
+// cannot see (Design v1.1 D13; see SerialPort::transmitDrained()).
 //
 // Receive never waits for transmit:
 // VALIDATION: Interop v1.1 2.3.15: a fast Node begins its reply while

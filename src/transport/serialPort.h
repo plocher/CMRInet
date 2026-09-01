@@ -51,15 +51,20 @@ class SerialPort {
   /// never be optimistic by design: never return true while the port's
   /// hardware still holds untransmitted bits the port can see. A port
   /// with real TX-complete knowledge (TXC flag, uart_wait_tx_done poll)
-  /// answers for the shift register too. The transport ANDs this with
-  /// its wire-time estimate, so a hardware-truth port tightens TXEN
-  /// turnaround and survives runtime stalls that defeat the estimate
-  /// (Design v1.1 D13; the estimate never outlives a real drain, so the
-  /// conjunction costs nothing).
+  /// answers for the shift register too and reports
+  /// hardwareTransmitDrain() == true so the transport may drop TXEN on
+  /// this answer alone (issue #112): the estimate is a fallback for
+  /// ignorant ports, not a second veto on silicon truth.
   /// VALIDATION: Interop v1.1 2.3.14: flush until the last byte leaves
   /// the shift register, then drop TXEN at once. This query is the
   /// non-blocking drain detector behind that flush (Design v1.1 D6).
   virtual bool transmitDrained() const = 0;
+
+  /// True when transmitDrained() is shift-register / hardware complete,
+  /// not merely "software TX buffer empty." Default false: the transport
+  /// then requires its wire-time estimate as well. Esp32SerialPort
+  /// overrides true — that is why the port exists.
+  virtual bool hardwareTransmitDrain() const { return false; }
 
   /// Drive the RS-485 driver-enable line. A port on a converter that
   /// manages direction itself (auto-direction hardware) implements
