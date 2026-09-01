@@ -152,7 +152,9 @@ constexpr const char* kImage = "xiao_host_tracer";
 // 0.10.1 (#112): echo-cancel discards only own-frame wire length;
 // post-deassert RX (incl. prompt R after ETX, interop 2.3.15 / E10)
 // is not treated as endless self-echo. One-char drain hold unchanged.
-constexpr const char* kVersion = "0.10.1"; // #112 own-frame echo budget
+// 0.10.2 (#112): accept matching R while P is still kAwaitSendComplete;
+// Esp32 hardwareTransmitDrain ends TXEN without estimate veto.
+constexpr const char* kVersion = "0.10.2"; // #112 fast-R + HW drain
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_BAUD,
