@@ -2931,11 +2931,7 @@ void test_cpnode_opts_on_wire(void) {
 void test_host_node_spec_cpnode(void) {
   MockCMRITransport transport;
   CMRIHost host(transport);
-  CpnodeInit init;
-  init.inputBytes = 2;
-  init.outputBytes = 2;
-  init.opts1 = 0x01;
-  HostNodeSpec spec = hostNodeCpnode(11, init);
+  HostNodeSpec spec = hostNodeCpnode(11, CpnodeInit(2, 2, 0x01));
   TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(spec));
   host.begin();
   host.tick(0);

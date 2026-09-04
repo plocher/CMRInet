@@ -58,10 +58,14 @@ inline bool nodeTypeFromNdp(char ndp, NodeType& out) {
 
 /// CPNODE ('C') init — interop E3 / JMRI dialect.
 struct CpnodeInit {
-  uint16_t inputBytes = 0;   ///< NI
-  uint16_t outputBytes = 0;  ///< NO
-  uint8_t opts1 = 0;         ///< USECMRIX|SENDEOT|USEBCC
-  uint8_t opts2 = 0;         ///< reserved
+  uint16_t inputBytes;  ///< NI
+  uint16_t outputBytes; ///< NO
+  uint8_t opts1;        ///< USECMRIX|SENDEOT|USEBCC
+  uint8_t opts2;        ///< reserved
+
+  CpnodeInit() : inputBytes(0), outputBytes(0), opts1(0), opts2(0) {}
+  CpnodeInit(uint16_t ni, uint16_t no, uint8_t o1 = 0, uint8_t o2 = 0)
+      : inputBytes(ni), outputBytes(no), opts1(o1), opts2(o2) {}
 };
 
 /// SMINI ('M') init — SPS INITSMINI / JMRI SMINI.
@@ -73,9 +77,12 @@ struct SminiInit {
   static constexpr uint8_t kCtCount = 6;
 
   /// Number of 2-lead searchlight pairs (0..24). NS==0 omits CT bytes.
-  uint8_t ns = 0;
+  uint8_t ns;
   /// CT(1..6) when ns > 0; ignored when ns == 0.
-  uint8_t ct[kCtCount] = {};
+  uint8_t ct[kCtCount];
+
+  SminiInit() : ns(0) { memset(ct, 0, sizeof(ct)); }
+  explicit SminiInit(uint8_t ns_) : ns(ns_) { memset(ct, 0, sizeof(ct)); }
 };
 
 /// USIC ('N') or SUSIC ('X') init — SPS INITUSIC / JMRI.
@@ -83,10 +90,19 @@ struct SminiInit {
 struct UsicFamilyInit {
   static constexpr uint8_t kMaxNs = 16;
 
-  uint8_t ns = 1;              ///< number of 4-card sets (1..16)
-  uint8_t ct[kMaxNs] = {};     ///< CT(1..ns)
-  uint16_t inputBytes = 0;     ///< Host image size (not on classic I body)
-  uint16_t outputBytes = 0;    ///< Host image size
+  uint8_t ns;              ///< number of 4-card sets (1..16)
+  uint8_t ct[kMaxNs];      ///< CT(1..ns)
+  uint16_t inputBytes;     ///< Host image size (not on classic I body)
+  uint16_t outputBytes;    ///< Host image size
+
+  UsicFamilyInit()
+      : ns(1), inputBytes(0), outputBytes(0) {
+    memset(ct, 0, sizeof(ct));
+  }
+  UsicFamilyInit(uint8_t ns_, uint16_t ni, uint16_t no)
+      : ns(ns_), inputBytes(ni), outputBytes(no) {
+    memset(ct, 0, sizeof(ct));
+  }
 };
 
 /// Maximum I data-body length any supported builder emits.
