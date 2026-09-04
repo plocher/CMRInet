@@ -198,7 +198,7 @@ Captures + manifests under
 `extras/bench/validation/two_wire/data/results.20260828.echo_cancel_{off,on}`.
 Reproduce with `extras/bench/validation/two_wire/gather_echo_cancel.py`
 (`--echocancel on|off`, `--no-flash`) and `analyze_echo_cancel.py`.
-The probe is `examples/XiaoBenchEchoCancel`.
+The probe is `extras/bench/XiaoBenchEchoCancel`.
 
 ## Phase C — real node on the 2-wire bus (2026-08-28)
 

@@ -7,7 +7,7 @@
 // configures the UART with the baud, framing, and pin mapping the
 // sketch passed at construction.
 //
-// Origin: born sketch-local in examples/XiaoHostTracer during the #21
+// Origin: born sketch-local in examples/TracerHost during the #21
 // bench (wire-tap verified), promoted into src/ by #27 because
 // hardware TX-complete truth is the correct shipped behavior for every
 // ESP32 target, not an R&D-only fix. Promotion is a relocation: the

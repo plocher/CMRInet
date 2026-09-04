@@ -151,7 +151,7 @@ For this text-only panel: **U8x8 text mode** is the cleanest real fix
 — cuts per-draw transfer 10–100×, keeps the raw latency diagnostic,
 and is contained to each sketch's draw function (the `HostStatusPanel`
 already returns strings, so the metric logic is driver-agnostic). The
-scope of a U8x8 migration touches SimpleHost, XiaoHostTracer, and
+scope of a U8x8 migration touches SimpleHost, TracerHost, and
 XiaoSniffer (all have OLEDs); the cpNode `Xiao_I2C` node is in a
 different library/repo and should be a separate follow-up.
 

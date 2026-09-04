@@ -5,8 +5,8 @@
 # Usage:
 #   flash_and_probe.sh [sketch] [host_port]
 #
-#   sketch    examples/ subdirectory name (default: XiaoHostTracer)
-#             known: XiaoHostTracer, SimpleHost
+#   sketch    examples/ or extras/bench/ subdirectory name (default: TracerHost)
+#             known: TracerHost, SimpleHost, XiaoBenchCal, ...
 #   host_port /dev/cu.usbmodem* for the Host board
 #             (default: resolved from bench.json via the bench CLI)
 #
@@ -23,15 +23,22 @@ set -e
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$BENCH_DIR/../.." && pwd)"
 LIBS_DIR="/Users/jplocher/Dropbox/Arduino/libraries"
-SKETCH="${1:-XiaoHostTracer}"
+SKETCH="${1:-TracerHost}"
 if [ -n "$2" ]; then
     HOST_PORT="$2"
 else
     HOST_PORT="$("$BENCH_DIR/bench" resolve --role Host)"
 fi
 FQBN="esp32:esp32:XIAO_ESP32C6"
+# Resolve sketch under examples/ or extras/bench/ (bench jigs left examples/).
+if [ -f "$REPO_DIR/examples/$SKETCH/$SKETCH.ino" ]; then
+    SKETCH_INO="$REPO_DIR/examples/$SKETCH/$SKETCH.ino"
+elif [ -f "$REPO_DIR/extras/bench/$SKETCH/$SKETCH.ino" ]; then
+    SKETCH_INO="$REPO_DIR/extras/bench/$SKETCH/$SKETCH.ino"
+else
+    SKETCH_INO="$REPO_DIR/examples/$SKETCH/$SKETCH.ino"
+fi
 BUILD_DIR="/tmp/${SKETCH}_build"
-SKETCH_INO="$REPO_DIR/examples/$SKETCH/$SKETCH.ino"
 VENV="$BENCH_DIR/.venv/bin/python"
 
 # Library paths the compile step needs. The CMRInet library lives outside the

@@ -57,7 +57,7 @@ def _display(ser, line: int, message: str) -> None:
 
 
 def _await_end_capture(ser, secs: int, timeout_slop_s: float = 5.0) -> bool:
-    """Wait for END CAPTURE marker from XiaoHostTracer."""
+    """Wait for END CAPTURE marker from TracerHost."""
     deadline = time.time() + secs + timeout_slop_s
     while time.time() < deadline:
         line = ser.readline().decode("utf-8", errors="replace").strip()
@@ -159,7 +159,7 @@ def main() -> int:
         # its physical 3/3. Its replies carry the wrong geometry and are
         # rejected — this reproduces the #80 condition on hardware.
         _tracer_client.send_command(
-            ser, f"node add {misconfigured_ua} {args.misconfigured_in} {args.misconfigured_out}"
+            ser, f"node add {misconfigured_ua} C {args.misconfigured_in} {args.misconfigured_out}"
         )
         _tracer_client.send_command(ser, f"node enable {misconfigured_ua}")
         _tracer_client.flush_lines(ser)

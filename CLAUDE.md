@@ -20,7 +20,7 @@ This library implements the CMRInet protocol suite, designed around the concept 
 *   `src/`: Contains the core implementation of the codec, the polled Host and Node Engines, strategy-neutral handle types, and the shared testbed shell.
 *   `src/transport/`: Houses all transport implementations (e.g., `serial.h`, `mock.h`). The umbrella `CMRITransport.h` manages the seam, and sketches include the chosen implementation.
 *   `docs/DESIGN.md`: The authoritative source for the architectural decisions (D1-D17), layer model, and seam contracts.
-*   `examples/`: Contains front-door tutorials (`SimpleHost.ino`, `SimpleNode.ino`) and specialized testbed tools (`XiaoHostTracer.ino`, `XiaoSniffer.ino`).
+*   `examples/`: Contains front-door tutorials (`SimpleHost.ino`, `SimpleNode.ino`) and specialized testbed tools (`TracerHost.ino`, `XiaoSniffer.ino`).
 *   `tests/`: Location for unit tests run on the desktop testbed, independent of Arduino dependencies.
 
 **4. Naming Convention:**
@@ -48,7 +48,7 @@ extras/bench/.venv/bin/python extras/bench/<script>.py
 *   **Execution:** Specific scripts for simultaneous capture, decoding, and validation are provided:
     *   **Frame Decoding:** \`extras/bench/dongle_decode.py\` decodes raw bytes from the RS485 dongle.
     *   **Three-Witness Capture:** \`extras/bench/three.py\` performs simultaneous capture across Xiao sniffers and the dongle for A/B comparison.
-    *   **Flash and Probe:** \`extras/bench/flash_and_probe.sh\` flashes a sketch (e.g., \`XiaoHostTracer\` or \`SimpleHost\`), executes a full witness capture cycle, and prints a VERDICT block to report test success or failure.
+    *   **Flash and Probe:** \`extras/bench/flash_and_probe.sh\` flashes a sketch (e.g., \`TracerHost\` or \`SimpleHost\`), executes a full witness capture cycle, and prints a VERDICT block to report test success or failure.
 
 **3. Workflow Note:**
 A typical bug reproduction cycle involves using \`extras/bench/flash_and_probe.sh\` to run a target sketch and observing the output's VERDICT block to determine if the expected fault is reproduced.

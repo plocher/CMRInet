@@ -3,7 +3,7 @@
 
 #include "unity.h"
 // Use relative path since it's an example sketch
-#include "../examples/XiaoHostTracer/GeneratorParser.h"
+#include "../examples/TracerHost/GeneratorParser.h"
 
 void setUp(void) {}
 void tearDown(void) {}

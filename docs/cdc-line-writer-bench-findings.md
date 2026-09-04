@@ -7,7 +7,7 @@ captures what the instruments showed. Project-private and experimental.
 ## What was under test
 
 The `writeCdcLine` chunked-write logic, relocated verbatim from
-`examples/XiaoHostTracer/XiaoHostTracer.ino` into
+`examples/TracerHost/TracerHost.ino` into
 `src/testbed/CdcLineWriter.h` behind a `CdcConsole` seam. The desktop
 tests in `tests/test_cdc_line.cpp` simulate a full buffer with a fake.
 The bench question was whether the #86 fix — the terminator's room check
@@ -20,7 +20,7 @@ the ring is full.
 The `rosonway` bench (six roles, resolved from `extras/bench/bench.json`
 by USB serial):
 
-- Host — `/dev/cu.usbmodem41101` — `XiaoHostTracer` v0.9.0, feature
+- Host — `/dev/cu.usbmodem41101` — `TracerHost` v0.9.0, feature
   branch `feature/issue-99-writecdcline-testable-header`
 - Node 30, Node 31 — physical bench nodes
 - Sniffer TX, Sniffer RX — `XiaoSniffer`, JSON lines over USB CDC
@@ -28,9 +28,9 @@ by USB serial):
 
 All six roles reported OK before the run (`extras/bench/bench list`).
 
-## Test 1 — flash_and_probe.sh XiaoHostTracer (three-witness)
+## Test 1 — flash_and_probe.sh TracerHost (three-witness)
 
-- Command: `extras/bench/flash_and_probe.sh XiaoHostTracer`
+- Command: `extras/bench/flash_and_probe.sh TracerHost`
 - Pre-flight sketch-lint: PASS
 - Compile and upload: OK (340878 bytes, 26% flash)
 - Boot settle: completed, no `setup()` hang
@@ -46,7 +46,7 @@ wiring/power.`
 
 ### Why this is not a #99 regression
 
-The host never polled. `XiaoHostTracer.ino` defers `host.begin()` until
+The host never polled. `TracerHost.ino` defers `host.begin()` until
 the first verb arrives (`lazyBegin()`), and `extras/bench/three.py`
 captures only the two sniffers and the dongle — it never opens the Host
 CDC port. With no CDC reader, no verb arrives, `lazyBegin()` never

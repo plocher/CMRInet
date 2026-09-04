@@ -92,7 +92,7 @@ void usage(const char* argv0) {
           "  status | status <UA>\n"
           "  quiesce <UA> | resume <UA> | forcetx <UA>\n"
           "  setbit <UA> <bit> <0|1> | writeoutputs <UA> <hex>\n"
-          "  node add <UA> <in> <out> | node delete <UA>\n"
+          "  node add <UA> <type> ... | node delete <UA>\n"
           "  node geometry <UA> <in> <out>\n"
           "  node enable <UA> | node disable <UA>\n"
           "  quit\n",

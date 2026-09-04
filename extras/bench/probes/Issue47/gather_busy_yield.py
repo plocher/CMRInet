@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Harness for #47 backoff-under-loop-stall sweep, using XiaoHostTracer over CDC.
+Harness for #47 backoff-under-loop-stall sweep, using TracerHost over CDC.
 Replaces the old run.sh / sweep_47.sh which used compile-time configuration.
 """
 import argparse
@@ -20,9 +20,9 @@ def _connect_and_configure(port: str):
     if not _tracer_client.sync_and_validate_boot(ser):
         raise RuntimeError("Boot validation failed (timeout or wrong image).")
     print("Configuring topology for session...")
-    ser.write(b"node add 30 7 7\n")
+    ser.write(b"node add 30 C 7 7\n")
     time.sleep(0.1)
-    ser.write(b"node add 31 4 4\n")
+    ser.write(b"node add 31 C 4 4\n")
     time.sleep(0.1)
     _tracer_client.flush_lines(ser)
     return ser

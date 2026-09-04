@@ -1,5 +1,4 @@
 // display.cpp — SSD1306 OLED status panel. See display.h.
-
 #include "display.h"
 
 #include <Adafruit_GFX.h>

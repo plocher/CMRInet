@@ -73,8 +73,14 @@ class CMRINode {
   void config(const CMRINodeConfig& cfg) {
     if (!began_) {
       config_ = cfg;
-      input_.setLength(cfg.inputBytes);
-      output_.setLength(cfg.outputBytes);
+      size_t inputLen = (cfg.inputBytes <= kMaxInputBytes)
+                          ? cfg.inputBytes
+                          : kMaxInputBytes;
+      size_t outputLen = (cfg.outputBytes <= kMaxOutputBytes)
+                          ? cfg.outputBytes
+                          : kMaxOutputBytes;
+      input_.setLength(inputLen);
+      output_.setLength(outputLen);
     }
   }
 
@@ -132,6 +138,10 @@ class CMRINode {
 
   /// Set one input bit. Bit 0 is the LSB of the named byte.
   /// Out-of-range indexes are ignored.
+  //  The input image is not guaranteed to have storage 
+  //  for all bits a user might want to set:
+  //    setInputBit(10, 0, true) when only inputBytes = 2
+  //    are configured will see no effect
   void setInputBit(size_t byte, size_t bit, bool v) {
     input_.setBit(byte, bit, v);
   }

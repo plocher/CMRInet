@@ -67,9 +67,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # The sketches the gate covers. Add new examples here.
-DEFAULT_SKETCHES = ("SimpleHost", "SimpleNode", "XiaoHostTracer", "XiaoSniffer",
-                     "TracerNode", "XiaoNode",
-                     "XiaoBenchCal", "XiaoBenchEchoCancel")
+# Front-door examples live under examples/. Single-use bench jigs live under
+# extras/bench/. The gate accepts either a bare name (resolved below) or a
+# repo-relative path such as extras/bench/XiaoBenchCal.
+DEFAULT_SKETCHES = (
+    "SimpleHost",
+    "SimpleNode",
+    "TracerHost",
+    "XiaoSniffer",
+    "TracerNode",
+    "XiaoNode",
+    "extras/bench/XiaoBenchCal",
+    "extras/bench/XiaoBenchEcho",
+    "extras/bench/XiaoBenchEchoCancel",
+)
 
 # Third-party libraries the OLED sketches pull in. Passing them
 # unconditionally is harmless: arduino-cli only makes them available, and an
@@ -123,8 +134,8 @@ def library_args(repo: Path, libs_dir: Path) -> list[str]:
 def is_ours(path: Path) -> bool:
     """An include dir is 'ours' if it lives inside the repo tree.
 
-    That covers `src` and `examples/<sketch>` -- the code this gate is
-    meant to bind to. Everything else (esp32 core, tools, Wire/SPI, the
+    That covers `src`, `examples/<sketch>`, and `extras/bench/<sketch>` --
+    the code this gate is meant to bind to. Everything else (esp32 core, tools, Wire/SPI, the
     Adafruit libs) is third-party and becomes `-isystem`.
     """
     try:
@@ -197,13 +208,38 @@ def rewrite_args(args: list[str]) -> list[str]:
     return out
 
 
+def resolve_sketch_ino(sketch: str) -> Path | None:
+    """Resolve a sketch name or repo-relative path to its .ino file.
+
+    Accepts:
+      - bare example name: SimpleHost -> examples/SimpleHost/SimpleHost.ino
+      - bare bench name: XiaoBenchCal -> extras/bench/XiaoBenchCal/...
+      - explicit path: extras/bench/XiaoBenchCal or examples/TracerHost
+    """
+    sketch = sketch.strip().rstrip("/")
+    candidates: list[Path] = []
+    p = Path(sketch)
+    if p.suffix == ".ino":
+        candidates.append(REPO / p)
+    else:
+        name = p.name
+        candidates.append(REPO / p / f"{name}.ino")
+        candidates.append(REPO / "examples" / name / f"{name}.ino")
+        candidates.append(REPO / "extras" / "bench" / name / f"{name}.ino")
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
 def lint_sketch(sketch: str, cli: str, libs_dir: Path, fqbn: str) -> tuple[bool, str]:
     """Lint one sketch. Returns (passed, detail)."""
-    ino = REPO / "examples" / sketch / f"{sketch}.ino"
-    if not ino.is_file():
-        return False, f"sketch not found: {ino}"
+    ino = resolve_sketch_ino(sketch)
+    if ino is None:
+        return False, f"sketch not found: {sketch}"
+    sketch_name = ino.stem
 
-    with tempfile.TemporaryDirectory(prefix=f"sketchlint_{sketch}_") as tmp:
+    with tempfile.TemporaryDirectory(prefix=f"sketchlint_{sketch_name}_") as tmp:
         build_dir = Path(tmp)
         cmd = [
             cli,
@@ -238,7 +274,7 @@ def lint_sketch(sketch: str, cli: str, libs_dir: Path, fqbn: str) -> tuple[bool,
             return False, f"could not parse compile_commands.json: {exc}"
 
         # Select the sketch's own translation unit: the preprocessed .ino.cpp.
-        needle = f"{sketch}.ino.cpp"
+        needle = f"{sketch_name}.ino.cpp"
         entries = [e for e in db if needle in os.path.basename(e.get("file", ""))]
         if len(entries) != 1:
             names = [e.get("file", "?") for e in db]

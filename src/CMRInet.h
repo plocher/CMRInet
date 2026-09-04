@@ -15,6 +15,7 @@
 #include "ConformanceFault.h"
 #include "IOBuffer.h"
 #include "RemoteNodeHandle.h"
+#include "NodeInit.h"
 // Transport implementations live under transport/. Include the one
 // your sketch chooses (e.g. transport/serialESP32.h); the umbrella
 // carries only the seam (CMRITransport.h), not implementations.

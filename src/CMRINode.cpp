@@ -93,10 +93,17 @@ void CMRINode::handlePoll_() {
       packHandlerNoCtx_(input_);
     }
   }
+  // ensure that the reply body is the smaller of the 
+  // handler-provided input and the configured output image
+  // max size.  This is a safety check to avoid sending
+  // more data than the host expects.
+  const size_t n = (input_.length() <= config_.outputBytes)
+                      ? input_.length()
+                      : config_.outputBytes;
   reply_.clear();
   reply_.wireUA = wireUA();
   reply_.mt = MessageType::kReceiveData;
-  reply_.setBody(input_.data(), config_.inputBytes);
+  reply_.setBody(input_.data(), n);
   (void)transport_.sendPacket(reply_);
   emitTrace_(/*transmit=*/true, reply_);
 }

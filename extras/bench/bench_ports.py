@@ -42,7 +42,7 @@ PORTS_ENV = "BENCH_PORTS_FAKE"
 ESP32_VID_PID = (0x303A, 0x1001)  # Xiao ESP32-C6 USB JTAG/serial
 FTDI_VID_PID = (0x0403, 0x6001)   # RS485 dongle
 
-HOST_IMAGE = "xiao_host_tracer"
+HOST_IMAGE = "tracer_host"
 SNIFFER_IMAGE = "xiao_sniffer"
 
 

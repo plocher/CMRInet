@@ -11,7 +11,7 @@
 //   2. flush.markDirty() instead of display.display().
 //   3. Call flush.service() once per loop() — drains one chunk if dirty.
 //
-// Shared by SimpleHost, XiaoHostTracer, XiaoSniffer, and XiaoNode so the
+// Shared by SimpleHost, TracerHost, XiaoSniffer, and XiaoNode so the
 // segmented path cannot drift sketch-to-sketch again.
 //
 // Arduino-only: desktop tests never include this header.

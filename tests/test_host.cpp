@@ -38,6 +38,9 @@ using CMRInet::RemoteNodeImageState;
 using CMRInet::RemoteNodeLiveness;
 using CMRInet::RemoteNodeState;
 using CMRInet::RemoteNodeStatistics;
+using CMRInet::SminiInit;
+using CMRInet::CpnodeInit;
+using CMRInet::NodeType;
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -2882,6 +2885,45 @@ static void test_illegal_wire_ua_during_reply_gate_takes_the_miss(void) {
 
 // ----------------------------------------------------------------- runner
 
+
+void test_smini_init_body_on_wire(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  SminiInit init;  // ns=0
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(5, init));
+  host.begin();
+  host.tick(0);
+  CMRIPacket sent;
+  TEST_ASSERT_TRUE(transport.takeSent(sent));
+  TEST_ASSERT_EQUAL_HEX8('I', sent.mt);
+  TEST_ASSERT_EQUAL_UINT8(4, sent.length);
+  TEST_ASSERT_EQUAL_HEX8('M', sent.body[0]);
+  TEST_ASSERT_EQUAL_HEX8(0, sent.body[1]);
+  TEST_ASSERT_EQUAL_HEX8(0, sent.body[2]);
+  TEST_ASSERT_EQUAL_HEX8(0, sent.body[3]);
+  TEST_ASSERT_EQUAL(NodeType::kSmini, host.node(5)->nodeType());
+  TEST_ASSERT_EQUAL_UINT16(3, host.node(5)->inputLength());
+  TEST_ASSERT_EQUAL_UINT16(6, host.node(5)->outputLength());
+}
+
+void test_cpnode_opts_on_wire(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  CpnodeInit init;
+  init.inputBytes = 2;
+  init.outputBytes = 2;
+  init.opts1 = 0x05;  // USECMRIX | USEBCC
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(7, init));
+  host.begin();
+  host.tick(0);
+  CMRIPacket sent;
+  TEST_ASSERT_TRUE(transport.takeSent(sent));
+  TEST_ASSERT_EQUAL_HEX8('C', sent.body[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x05, sent.body[3]);
+  TEST_ASSERT_EQUAL_HEX8(2, sent.body[5]);
+  TEST_ASSERT_EQUAL_HEX8(2, sent.body[6]);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_first_exchange_is_init);
@@ -2962,5 +3004,7 @@ int main(void) {
   RUN_TEST(test_illegal_wire_ua_while_unsolicited_is_counted);
   RUN_TEST(test_legal_wire_ua_passes_through_gate);
   RUN_TEST(test_illegal_wire_ua_during_reply_gate_takes_the_miss);
+  RUN_TEST(test_smini_init_body_on_wire);
+  RUN_TEST(test_cpnode_opts_on_wire);
   return UNITY_END();
 }

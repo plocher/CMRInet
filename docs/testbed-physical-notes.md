@@ -82,8 +82,8 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
   whichever chips it enables.
 - Power: all boards can run from Mac USB during bench work. Note any externally powered configuration in the scenario, since brownout during pattern bursts would masquerade as protocol faults.
 - Manual production-test wiring (card N outputs to card M inputs) is operator work, guided step by step by the runner. The bench does not attempt relay matrices or automated patch panels.
-## Wire-visible signatures for XiaoHostTracer stimulus generators
-When `XiaoHostTracer` (v0.3.0+) drives a stimulus generator, the T-frame payload has a specific bit pattern. This lets a bench observer confirm the generator is correct without relying only on CDC verb responses. The first #55 implementation inverted the `fastwalker` logic. Wire inspection caught the problem; unit tests did not.
+## Wire-visible signatures for TracerHost stimulus generators
+When `TracerHost` (v0.3.0+) drives a stimulus generator, the T-frame payload has a specific bit pattern. This lets a bench observer confirm the generator is correct without relying only on CDC verb responses. The first #55 implementation inverted the `fastwalker` logic. Wire inspection caught the problem; unit tests did not.
 - **`fastwalker`** (default byte 3, 250 ms period): walks a cleared bit through a field of set bits. Byte 3 progresses `0xFF → 0xFE → 0xFD → 0xFB → 0xF7 → 0xEF → 0xDF → 0xBF → 0x7F → 0xFF …`.
 - **`slowwalker`** (default byte 5, 1000 ms period): walks a set bit through a field of cleared bits. Byte 5 progresses `0x00 → 0x01 → 0x02 → 0x04 → 0x08 → 0x10 → 0x20 → 0x40 → 0x80 → 0x00 …`.
 - **`toggleoutfrominput`** (default input bit 48 → output bit 32): inverts output bit 32 on the rising edge of input bit 48. On the wire, this is a single-bit toggle in byte 4, bit 0 of the T payload.
@@ -92,12 +92,12 @@ When `XiaoHostTracer` (v0.3.0+) drives a stimulus generator, the T-frame payload
 The walkers use different output bytes by default so they can run concurrently without modifying the same byte. UA=30 uses a 7-byte output image on this bench.
 
 ## USB board identity and recovery
-Multiple Xiao ESP32-C6 boards enumerate with similar and unstable `/dev/cu.usbmodem*` names. A port number is not a board identity. During #55 validation, `XiaoHostTracer` was initially uploaded to the passive Sniffer board. Commands were accepted, but the supposed Host stayed offline and emitted only miss behavior because the physical bench roles had been reversed.
+Multiple Xiao ESP32-C6 boards enumerate with similar and unstable `/dev/cu.usbmodem*` names. A port number is not a board identity. During #55 validation, `TracerHost` was initially uploaded to the passive Sniffer board. Commands were accepted, but the supposed Host stayed offline and emitted only miss behavior because the physical bench roles had been reversed.
 
 Before flashing or starting an automated test:
 1. Run `arduino-cli board list` to enumerate candidates.
 2. Confirm the image identity over CDC, not only the port path:
-   - `XiaoHostTracer` answers `status` with its tracer image/version.
+   - `TracerHost` answers `status` with its tracer image/version.
    - `XiaoSniffer` emits periodic stats with `"image":"xiao_sniffer"`.
    - `SimpleHost` normally stays silent except on a rejected reply.
 3. Confirm physical role: the Host board is attached to the bus crossover as the poll-pair driver; the Sniffer remains passive.

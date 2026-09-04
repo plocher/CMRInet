@@ -15,7 +15,7 @@
 // cancel) and whether the trailing 0x00 (measured in Phase A) is harmless
 // through the real stack.
 //
-// Reuses the XiaoHostTracer C&C substrate (readVerb, run/dump/ring,
+// Reuses the TracerHost C&C substrate (readVerb, run/dump/ring,
 // lazyBegin, XiaoCdcConsole) — no generators, one phantom UA, plus the
 // sketch-local echocancel verb. See docs/two-wire-echo-bench-findings.md
 // and docs/adr/0003-*.md for the observed-facts baseline and the

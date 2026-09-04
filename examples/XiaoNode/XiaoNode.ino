@@ -48,14 +48,11 @@
 #include "transport/serial.h"
 #include "transport/serialESP32.h"
 #include "iox.h"
-
-#ifdef USE_OLED
 #include "display.h"
-#endif
 
 #ifdef USE_OTA
 #include "ota.h"
-// #include "secrets.h"  // optional for credentials
+#include "secrets.h"  // optional for credentials
 #ifndef WIFI_SSID
   // Default placeholders so the sketch compiles out of the box.
   // Create secrets.h with real credentials, or inject via build defines:
@@ -113,14 +110,12 @@ IOX_Config expanders[] =
 constexpr uint8_t kExpanderCount =
     static_cast<uint8_t>(sizeof(expanders) / sizeof(expanders[0]));
 
-#ifdef USE_OLED
 NodeDisplay oled;
 constexpr uint32_t kDisplayRefreshMs = 100;  // ~10 fps; bits change slowly
 uint32_t lastDisplayMs = 0;
 // Cached bits from the last pack/unpack, one [portA, portB] per expander.
 // Row count from the I/O table; columns match the panel's port pair.
 uint8_t portState[kExpanderCount][NodeDisplay::kPortsPerExpander] = {};
-#endif
 
 #ifdef USE_OTA
 OtaManager ota;
@@ -140,22 +135,16 @@ CMRInet::CMRINode               node(transport);
 
 void packInputs(CMRInet::IOBuffer& ib);
 void unpackOutputs(CMRInet::IOBuffer& ob);
-#ifdef USE_OLED
 void sampleInputPorts();
-#endif
 
-#if defined(USE_OLED) && defined(USE_OTA)
+#if defined(USE_OTA)
 static NodeDisplay::NetState netStateFor(OtaManager::State s) {
   switch (s) {
     case OtaManager::READY:
-    case OtaManager::UPDATING:
-      return NodeDisplay::NET_READY;
-    case OtaManager::CONNECTING:
-      return NodeDisplay::NET_CONNECTING;
-    case OtaManager::FAILED:
-      return NodeDisplay::NET_FAILED;
-    default:
-      return NodeDisplay::NET_OFF;
+    case OtaManager::UPDATING:   return NodeDisplay::NET_READY;
+    case OtaManager::CONNECTING: return NodeDisplay::NET_CONNECTING;
+    case OtaManager::FAILED:     return NodeDisplay::NET_FAILED;
+    default:                     return NodeDisplay::NET_OFF;
   }
 }
 #endif
@@ -165,10 +154,7 @@ static NodeDisplay::NetState netStateFor(OtaManager::State s) {
 // =============================================
 void setup() {
   Wire.begin();  // default pins for the board (D4/D5 on cpNode-Xiao)
-
-#ifdef USE_OLED
   oled.begin(NODE_NAME);  // degrades to headless on failure
-#endif
 
   // Initialize expanders and derive geometry.
   // CPNODE card type has 2 phantom onboard bytes; IOX bytes follow.
@@ -185,14 +171,12 @@ void setup() {
   node.begin();  // → transport.begin() → port.begin() → Serial1.begin()
 
 #ifdef USE_OTA
-#ifdef USE_OLED
   ota.onStart = []() { oled.otaStart(); };
   ota.onProgress = [](unsigned int received, unsigned int total) {
     oled.otaProgress(received, total);
   };
   ota.onEnd = []() { oled.otaSuccess(); };
   ota.onError = [](const char* name) { oled.otaError(name); };
-#endif
   ota.begin(NODE_NAME, WIFI_SSID, WIFI_PASSWORD);
 #endif
 }
@@ -202,18 +186,14 @@ void setup() {
 // =============================================
 void loop() {
   node.tick(millis());
-
-#ifdef USE_OTA
   ota.poll();  // non-blocking; blocks only during a transfer
-#endif
 
-#ifdef USE_OLED
   const uint32_t now = millis();
   if (now - lastDisplayMs >= kDisplayRefreshMs) {
     lastDisplayMs = now;
     // Sample inputs here so the grid tracks pin changes even when the
     // Host is not polling. Outputs still arrive via unpack().
-    sampleInputPorts();
+    sampleInputPorts(expanders, kExpanderCount, portState);
     oled.update(expanders, kExpanderCount, portState);
     oled.setTX(txCount);
     oled.setRX(rxCount);
@@ -223,7 +203,6 @@ void loop() {
     oled.show();  // pushes a frame only when something changed
   }
   oled.serviceFlush();  // one I2C chunk per loop
-#endif
 }
 
 // =============================================
@@ -233,12 +212,12 @@ void loop() {
 // onPack: read all input ports into IB at P time.
 // onUnpack: write all output ports from OB at T time.
 // Both skip the 2 phantom CPNODE bytes at the start of the image.
-// portState is the OLED snapshot: inputs are also sampled in loop so
-// the grid moves without waiting for a Host poll; outputs update here.
+// portState is the OLED snapshot: inputs are also sampled regularly
+// in loop so the is updated immediately without waiting for a Host
+// poll; outputs are only updated in unpackOutputs().
 
-#ifdef USE_OLED
-void sampleInputPorts() {
-  for (uint8_t e = 0; e < kExpanderCount; e++) {
+void sampleInputPorts(IOX_Config expanders[], uint8_t expanderCount, uint8_t portState[][NodeDisplay::kPortsPerExpander]) {
+  for (uint8_t e = 0; e < expanderCount; e++) {
     if (expanders[e].portA == IN) {
       portState[e][0] = ioxReadPort(expanders[e].address, true);
     }
@@ -247,47 +226,39 @@ void sampleInputPorts() {
     }
   }
 }
-#endif
 
 void packInputs(CMRInet::IOBuffer& ib) {
   txCount++;
+  sampleInputPorts(expanders, kExpanderCount, portState);
+
   ib.setByte(0, 0);  // phantom onboard byte
+  ib.setBit(0, 2, (digitalRead(D2) == LOW));  // active-low button
   ib.setByte(1, 0);  // phantom onboard byte
   uint8_t idx = 2;
   for (uint8_t e = 0; e < kExpanderCount && idx < ib.length(); e++) {
     if (expanders[e].portA == IN) {
-      const uint8_t val = ioxReadPort(expanders[e].address, true);
-#ifdef USE_OLED
-      portState[e][0] = val;
-#endif
-      ib.setByte(idx++, val);
+      ib.setByte(idx++, portState[e][0]);
     }
     if (expanders[e].portB == IN && idx < ib.length()) {
-      const uint8_t val = ioxReadPort(expanders[e].address, false);
-#ifdef USE_OLED
-      portState[e][1] = val;
-#endif
-      ib.setByte(idx++, val);
+      ib.setByte(idx++, portState[e][1]);
     }
   }
 }
 
 void unpackOutputs(CMRInet::IOBuffer& ob) {
   rxCount++;
+  digitalWrite(LED_BUILTIN, ob.getBit(0, 1) ? HIGH : LOW);
+
   uint8_t idx = 2;  // skip phantom onboard bytes
   for (uint8_t e = 0; e < kExpanderCount && idx < ob.length(); e++) {
     if (expanders[e].portA == OUT) {
       const uint8_t val = ob.byte(idx++);
-#ifdef USE_OLED
       portState[e][0] = val;
-#endif
       ioxWritePort(expanders[e].address, true, val);
     }
     if (expanders[e].portB == OUT && idx < ob.length()) {
       const uint8_t val = ob.byte(idx++);
-#ifdef USE_OLED
       portState[e][1] = val;
-#endif
       ioxWritePort(expanders[e].address, false, val);
     }
   }

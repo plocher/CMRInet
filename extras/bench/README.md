@@ -71,7 +71,7 @@ Xiao #1 should tap the poll pair. Xiao #2 and the dongle should tap the reply pa
 
 ### tracer_dongle.py — tracer telemetry and dongle side by side
 
-Captures the XiaoHostTracer CDC stream and the dongle at the same time for 15 s. Injects the `status` verb into the tracer to pull explicit `replies`, `misses`, and `state` counters. Reports tracer `trace rx(R)` count and the dongle frame decode side by side. Use this to check whether R reaches the Host UART while the dongle on Host R± sees a given result.
+Captures the TracerHost CDC stream and the dongle at the same time for 15 s. Injects the `status` verb into the tracer to pull explicit `replies`, `misses`, and `state` counters. Reports tracer `trace rx(R)` count and the dongle frame decode side by side. Use this to check whether R reaches the Host UART while the dongle on Host R± sees a given result.
 
 ```shell
 extras/bench/.venv/bin/python extras/bench/tracer_dongle.py [tracer_port] [dongle_port]
@@ -95,15 +95,15 @@ Flashes a host sketch, boots it, captures all three witnesses, and prints a VERD
 extras/bench/flash_and_probe.sh [sketch] [host_port]
 ```
 
-Defaults: sketch `XiaoHostTracer`, port resolved from bench.json (override with argv). Known sketches: `XiaoHostTracer`, `SimpleHost`.
+Defaults: sketch `TracerHost`, port resolved from bench.json (override with argv). Known sketches: `TracerHost`, `SimpleHost`.
 
 The expected cycle for issue reproduction:
 ```shell
-extras/bench/flash_and_probe.sh XiaoHostTracer   # expect: HEALTHY
+extras/bench/flash_and_probe.sh TracerHost   # expect: HEALTHY
 extras/bench/flash_and_probe.sh SimpleHost        # expect: BUG REPRODUCED
 ```
 
-Under SimpleHost the reply-pair witnesses (Xiao #2 and the dongle) are expected to fail. Under XiaoHostTracer all three are expected to pass. The verdict logic encodes these expectations so a human or agent can read the result without parsing probe output.
+Under SimpleHost the reply-pair witnesses (Xiao #2 and the dongle) are expected to fail. Under TracerHost all three are expected to pass. The verdict logic encodes these expectations so a human or agent can read the result without parsing probe output.
 
 ### verdict.py — verdict parser (used by flash_and_probe.sh)
 

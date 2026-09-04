@@ -1,13 +1,13 @@
 // SimpleHost.ino — a user-facing CMRInet Host example.
 //
-// The front-door example for the Host side of this library.
 // This sketch is logically equivalent to JMRI (or Bruce's QBasic code)
 // for the LOGICAL view of things.  The other side - Nodes - connect to
 // the various PHYSICAL sensors and actuators (turnouts, occupancy,
 // signals, etc)
-// The other Host examples (XiaoHostTracer, XiaoSniffer) are bench test
-// instruments built for orchestration and test harnesses; this one is
-// for a person controlling a layout.
+//
+// The other Host examples (TracerHost, XiaoSniffer) are bench test
+// instruments built for library test harnesses; this example is a
+// tutorial focused on the basics.
 //
 // What it does: polls remote nodes, shows each node's health, and runs
 // a simplistic behavior model — obligatory blinking lights and an
@@ -23,9 +23,10 @@
 // the remote nodes that this host manages by way of RemoteNodeHandles and
 // you call host.tick() every loop to make the gears turn.
 //
-// You read inputs / write outputs through the host's node handle using
-// host.node(UA)->inputBit(n) and 
-// host.node(UA)->setOutputBit(n, [0,1])
+// The host reads inputs / write outputs through a node handle:
+//   handle = host.node(node's UA)
+//   handle->inputBit(n) and 
+//   handle->setOutputBit(n, [0,1])
 
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491, full duplex).
 //   D7 - RX    CMRI RS485 receive
@@ -35,18 +36,18 @@
 //   D5 - SCL   I2C (optional for the OLED status panel)
 //
 // RS485 bus Wiring: 
-//         T± on the Host routes to the Node's R± and
-//         R± on the Host routes to the Node's T±
+//   T± on the Host routes to the Node's R± and
+//   R± on the Host routes to the Node's T±
 //
-// Two nodes are referenced by this sketch: UA 30 and UA 31, with all the examples
-// using node 30.  If you only have one node, things still work - offline nodes
+// Two nodes are referenced by this sketch: UA 30 and UA 31, 
+// If you only have one node, things still work - offline nodes
 // do not stall the host.
 //
-// We use the OLED (SSD1306 128x64 @ 0x3C) to show health and status info
-// as an example, you can use the display for any purpose.
+// We use the OLED (SSD1306 128x64 @ 0x3C) in this example to 
+// show bus and node status info
 
 #include <Arduino.h>
-#include "CMRInet.h"                 // CMRIHost, RemoteNodeHandle
+#include "CMRInet.h"                 // provides CMRIHost, RemoteNodeHandle
 #include "transport/serial.h"        // SerialCMRITransport
 #include "transport/serialESP32.h"   // ESP32 hardware transmit-drain port
 
@@ -63,83 +64,55 @@
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
 constexpr int      kScreenAddr    = 0x3C;
-constexpr uint32_t kDisplayRefreshMs = 150;   // redraw interval
+constexpr uint32_t kDisplayRefreshMs = 120;   // redraw interval
 constexpr uint32_t kErrorWindowMs     = 5000; // rolling error count window (long enough that a transient burst stays visible)
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
 CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 #endif
 
-// ---- helpers
-// (none)
+// ---- Services
+#include "src/Services.h"
 
 // ---- Sketch specific details
 constexpr int     kCMRI_BAUD = 28800;
 
 // Behavior:
-//   1. A walking one steps through all 8 bits of one byte,
-//      one step per second, looping. If the LEDs light up in sequence,
-//      the full poll/T/R path works.
-//   2. A fast bit walker, one step per 100ms
-//   3. An output toggle on each rising edge of an input. This shows
-//      the input side: read a pushbutton or block detector, act on it.
-//
-//   Expand these to control your own test harness — drive turnouts, signals,
-//   panel lamps from the output bits, and react to input edges from
-//   block detectors, pushbuttons, and turnout feedback.
-//
-// On the cpNode-Xiao, which has no onboard I/O, bytes 0 and 1 are currently
-// 0 on input and ignored on output. IO expander I/O starts at byte 2.
-//
+//   -  Bitwalkers loop through all 8 bits of one byte, changing one bit
+//      value each step, looping. If the LEDs light up in sequence, the 
+//      node is seeing and reacting to TRANSMIT packets.
+//   -  Feedback Loops read an input bit and write its value to an output.
+//      When the output changes in step with the inputm this shows
+//      that node is seeing and responding to a POLL packet with its
+//      RESPONSE, and the Host is successfully sending the info in a
+//      TRANSMIT packet to the destination.
+
+//   You can expand these services to control your own test harness,
+//   drive turnouts, signals, and panel lamps from the output bits, and
+//   react to input from block detectors, pushbuttons, and turnout feedback.
+
 // Outputs are active-low by default in the cpNode sketch, so a looped
 // output reads back inverted (out 1 => in 0).
-//
+
 // Note: inputBit(n) returns false for bits beyond the node's input image
 // with no error. A trigger bit past the last input byte silently never
-// fires. Keep kTriggerInBit within node 30's input range (bits 0..55 for
-// 7 input bytes).
-
-constexpr uint32_t kBitwalkPeriodMs = 1000;  // one step per second
-constexpr size_t   kBitwalkByte     = 5;      // the byte to slow walk
-// Full-T on every dirty bit. Sub-second periods thrash the Host schedule
-// and inflate noReplies on this bus (see follow-up issue on T/P timing).
-// 30 s keeps the demo visible without the miss floor.
-constexpr uint32_t kFastBitwalkPeriodMs = 30000;
-constexpr size_t   kFastBitwalkByte = 3;      // the byte to fast walk
-
-// Input toggle demo: toggle this output on each rising edge of the trigger.
-constexpr size_t kTriggerInByte = 6;  // last IOX port B, 
-constexpr size_t kTriggerInBit = 0;   // bit 0 of that byte
-constexpr size_t kToggleOutByte = 4;  // output on a different IOX expander
-constexpr size_t kToggleOutBit = 0;   // bit 0 of that byte
+// fires.
 
 // ---- Per-node info: everything the sketch knows about each node ------
-// Add or remove rows to match your layout. 
+// Sketch-local layout table. Each row is a CPNODE with NI/NO; type is
+// part of the add artifact (NodeType::kCpnode via CpnodeInit).
 struct NodeInfo {
   uint8_t  UA;
   uint16_t inputBytes;
   uint16_t outputBytes;
 };
 
+// Add or remove rows to match your layout — plain loop, no shared roster.
 NodeInfo nodeTable[] = {
-  {30,  7,  7},   // Node 30: 2 onboard phantom + 1 IOX32 + 3 IOX boards, all configured as 8IN/8OUT per expander
-  // {31,  3,  3},   // Node 31: 2 onboard phantom + 1 IOX board
+  {30,  2+5,  2+5},   // Node 30: 2 onboard phantom + IOX expanders
+  {31,  2+1,  2+1},   // Node 31: 2 onboard phantom + 1 IOX board
 };
 constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
-
-// Bitwalk state: which bit (0-7) is currently lit, and when it last
-// advanced.
-uint8_t  bitwalkStep  = 0;
-uint32_t lastBitwalkMs = 0;
-uint8_t  fastBitwalkStep  = 0;
-uint32_t lastFastBitwalkMs = 0;
-
-// Input-toggle state. RemoteNodeHandle reports the current input value
-// only; the sketch keeps the previous value to detect a rising edge.
-bool lastTriggerIn = false;
-
-
-
 
 #if USE_OLED
 bool oledOk = false;
@@ -155,22 +128,15 @@ extern CMRInet::CMRIHost host;
 CMRInet::examples::HostStatusPanel panel;
 
 // The OLED state tag comes from CMRInet::remoteNodeStateTag(), beside
-// the enum in RemoteNodeHandle.h. This sketch used to keep its own
-// switch, as did XiaoHostTracer and TracerShell -- and when
-// kMisconfigured and kDegraded were added, two of the three silently
-// began rendering "??", because arduino-cli passes no warning flags to
-// a sketch and nothing failed. The shared helper is compiled by every
-// desktop test TU under -Werror, so a future enumerator breaks the
-// build instead of the display (#85, #93).
-
-/// Draw the host status panel. Layout (textSize 1 unless noted):
+// the enum in RemoteNodeHandle.h. 
+//
+/// Draw the host status panel. Layout:
 ///   HOST           <cadence>      (alternates c/s ↔ ms/cycle every 5 s)
 ///   P:nnnn R:nnnn m:nn            (host totals this redraw / 5s misses)
 ///   UA30  165ms  12m  0e          (online: no redundant ON tag)
 ///   UA31 OFF  ---ms   5m  0e      (non-online keeps compact tag)
-/// Misses (noReplies / reply-gate timeouts) are first-class; the old
-/// "0err" line only tracked malformed replies and stayed zero through
-/// TXEN stutters. Redrawn on a timer; no dirty tracking.
+/// Misses (noReplies / reply-gate timeouts) are first-class; 
+/// Redrawn on a timer; no dirty tracking.
 void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
@@ -216,7 +182,7 @@ void drawHostStatus() {
     char row[28];
     panel.nodeRowText(row, sizeof(row), now, i,
                       nodeTable[i].UA, online, tag, latMs);
-display.setCursor(0, 30 + static_cast<int>(i) * 12);
+    display.setCursor(0, 30 + static_cast<int>(i) * 12);
     display.print(row);
   }
   // Segmented I2C push — never call display.display() (full ~25 ms stall).
@@ -231,7 +197,7 @@ CMRInet::CMRIHost               host(transport);
 
 /// Host event listener. The engine fires this when a reply is rejected,
 /// when a poll times out, or when a node changes health state. This is
-/// the seam a real layout host uses to react to health changes.
+/// the how the host sketch reacts to node health state changes.
 ///
 /// On a rejection, print what the remote node actually sent so the user
 /// can diagnose a misconfiguration without reflashing the node.
@@ -266,7 +232,7 @@ void setup() {
   Serial.begin(115200);  // USB CDC: diagnostic output for rejections
 
   // The CMRI wire is configured by Esp32SerialPort::begin() via host.begin().
-  transport.setInterByteTimeoutMs(50);  // tolerant
+  transport.setInterByteTimeoutMs(50);  // tolerant while still quick fail detect
 
 #if USE_OLED
   Wire.begin(D4 /* SDA */, D5 /* SCL */);
@@ -280,15 +246,16 @@ void setup() {
   host.onEvent(onHostEvent);
 
   // Register each node from the table. Each add reports its own outcome
-  // (Design v1.2 D5); this sketch keeps the first failure so it can name
+  // this sketch keeps the first failure so it can name
   // a reason on the display.
   CMRInet::CMRIHost::ConfigStatus configStatus =
       CMRInet::CMRIHost::ConfigStatus::kOk;
   for (size_t i = 0; i < kNodeCount; ++i) {
+    CMRInet::CpnodeInit init;
+    init.inputBytes = nodeTable[i].inputBytes;
+    init.outputBytes = nodeTable[i].outputBytes;
     const CMRInet::CMRIHost::ConfigStatus st =
-        host.addRemoteNode(nodeTable[i].UA,
-                           nodeTable[i].inputBytes,
-                           nodeTable[i].outputBytes);
+        host.addRemoteNode(nodeTable[i].UA, init);
     if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&
         configStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
       configStatus = st;
@@ -302,7 +269,7 @@ void setup() {
       display.setTextSize(1);
       display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
-display.print(F("addRemoteNode\nrejected:\n"));
+      display.print(F("addRemoteNode\nrejected:\n"));
       display.print(CMRInet::configStatusString(configStatus));
       oledFlush.markDirty();
       oledFlush.serviceUntilIdle();  // halt path: finish the frame now
@@ -313,51 +280,36 @@ display.print(F("addRemoteNode\nrejected:\n"));
     }
   }
   host.begin();
+
+  // Add services to orchestrator
+  // Example: Configure bitwalker on node 30 byte 3 bits 0-7 delay 1S
+  /*                              UA  Byte bit count Delay invert */
+  BitWalkerConfig bitwalker1 = {  30,  3,   0,   8,   1000, true, };
+  g_orchestrator.add(new BitWalkerService(bitwalker1));
+  BitWalkerConfig bitwalker2 = {  30,  4,   3,   3,   500,  true, };
+  g_orchestrator.add(new BitWalkerService(bitwalker2));
+  BitWalkerConfig bitwalker3 = {  31,  2,   0,   8,   250,  false, };
+  g_orchestrator.add(new BitWalkerService(bitwalker3));
+
+  // Example: Configure input toggle
+  InputToggleConfig inputToggle = {
+    31,        // inputUA
+    2,         // inByte
+    0,         // inBit
+    30,        // outputUA
+    6,         // outByte
+    1,         // outBit
+    false,     // lastValue
+  };
+  g_orchestrator.add(new InputToggleService(inputToggle));
 }
 
 void loop() {
   const uint32_t now = millis();
   host.tick(now);  // advance the poll schedule; non-blocking
 
-  // Drive the behavior through the target node's handle.
-  CMRInet::RemoteNodeHandle* node = host.node(30);
-
-  if (node != nullptr &&
-      node->state() == CMRInet::RemoteNodeState::kOnline) {
-    // Bitwalk: every kBitwalkPeriodMs, set one bit of byte kBitwalkByte,
-    // clearing the rest. The unlit bit advances through 0..7 and loops.
-    if (now - lastBitwalkMs >= kBitwalkPeriodMs) {
-      node->setOutputBit(kBitwalkByte, bitwalkStep, true);
-      if (bitwalkStep > 0) {
-        node->setOutputBit(kBitwalkByte, bitwalkStep - 1, false);
-      } else if (lastBitwalkMs != 0) {
-        // Wrap from step 0: clear bit 7 from the previous cycle.
-        node->setOutputBit(kBitwalkByte, 7, false);
-      }
-      bitwalkStep = (bitwalkStep + 1) % 8;
-      lastBitwalkMs = now;
-    }
-    // Fast Bitwalk: every kFastBitwalkPeriodMs, clear one bit of byte kFastBitwalkByte,
-    // setting the rest. The lit bit advances through 0..7 and loops.
-    if (now - lastFastBitwalkMs >= kFastBitwalkPeriodMs) {
-      node->setOutputBit(kFastBitwalkByte, fastBitwalkStep, false);
-      if (fastBitwalkStep > 0) {
-        node->setOutputBit(kFastBitwalkByte, fastBitwalkStep - 1, true);
-      } else if (lastFastBitwalkMs != 0) {
-        // Wrap from step 0: clear bit 7 from the previous cycle.
-        node->setOutputBit(kFastBitwalkByte, 7, true);
-      }
-      fastBitwalkStep = (fastBitwalkStep + 1) % 8;
-      lastFastBitwalkMs = now;
-    }
-    // Toggle an output on each rising edge of an input.
-    const bool in0 = node->inputBit(kTriggerInByte, kTriggerInBit);
-    if (in0 && !lastTriggerIn) {
-      node->setOutputBit(kToggleOutByte, kToggleOutBit,
-                         !node->outputBit(kToggleOutByte, kToggleOutBit));
-    }
-    lastTriggerIn = in0;
-  }
+  // Run all services through the orchestrator
+  g_orchestrator.tick(host, now);
 
 #if USE_OLED
   // Paint on a timer; drain one I2C chunk every loop so the push never
