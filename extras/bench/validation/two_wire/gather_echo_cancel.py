@@ -166,7 +166,7 @@ def main() -> int:
     p.add_argument("--node", default=None,
                    help="real node to poll instead of the phantom: "
                         "'UA IN OUT' (e.g. '30 7 7'). Disables the "
-                        "compiled-in phantom UA and adds+enables the real node.")
+                        "runtime-added phantom via node add UA and adds+enables the real node.")
     args = p.parse_args()
 
     tag = args.tag or f"echo_cancel_{args.echocancel}"
@@ -185,7 +185,7 @@ def main() -> int:
             print("ERROR: boot validation failed", file=sys.stderr)
             return 1
 
-        # Force begin() with the compiled-in phantom, then configure the
+        # Force begin() with the runtime-added phantom via node add, then configure the
         # node topology. If --node is given, disable the phantom and
         # add+enable the real node with its geometry.
         _tracer_client.send_command(ser, f"node enable {args.ua}")

@@ -31,10 +31,15 @@
 //   status | status <UA>
 //   quiesce <UA> | resume <UA> | forcetx <UA>
 //   setbit <UA> <bit> <0|1> | writeoutputs <UA> <hex>
-//   node add <UA> <in> <out> | node delete <UA>
-//   node geometry <UA> <in> <out>
+//   node add <UA> <type> ...     type C|M|N|X + type-specific INIT
+//                                C: <in> <out> [opts1 [opts2]]
+//                                M: [ns [ct0..ct5]]
+//                                N|X: <ns> <in> <out> [ct x ns]
+//   node delete <UA>
+//   node geometry <UA> <in> <out>   (CPNODE NI/NO reshape)
 //   node enable <UA> | node disable <UA>
 //   enable|disable|configure <generator> [UA <n>] ...
+// Membership is only via node add/delete — this sketch seeds none.
 //   run <secs> | dump | reset | reboot | display <1|2> <text> | quit
 // After quit the image emits "final" and parks; reset the board to run
 // again.
@@ -74,36 +79,14 @@ CMRInet::examples::HostStatusPanel panel;
 // -Werror=switch gate, instead of a copy per sketch that rots the next
 // time the enum grows (#85, #93).
 
-// Build-time knobs, overridable from a CLI build — e.g. the wrong-UA
-// negative test:
-//   --build-property "build.defines=-DTRACER_UA=31"
-// (build.defines, NOT build.extra_flags: the esp32 core composes
-// build.extra_flags itself, and overriding it clobbers the board's
-// -DARDUINO_USB_CDC_ON_BOOT=1 — which would silently move Serial off
-// the USB CDC console this image depends on.)
-#ifndef TRACER_UA
-#define TRACER_UA 30     // soft default for generator C&C only; not a membership seed
-#endif
-#ifndef TRACER_INPUT_BYTES
-#define TRACER_INPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX IN
-#endif
-#ifndef TRACER_OUTPUT_BYTES
-#define TRACER_OUTPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX OUT
-#endif
+// Build-time knobs for the *transport only* (not membership).
+// Override with build.defines, NOT build.extra_flags (esp32 core owns
+// build.extra_flags; overriding it can drop -DARDUINO_USB_CDC_ON_BOOT=1).
 #ifndef TRACER_BAUD
 #define TRACER_BAUD 28800
 #endif
 #ifndef TRACER_INTER_BYTE_TIMEOUT_MS
 #define TRACER_INTER_BYTE_TIMEOUT_MS 50  // 0 disables (interop 2.2.6 exception)
-#endif
-#ifndef TRACER_PHANTOM_UA
-#define TRACER_PHANTOM_UA 32
-#endif
-#ifndef TRACER_PHANTOM_INPUT_BYTES
-#define TRACER_PHANTOM_INPUT_BYTES 4
-#endif
-#ifndef TRACER_PHANTOM_OUTPUT_BYTES
-#define TRACER_PHANTOM_OUTPUT_BYTES 4
 #endif
 
 namespace {
@@ -117,9 +100,8 @@ constexpr const char* kImage = "tracer_host";
 // the library (src/); the library's inter-byte abort doctrine now
 // ships a tolerant default (Design D13). This image keeps its explicit
 // 50 ms override, so runtime behavior is unchanged from 0.1.2.
-// 0.2.0: I/T bench slice (map issue #30) — output image via
-// TRACER_OUTPUT_BYTES, onTrace packet telemetry, and output verbs
-// (setbit/writeoutputs/forcetx) so T is exercisable from the bench.
+// 0.2.0: I/T bench slice (map issue #30) — onTrace packet telemetry and
+// output verbs (setbit/writeoutputs/forcetx) so T is exercisable from C&C.
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
 // fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
 // 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
@@ -154,7 +136,7 @@ constexpr const char* kImage = "tracer_host";
 // is not treated as endless self-echo. One-char drain hold unchanged.
 // 0.10.2 (#112): accept matching R while P is still kAwaitSendComplete;
 // Esp32 hardwareTransmitDrain ends TXEN without estimate veto.
-constexpr const char* kVersion = "0.10.2"; // #112 fast-R + HW drain
+constexpr const char* kVersion = "0.11.0"; // typed C&C membership; no seed topology
 constexpr int kTxenPin = D3;  // specific to the cpNode-Xiao board
 
 CMRInet::Esp32SerialPort port(Serial1, kTxenPin, TRACER_BAUD,
@@ -291,12 +273,9 @@ bool readVerb(char* out, size_t len) {
 // preferred implementation shape for a later reshape (not core library).
 
 #include "GeneratorParser.h"
-constexpr uint8_t kGeneratorDefaultUA = TRACER_UA;
-constexpr uint8_t kBenchNodeUA = 31;
-constexpr uint8_t kBenchLoopbackByte = 2;
-constexpr uint8_t kBenchLoopbackBit = 1;
-constexpr uint16_t kBenchLoopbackBitIndex =
-    static_cast<uint16_t>(kBenchLoopbackByte) * 8u + kBenchLoopbackBit;
+// Generator C&C must name a UA (or omit to use this soft default). This is
+// NOT a membership seed — probes still `node add` before enable.
+constexpr uint8_t kGeneratorDefaultUA = 30;
 constexpr size_t kGeneratorUACount = 128;
 
 struct FastWalkerGenerator {
@@ -396,15 +375,11 @@ StallGenerator stall;
 
 void initializeGeneratorDefaults(uint8_t UA) {
   if (UA >= kGeneratorUACount || generatorDefaultsInitialized[UA]) return;
+  // Neutral defaults only. Bench-specific byte/bit targets come from
+  // `configure ...` / `enable ...` C&C, not compiled-in topology.
   fastwalkerByUA[UA] = FastWalkerGenerator{};
   slowwalkerByUA[UA] = SlowWalkerGenerator{};
   toggleoutfrominputByUA[UA] = ToggleOutFromInputGenerator{};
-  if (UA == kBenchNodeUA) {
-    slowwalkerByUA[UA].byte = kBenchLoopbackByte;
-    toggleoutfrominputByUA[UA].in_bit = kBenchLoopbackBitIndex;
-    toggleoutfrominputByUA[UA].out_bit = kBenchLoopbackBitIndex;
-    toggleoutfrominputByUA[UA].mode = ToggleOutFromInputGenerator::Mode::kWriteRead;
-  }
   generatorDefaultsInitialized[UA] = true;
 }
 
@@ -657,7 +632,7 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
   if (!oledOk) return;
   const uint32_t now = millis();
 
-  // Live membership: collect up to 4 nodes for the panel.
+  // Live membership only — no compiled-in UA list.
   constexpr size_t kMaxRows = 4;
   uint8_t uas[kMaxRows] = {};
   size_t nRows = 0;
@@ -719,11 +694,6 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
     display.setCursor(0, 56);
     display.print(displayLine2);
   }
-
-  oledFlush.markDirty();
-}
-
- }
 
   oledFlush.markDirty();
 }
