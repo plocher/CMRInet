@@ -41,6 +41,9 @@ using CMRInet::RemoteNodeStatistics;
 using CMRInet::SminiInit;
 using CMRInet::CpnodeInit;
 using CMRInet::NodeType;
+using CMRInet::HostNodeSpec;
+using CMRInet::hostNodeCpnode;
+using CMRInet::hostNodeSmini;
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -2924,6 +2927,34 @@ void test_cpnode_opts_on_wire(void) {
   TEST_ASSERT_EQUAL_HEX8(2, sent.body[6]);
 }
 
+
+void test_host_node_spec_cpnode(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  CpnodeInit init;
+  init.inputBytes = 2;
+  init.outputBytes = 2;
+  init.opts1 = 0x01;
+  HostNodeSpec spec = hostNodeCpnode(11, init);
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(spec));
+  host.begin();
+  host.tick(0);
+  CMRIPacket sent;
+  TEST_ASSERT_TRUE(transport.takeSent(sent));
+  TEST_ASSERT_EQUAL_HEX8('C', sent.body[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x01, sent.body[3]);
+  TEST_ASSERT_EQUAL(NodeType::kCpnode, host.node(11)->nodeType());
+}
+
+void test_host_node_spec_smini(void) {
+  MockCMRITransport transport;
+  CMRIHost host(transport);
+  HostNodeSpec spec = hostNodeSmini(12, SminiInit{});
+  TEST_ASSERT_EQUAL(CMRIHost::ConfigStatus::kOk, host.addRemoteNode(spec));
+  TEST_ASSERT_EQUAL(NodeType::kSmini, host.node(12)->nodeType());
+  TEST_ASSERT_EQUAL_UINT16(3, host.node(12)->inputLength());
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_first_exchange_is_init);
@@ -3006,5 +3037,7 @@ int main(void) {
   RUN_TEST(test_illegal_wire_ua_during_reply_gate_takes_the_miss);
   RUN_TEST(test_smini_init_body_on_wire);
   RUN_TEST(test_cpnode_opts_on_wire);
+  RUN_TEST(test_host_node_spec_cpnode);
+  RUN_TEST(test_host_node_spec_smini);
   return UNITY_END();
 }
