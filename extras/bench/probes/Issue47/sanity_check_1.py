@@ -10,11 +10,11 @@ def run_interactive_combo(ser, s, p, mode, traffic, secs):
     _tracer_client.flush_lines(ser)
     
     if "fast" in traffic:
-        ser.write(b"enable fastwalker\n")
+        ser.write(b"enable fastwalker UA 30\n")
     if "slow" in traffic:
-        ser.write(b"enable slowwalker\n")
+        ser.write(b"enable slowwalker UA 30\n")
     if "loopback" in traffic:
-        ser.write(b"enable toggleoutfrominput\n")
+        ser.write(b"enable toggleoutfrominput UA 30\n")
         
     if s > 0:
         cmd = f"enable stall {s} period {p} mode {mode}\n"

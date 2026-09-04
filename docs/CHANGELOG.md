@@ -17,6 +17,9 @@ High-level changes, newest first.
   carry `type`. In-repo bench/probe callers updated.
 
 ### Changed
+- TracerHost generators use shared `HostServices` (BitWalker, InputToggle,
+  Stall). Node-scoped C&C needs `UA`. Soft default UA is gone. Bench
+  scripts pass `UA 30`.
 - SimpleHost layout rows are `HostNodeSpec` (tagged union of typed INIT
   structs) with `hostNodeCpnode`/`hostNodeSmini`/… helpers and
   `host.addRemoteNode(spec)`.
