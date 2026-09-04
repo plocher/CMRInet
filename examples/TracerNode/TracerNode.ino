@@ -1,6 +1,6 @@
 // TracerNode.ino — the bench C&C Node test mule.
 //
-// The Node-side counterpart to XiaoHostTracer: a CMRINode on the
+// The Node-side counterpart to TracerHost: a CMRINode on the
 // cpNode-Xiao RS-485 block, command-and-control over USB CDC. It
 // reacts to I/T/P from a Host and emits R replies, with packet trace
 // telemetry so the bench can verify the full round trip.
@@ -42,6 +42,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "SimpleHostMetrics.h"  // shared HostStatusPanel (header-only helpers)
+#include "Ssd1306SegmentedFlush.h"  // non-blocking OLED push
 
 constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
@@ -49,6 +50,7 @@ constexpr int      kScreenAddr    = 0x3C;
 constexpr uint32_t kDisplayRefreshMs = 150;
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
 bool oledOk = false;
 uint32_t lastDisplayMs = 0;
 
@@ -191,7 +193,7 @@ void ourOnTrace(void*, bool transmit, const CMRInet::CMRIPacket& packet) {
   }
 }
 
-// ---- CDC verb reader (same pattern as XiaoHostTracer)
+// ---- CDC verb reader (same pattern as TracerHost)
 bool readVerb(char* out, size_t len) {
   static char buffer[128];
   static size_t used = 0;
@@ -299,7 +301,7 @@ void drawStatus() {
     display.print(' ');
   }
 
-  display.display();
+  oledFlush.markDirty();
 }
 
 // ---- Setup
@@ -410,9 +412,12 @@ void loop() {
     }
   }
 
-  // OLED refresh
-  if (nowMs - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0) {
+  // Paint on a timer; drain one I2C chunk every loop.
+  if (oledOk && (nowMs - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0)) {
     drawStatus();
     lastDisplayMs = nowMs;
+  }
+  if (oledOk) {
+    oledFlush.service();
   }
 }

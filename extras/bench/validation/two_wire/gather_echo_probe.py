@@ -51,7 +51,7 @@ def _resolve_host() -> str:
 def _compile() -> None:
     """Compile the probe sketch to a /tmp build directory."""
     build = f"/tmp/{SKETCH}_build"
-    sketch = REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino"
+    sketch = REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino"
     print(f">>> compile {SKETCH}")
     subprocess.run(
         ["arduino-cli", "compile", "--fqbn", FQBN,
@@ -70,7 +70,7 @@ def _upload(port: str) -> None:
     subprocess.run(
         ["arduino-cli", "upload", "-p", port, "--fqbn", FQBN,
          "--input-dir", f"/tmp/{SKETCH}_build",
-         str(REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino")],
+         str(REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino")],
         check=True, cwd=str(REPO_DIR),
     )
 

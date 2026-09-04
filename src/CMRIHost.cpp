@@ -159,6 +159,13 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
   node.config_ = config;
   node.input_.setLength(config.inputBytes);
   node.output_.setLength(config.outputBytes);
+  // Default type is CPNODE with zero opts — matches historical Host.
+  // Typed overloads overwrite these after the base add returns.
+  node.nodeType_ = NodeType::kCpnode;
+  node.initOpts1_ = 0;
+  node.initOpts2_ = 0;
+  node.initNs_ = 0;
+  node.initCtLen_ = 0;
   policies_[free] = policy;
   occupied_[free] = true;
   ++nodeCount_;
@@ -319,10 +326,98 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
 CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA,
                                                uint16_t inputBytes,
                                                uint16_t outputBytes) {
+  // Secondary convenience: implied CPNODE with default opts.
+  CpnodeInit init;
+  init.inputBytes = inputBytes;
+  init.outputBytes = outputBytes;
+  return addRemoteNode(UA, init, RemoteNodePolicy());
+}
+
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA,
+                                               const CpnodeInit& init,
+                                               const RemoteNodePolicy& policy) {
+  if (init.inputBytes > 255u || init.outputBytes > 255u) {
+    return ConfigStatus::kBadInit;
+  }
   RemoteNodeConfig config;
-  config.inputBytes = inputBytes;
-  config.outputBytes = outputBytes;
-  return addRemoteNode(UA, config);
+  config.inputBytes = init.inputBytes;
+  config.outputBytes = init.outputBytes;
+  const ConfigStatus st = addRemoteNode(UA, config, policy);
+  if (st != ConfigStatus::kOk) {
+    return st;
+  }
+  size_t slot = 0;
+  if (!findSlot_(UA, slot)) {
+    return ConfigStatus::kNoSuchNode;
+  }
+  RemoteNodeHandle& node = nodes_[slot];
+  node.nodeType_ = NodeType::kCpnode;
+  node.initOpts1_ = init.opts1;
+  node.initOpts2_ = init.opts2;
+  node.initNs_ = 0;
+  node.initCtLen_ = 0;
+  return ConfigStatus::kOk;
+}
+
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA,
+                                               const SminiInit& init,
+                                               const RemoteNodePolicy& policy) {
+  if (init.ns > SminiInit::kMaxNs) {
+    return ConfigStatus::kBadInit;
+  }
+  RemoteNodeConfig config;
+  config.inputBytes = SminiInit::kInputBytes;
+  config.outputBytes = SminiInit::kOutputBytes;
+  const ConfigStatus st = addRemoteNode(UA, config, policy);
+  if (st != ConfigStatus::kOk) {
+    return st;
+  }
+  size_t slot = 0;
+  if (!findSlot_(UA, slot)) {
+    return ConfigStatus::kNoSuchNode;
+  }
+  RemoteNodeHandle& node = nodes_[slot];
+  node.nodeType_ = NodeType::kSmini;
+  node.initOpts1_ = 0;
+  node.initOpts2_ = 0;
+  node.initNs_ = init.ns;
+  if (init.ns == 0) {
+    node.initCtLen_ = 0;
+  } else {
+    node.initCtLen_ = SminiInit::kCtCount;
+    memcpy(node.initCt_, init.ct, SminiInit::kCtCount);
+  }
+  return ConfigStatus::kOk;
+}
+
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA, NodeType type,
+                                               const UsicFamilyInit& init,
+                                               const RemoteNodePolicy& policy) {
+  if (type != NodeType::kUsic && type != NodeType::kSusic) {
+    return ConfigStatus::kUnsupportedNodeType;
+  }
+  if (init.ns < 1 || init.ns > UsicFamilyInit::kMaxNs) {
+    return ConfigStatus::kBadInit;
+  }
+  RemoteNodeConfig config;
+  config.inputBytes = init.inputBytes;
+  config.outputBytes = init.outputBytes;
+  const ConfigStatus st = addRemoteNode(UA, config, policy);
+  if (st != ConfigStatus::kOk) {
+    return st;
+  }
+  size_t slot = 0;
+  if (!findSlot_(UA, slot)) {
+    return ConfigStatus::kNoSuchNode;
+  }
+  RemoteNodeHandle& node = nodes_[slot];
+  node.nodeType_ = type;
+  node.initOpts1_ = 0;
+  node.initOpts2_ = 0;
+  node.initNs_ = init.ns;
+  node.initCtLen_ = init.ns;
+  memcpy(node.initCt_, init.ct, init.ns);
+  return ConfigStatus::kOk;
 }
 
 RemoteNodeHandle* CMRIHost::node(uint8_t UA) {
@@ -1215,34 +1310,59 @@ void CMRIHost::closeBreaker_(RemoteNodeHandle& node, uint32_t nowMs) {
   }
 }
 
-/// Build the CPNODE 'C' initialization packet for a node.
-/// VALIDATION: Interop v1.1 E3: the CPNODE I-body dialect is
-/// <'C'> <dH> <dL> <opts1> <opts2> <NI> <NO> <0xFF x6>, a 13-byte body.
-/// NI/NO are the wire byte budgets (inputBytes/outputBytes). The six
-/// 0xFF pad bytes are raw (the codec never escapes 0xFF, rule 2.1.3);
-/// every other body byte equal to 2/3/16 is DLE-escaped by encodeFrame
-/// (erratum E1). dH/dL come from the per-node policy (erratum E4).
+/// Build the typed initialization packet for a node.
+/// VALIDATION: docs/research/node-type-init-bodies.md
+/// VALIDATION: Interop v1.1 E3 (CPNODE), E4 (dH/dL).
 void CMRIHost::buildInitPacket_(size_t nodeIndex) {
   RemoteNodeHandle& node = nodes_[nodeIndex];
   const RemoteNodePolicy& policy = policies_[nodeIndex];
   outbound_.clear();
   outbound_.wireUA = node.wireUA_;
   outbound_.mt = MessageType::kInit;
-  uint8_t body[13];
-  body[0] = 'C';
-  body[1] = policy.transmissionDelayDh;
-  body[2] = policy.transmissionDelayDl;
-  body[3] = 0;  // opts1: USECMRIX | SENDEOT | USEBCC, all default 0
-  body[4] = 0;  // opts2: reserved
-  body[5] = static_cast<uint8_t>(node.config_.inputBytes);   // NI
-  body[6] = static_cast<uint8_t>(node.config_.outputBytes);  // NO
-  body[7] = kSyn;  // six raw 0xFF pad bytes
-  body[8] = kSyn;
-  body[9] = kSyn;
-  body[10] = kSyn;
-  body[11] = kSyn;
-  body[12] = kSyn;
-  outbound_.setBody(body, sizeof(body));
+
+  InitBody body;
+  InitBuildStatus bst = InitBuildStatus::kUnsupportedType;
+  const uint8_t dH = policy.transmissionDelayDh;
+  const uint8_t dL = policy.transmissionDelayDl;
+  switch (node.nodeType_) {
+    case NodeType::kCpnode: {
+      CpnodeInit init;
+      init.inputBytes = node.config_.inputBytes;
+      init.outputBytes = node.config_.outputBytes;
+      init.opts1 = node.initOpts1_;
+      init.opts2 = node.initOpts2_;
+      bst = buildCpnodeInitBody(init, dH, dL, body);
+      break;
+    }
+    case NodeType::kSmini: {
+      SminiInit init;
+      init.ns = node.initNs_;
+      if (node.initCtLen_ == SminiInit::kCtCount) {
+        memcpy(init.ct, node.initCt_, SminiInit::kCtCount);
+      }
+      bst = buildSminiInitBody(init, dH, dL, body);
+      break;
+    }
+    case NodeType::kUsic:
+    case NodeType::kSusic: {
+      UsicFamilyInit init;
+      init.ns = node.initNs_;
+      init.inputBytes = node.config_.inputBytes;
+      init.outputBytes = node.config_.outputBytes;
+      if (node.initCtLen_ > 0 && node.initCtLen_ <= UsicFamilyInit::kMaxNs) {
+        memcpy(init.ct, node.initCt_, node.initCtLen_);
+      }
+      bst = buildUsicFamilyInitBody(node.nodeType_, init, dH, dL, body);
+      break;
+    }
+  }
+  if (bst != InitBuildStatus::kOk) {
+    // Should be unreachable: add-time validation rejected bad init.
+    // Fall back to an empty I rather than emit a forged CPNODE body.
+    outbound_.setBody(nullptr, 0);
+    return;
+  }
+  outbound_.setBody(body.data, body.length);
 }
 
 /// Build a full-output-image T packet. Never partial: fielded Nodes fill
@@ -1413,6 +1533,8 @@ const char* configStatusString(CMRIHost::ConfigStatus status) {
     case CMRIHost::ConfigStatus::kNoSuchNode:         return "no such node";
     case CMRIHost::ConfigStatus::kInputBytesTooLarge: return "input bytes too large";
     case CMRIHost::ConfigStatus::kOutputBytesTooLarge:return "output bytes too large";
+    case CMRIHost::ConfigStatus::kUnsupportedNodeType: return "unsupported node type";
+    case CMRIHost::ConfigStatus::kBadInit:            return "bad init";
   }
   return "unknown";
 }

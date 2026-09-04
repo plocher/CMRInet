@@ -20,6 +20,7 @@
 #include "CMRITime.h"
 #include "ConformanceFault.h"
 #include "IOBuffer.h"
+#include "NodeInit.h"
 
 // Geometry knob: the per-node input image capacity in data bytes.
 //
@@ -330,6 +331,9 @@ class RemoteNodeHandle {
   /// The unit UA byte as transmitted (UA + 65).
   uint8_t wireUA() const { return wireUA_; }
 
+  /// Declared node type (NDP) used to build the I body.
+  NodeType nodeType() const { return nodeType_; }
+
   /// Last good input bit. Bit 0 is the least significant bit of the
   /// named byte. Out-of-range indexes read false.
   bool inputBit(size_t byte, size_t bit) const {
@@ -500,6 +504,17 @@ class RemoteNodeHandle {
   uint8_t UA_ = 0;
   uint8_t wireUA_ = 0;
   RemoteNodeConfig config_;
+
+  // Typed INIT storage (Host-written). nodeType_ selects the I-body
+  // builder; classic CT/NS live here; CPNODE opts live here. Geometry
+  // image sizes remain in config_.
+  // VALIDATION: docs/research/node-type-init-bodies.md
+  NodeType nodeType_ = NodeType::kCpnode;
+  uint8_t initOpts1_ = 0;
+  uint8_t initOpts2_ = 0;
+  uint8_t initNs_ = 0;
+  uint8_t initCt_[UsicFamilyInit::kMaxNs] = {};
+  uint8_t initCtLen_ = 0;
 
   // Output image: sketch-written via the setters above, engine-read when
   // it builds a full T. outputsDirty_ tells the engine a T is owed.

@@ -52,7 +52,7 @@ def _display(ser, line: int, message: str) -> None:
 
 
 def _await_end_capture(ser, secs: int, timeout_slop_s: float = 5.0) -> bool:
-    """Wait for END CAPTURE marker from XiaoHostTracer."""
+    """Wait for END CAPTURE marker from TracerHost."""
     deadline = time.time() + secs + timeout_slop_s
     while time.time() < deadline:
         line = ser.readline().decode("utf-8", errors="replace").strip()
@@ -241,7 +241,7 @@ def main() -> int:
         _display(ser, 2, "cfg nodes")
         for node in node_plan:
             _tracer_client.send_command(
-                ser, f"node add {node.ua} {node.input_bytes} {node.output_bytes}"
+                ser, f"node add {node.ua} C {node.input_bytes} {node.output_bytes}"
             )
             _tracer_client.send_command(ser, f"node enable {node.ua}")
         _tracer_client.flush_lines(ser)

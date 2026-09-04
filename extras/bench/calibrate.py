@@ -52,7 +52,7 @@ def _compile() -> None:
         "--library", f"{LIBS_DIR}/Adafruit_BusIO",
     ]
     build_dir = f"/tmp/{SKETCH}_build"
-    sketch = REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino"
+    sketch = REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino"
     print(f">>> compile {SKETCH}")
     subprocess.run(
         ["arduino-cli", "compile", "--fqbn", FQBN, *libs,
@@ -103,7 +103,7 @@ def main() -> int:
     subprocess.run(
         ["arduino-cli", "upload", "-p", port, "--fqbn", FQBN,
          "--input-dir", f"/tmp/{SKETCH}_build",
-         str(REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino")],
+         str(REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino")],
         check=True,
         cwd=str(REPO_DIR),
     )
@@ -118,7 +118,7 @@ def main() -> int:
 
     # Configure the calibration node via C&C (the shell holds no
     # compiled-in nodes, so add it at runtime).
-    _tracer_client.send_command(ser, f"node add {args.ua} 2 2")
+    _tracer_client.send_command(ser, f"node add {args.ua} C 2 2")
     _tracer_client.flush_lines(ser)
 
     print(f">>> capture {args.secs}s")

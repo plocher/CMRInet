@@ -35,7 +35,7 @@ THRESHOLD_MS = 5000
 # Historical: the "phantom" is a deliberately-missing bench node the Host
 # polls to drive poll-backoff. In the one-real-node era the phantom was
 # UA 31; the bench later added a real node at UA 31, so the live phantom
-# moved to UA 32 (compiled as TRACER_PHANTOM_UA in XiaoHostTracer). Kept
+# moved to UA 32 (compiled as TRACER_PHANTOM_UA in TracerHost). Kept
 # at 31 here only to rescore old #47 captures; #47 is closed.
 DEFAULT_PHANTOM_UA = 31
 

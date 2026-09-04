@@ -4,6 +4,32 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- First-class Host **node types** and typed INIT (`src/NodeInit.h`):
+  NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
+  Pure I-body builders with golden tests; evidence pack in
+  `docs/research/node-type-init-bodies.md` (LCS-9.10.1, SPS QBASIC,
+  Chubb manuals, JMRI review).
+- Typed `CMRIHost::addRemoteNode` overloads for `CpnodeInit`, `SminiInit`,
+  and USIC/SUSIC family init; slot stores type+init; `buildInitPacket_`
+  dispatches by type (CPNODE opts no longer hardwired 0).
+- TracerShell breaking `node add <UA> <type> ...` grammar; roster lines
+  carry `type`. In-repo bench/probe callers updated.
+
+### Changed
+- TracerHost membership is C&C-driven (no permanent macro topology seed);
+  OLED iterates live nodes. SimpleHost registers via sketch-local table
+  + `CpnodeInit`. Tracer generators remain sketch-local; SimpleHost
+  Orchestrator services remain the overlay model (not core).
+- Renamed `examples/XiaoHostTracer` to `examples/TracerHost` (and the
+  image identity `xiao_host_tracer` → `tracer_host`) so the Host tracer
+  matches the `Simple*` / `Tracer*` example naming pattern.
+- Moved single-use bench jigs out of `examples/` into `extras/bench/`:
+  `XiaoBenchCal`, `XiaoBenchEcho`, `XiaoBenchEchoCancel`. They remain
+  flashable via the bench tooling; they are no longer presented as
+  user-facing library examples. `sketch_lint.py` resolves sketches under
+  both `examples/` and `extras/bench/`.
+
 ### Fixed
 - Host accepts a matching R while an outstanding P is still in
   `kAwaitSendComplete` (issue #112). `drainReceive_` runs before

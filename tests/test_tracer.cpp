@@ -496,7 +496,7 @@ static void test_verb_on_unknown_ua_reports_no_such_node(void) {
 static void test_node_add_and_delete_verbs_move_the_roster(void) {
   TracerRig rig;
   TEST_ASSERT_EQUAL(TracerShell::VerbResult::kHandled,
-                    rig.verb("node add 9 1 2"));
+                    rig.verb("node add 9 C 1 2"));
   TEST_ASSERT_NOT_NULL(rig.host.node(9));
   TEST_ASSERT_TRUE_MESSAGE(
       contains(rig.lines.back(), "\"event\":\"node_add\""),
@@ -514,7 +514,7 @@ rig.lines.clear();
 
   // Adding the same UA again is a reported rejection, not a no-op.
   rig.lines.clear();
-  rig.verb("node add 9 1 2");
+  rig.verb("node add 9 C 1 2");
   TEST_ASSERT_TRUE_MESSAGE(contains(rig.lines.back(), "\"addFailed\""),
                            "duplicate add did not report a failure");
 

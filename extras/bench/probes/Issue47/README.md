@@ -3,8 +3,8 @@
 - **Issue**: [plocher/CMRInet#47](https://github.com/plocher/CMRInet/issues/47)
 - **Status**: open
 - **Harness**: `gather_stall_sweep.py`, `gather_busy_yield.py`
-- **Sketch**: `XiaoHostTracer`
-- **Commands**: `reboot`, `node add 30 7 7`, `node add 31 4 4`, `enable stall <ms> period <p> mode <m>`
+- **Sketch**: `TracerHost`
+- **Commands**: `reboot`, `node add 30 C 7 7`, `node add 31 C 4 4`, `enable stall <ms> period <p> mode <m>`
 - **Analyzer**: `analyze_stall_sweep.py`, `analyze_busy_yield.py`
 
 ## Background
@@ -19,7 +19,7 @@ This bug occurred first during the OLED display tests (issue #11). A plain `dela
 
 The Python harness (`gather_stall_sweep.py` or `gather_busy_yield.py`):
 
-1. Sends `reboot` and waits for the device to re-enumerate on CDC, providing a clean-slate hardware state. It then connects to `XiaoHostTracer` and validates the boot message.
+1. Sends `reboot` and waits for the device to re-enumerate on CDC, providing a clean-slate hardware state. It then connects to `TracerHost` and validates the boot message.
 2. Registers two nodes via runtime verbs: UA 30 (real node) and UA 31 (phantom).
 3. Sends `enable stall` to put stalls in `loop()`.
 4. Arms a capture using `run <secs>`. The sketch records `I` and `T` packets to a RAM ring buffer.
@@ -42,7 +42,7 @@ A correct fix ensures the poll-retry timer increases correctly across `host.tick
 
 ## Grid sweep
 
-The `gather_stall_sweep.py` script sweeps the grid (stall duration × stall period) by sending commands to `XiaoHostTracer` over the CDC serial port. The raw captures land in `data/results.<today>/` with value-named files (e.g. `s25_p150_yield.log`). The `summary.csv` file records the verdict and the gap statistics for the whole grid. The sweep resumes if interrupted. Existing combos are skipped. This is not an automated agent task — you must run it yourself.
+The `gather_stall_sweep.py` script sweeps the grid (stall duration × stall period) by sending commands to `TracerHost` over the CDC serial port. The raw captures land in `data/results.<today>/` with value-named files (e.g. `s25_p150_yield.log`). The `summary.csv` file records the verdict and the gap statistics for the whole grid. The sweep resumes if interrupted. Existing combos are skipped. This is not an automated agent task — you must run it yourself.
 
 
 ## Resolution
@@ -124,7 +124,7 @@ Change made
 ◦  Now returns false in that case, preserving each node’s own backoff schedule.
 
 Verification run
-•  Rebuilt and flashed XiaoHostTracer.
+•  Rebuilt and flashed TracerHost.
 •  Ran your specified command:
 ◦  gather_single_cycle.py --stall 9 --period 150 --mode yield --traffic "fast slow loopback" --secs 60 --tag s9_p150_yield_fix_fallback
 

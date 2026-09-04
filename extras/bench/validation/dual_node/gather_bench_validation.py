@@ -33,7 +33,7 @@ def _display(ser, line: int, message: str) -> None:
 
 
 def _await_end_capture(ser, secs: int, timeout_slop_s: float = 5.0) -> bool:
-    """Wait for END CAPTURE from XiaoHostTracer."""
+    """Wait for END CAPTURE from TracerHost."""
     deadline = time.time() + secs + timeout_slop_s
     while time.time() < deadline:
         line = ser.readline().decode("utf-8", errors="replace").strip()
@@ -169,8 +169,8 @@ def main() -> int:
         print("Configuring runtime topology...")
         _display(ser, 1, "dual-node validate")
         _display(ser, 2, "cfg nodes")
-        _tracer_client.send_command(ser, f"node add {args.ua_a} {args.ua_a_in} {args.ua_a_out}")
-        _tracer_client.send_command(ser, f"node add {args.ua_b} {args.ua_b_in} {args.ua_b_out}")
+        _tracer_client.send_command(ser, f"node add {args.ua_a} C {args.ua_a_in} {args.ua_a_out}")
+        _tracer_client.send_command(ser, f"node add {args.ua_b} C {args.ua_b_in} {args.ua_b_out}")
         _tracer_client.send_command(ser, f"node enable {args.ua_a}")
         _tracer_client.send_command(ser, f"node enable {args.ua_b}")
         # Disable the compiled-in phantom node (UA32) so its backoff

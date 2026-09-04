@@ -5,7 +5,7 @@
 // This header IS the stage-2 invariant "same shell, same listeners,
 // different main()" (map issue #21): the desktop tracer
 // (extras/desktop/cmri_tracer.cpp) and the Xiao Host R&D sketch
-// (examples/XiaoHostTracer) both wrap this shell, so a scenario that
+// (examples/TracerHost) both wrap this shell, so a scenario that
 // passes against one Host image passes against the other by
 // construction. Only the mains differ: option parsing, the clock
 // source, and the C&C byte stream.
@@ -114,9 +114,12 @@ inline const char* eventName(CMRIHostEventType type) {
 ///   forcetx <UA>                    re-send a full T with no change
 ///   setbit <UA> <bit> <0|1>         one output bit
 ///   writeoutputs <UA> <hex>         whole output image
-///   node add <UA> <in> <out>        runtime add (Design v1.2 D5)
+///   node add <UA> <type> ...        typed runtime add (Design v1.2 D5)
+///                                   type C: <in> <out> [opts1 [opts2]]
+///                                   type M: [ns [ct0..ct5]]  (geometry 3/6)
+///                                   type N|X: <ns> <in> <out> [ct x ns]
 ///   node delete <UA>                runtime delete
-///   node geometry <UA> <in> <out>   runtime geometry change
+///   node geometry <UA> <in> <out>   runtime geometry change (CPNODE)
 ///   node enable <UA>                alias of resume (bench probes)
 ///   node disable <UA>               alias of quiesce (bench probes)
 ///   quit                            the main owns its own exit
@@ -247,7 +250,7 @@ if (strcmp(verb, "status") == 0) {
     return VerbResult::kHandled;
   }
 
-  /// Capture-mode filter (issue #112 / XiaoHostTracer `run`). When
+  /// Capture-mode filter (issue #112 / TracerHost `run`). When
   /// enabled, suppress high-rate chatter (state, reinit, node_*,
   /// breaker_*, plain reply without enrichment need) but keep the dense-T
   /// decision table live: miss, reject, xchg, unsolicited, and backoff.
@@ -450,15 +453,111 @@ if (strcmp(verb, "status") == 0) {
   // to call, so the line shape is unchanged. The mutator validates the
   // UA range; the shell's old UA > 127 pre-check was redundant with it.
   VerbResult handleNodeAdd_(const char* args) {
-    unsigned long UA = 0, in = 0, out = 0;
-    if (!parseUint_(args, UA) || !parseUint_(args, in) ||
-        !parseUint_(args, out)) {
-      emitLine("error", "badVerb", "node add: want <UA> <in> <out>");
+    // Breaking grammar: node add <UA> <type> ...
+    // C: <in> <out> [opts1 [opts2]]
+    // M: [ns [ct0..ct5]]
+    // N|X: <ns> <in> <out> [ct x ns]
+    unsigned long UA = 0;
+    if (!parseUint_(args, UA)) {
+      emitLine("error", "badVerb",
+               "node add: want <UA> <type> ...");
       return VerbResult::kHandled;
     }
-    const CMRIHost::ConfigStatus status = host_->addRemoteNode(
-        static_cast<uint8_t>(UA), static_cast<uint16_t>(in),
-        static_cast<uint16_t>(out));
+    while (*args == ' ') {
+      ++args;
+    }
+    if (*args == '\0') {
+      emitLine("error", "badVerb",
+               "node add: want <UA> <type> ...");
+      return VerbResult::kHandled;
+    }
+    // Type token: single letter C/M/N/X (case-insensitive).
+    char typeCh = *args;
+    if (typeCh >= 'a' && typeCh <= 'z') {
+      typeCh = static_cast<char>(typeCh - 'a' + 'A');
+    }
+    ++args;
+    if (*args != ' ' && *args != '\0') {
+      emitLine("error", "badVerb",
+               "node add: type must be C, M, N, or X");
+      return VerbResult::kHandled;
+    }
+    NodeType type;
+    if (!nodeTypeFromNdp(typeCh, type)) {
+      emitLine("error", "badVerb",
+               "node add: type must be C, M, N, or X");
+      return VerbResult::kHandled;
+    }
+
+    CMRIHost::ConfigStatus status = CMRIHost::ConfigStatus::kBadInit;
+    if (type == NodeType::kCpnode) {
+      unsigned long in = 0, out = 0, opts1 = 0, opts2 = 0;
+      if (!parseUint_(args, in) || !parseUint_(args, out)) {
+        emitLine("error", "badVerb",
+                 "node add C: want <UA> C <in> <out> [opts1 [opts2]]");
+        return VerbResult::kHandled;
+      }
+      // opts optional
+      (void)parseUint_(args, opts1);
+      (void)parseUint_(args, opts2);
+      CpnodeInit init;
+      init.inputBytes = static_cast<uint16_t>(in);
+      init.outputBytes = static_cast<uint16_t>(out);
+      init.opts1 = static_cast<uint8_t>(opts1);
+      init.opts2 = static_cast<uint8_t>(opts2);
+      status = host_->addRemoteNode(static_cast<uint8_t>(UA), init);
+    } else if (type == NodeType::kSmini) {
+      SminiInit init;
+      unsigned long ns = 0;
+      if (parseUint_(args, ns)) {
+        if (ns > SminiInit::kMaxNs) {
+          emitLine("error", "badVerb", "node add M: ns out of range");
+          return VerbResult::kHandled;
+        }
+        init.ns = static_cast<uint8_t>(ns);
+        if (init.ns > 0) {
+          for (uint8_t i = 0; i < SminiInit::kCtCount; ++i) {
+            unsigned long ct = 0;
+            if (!parseUint_(args, ct) || ct > 255ul) {
+              emitLine("error", "badVerb",
+                       "node add M: want 6 CT bytes when ns>0");
+              return VerbResult::kHandled;
+            }
+            init.ct[i] = static_cast<uint8_t>(ct);
+          }
+        }
+      }
+      status = host_->addRemoteNode(static_cast<uint8_t>(UA), init);
+    } else {
+      // USIC / SUSIC
+      unsigned long ns = 0, in = 0, out = 0;
+      if (!parseUint_(args, ns) || !parseUint_(args, in) ||
+          !parseUint_(args, out)) {
+        emitLine("error", "badVerb",
+                 "node add N|X: want <UA> N|X <ns> <in> <out> [ct...]");
+        return VerbResult::kHandled;
+      }
+      if (ns < 1 || ns > UsicFamilyInit::kMaxNs) {
+        emitLine("error", "badVerb", "node add N|X: ns out of range");
+        return VerbResult::kHandled;
+      }
+      UsicFamilyInit init;
+      init.ns = static_cast<uint8_t>(ns);
+      init.inputBytes = static_cast<uint16_t>(in);
+      init.outputBytes = static_cast<uint16_t>(out);
+      for (uint8_t i = 0; i < init.ns; ++i) {
+        unsigned long ct = 0;
+        if (!parseUint_(args, ct) || ct > 255ul) {
+          // CT optional fill with 0 if omitted? Prefer explicit.
+          emitLine("error", "badVerb",
+                   "node add N|X: want ns CT bytes");
+          return VerbResult::kHandled;
+        }
+        init.ct[i] = static_cast<uint8_t>(ct);
+      }
+      status = host_->addRemoteNode(static_cast<uint8_t>(UA), type, init);
+    }
+
     if (status != CMRIHost::ConfigStatus::kOk) {
       emitLine("error", "addFailed", configStatusString(status));
       return VerbResult::kHandled;
@@ -1053,8 +1152,9 @@ if (roster) {
       }
       written = appendf_(
           written,
-          "%s{\"ua\":%u,\"in\":%u,\"out\":%u,\"state\":\"%s\",\"enabled\":%s}",
+          "%s{\"ua\":%u,\"type\":\"%c\",\"in\":%u,\"out\":%u,\"state\":\"%s\",\"enabled\":%s}",
           first ? "" : ",", node->UA(),
+          nodeTypeNdp(node->nodeType()),
           static_cast<unsigned>(node->inputLength()),
           static_cast<unsigned>(node->outputLength()),
           stateName(node->state()), node->enabled() ? "true" : "false");

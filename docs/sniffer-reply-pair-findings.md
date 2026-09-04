@@ -19,7 +19,7 @@ The sniffer firmware uses the library `CMRIFrameDecoder`. This is the same decod
 
 The two host sketches used in this session:
 - **SimpleHost** — `examples/SimpleHost/SimpleHost.ino`. Polls the node and runs a bitwalk on the outputs. Stays silent on USB CDC except on a reject. The bitwalk runs only when the node state is `kOnline`.
-- **XiaoHostTracer** — `examples/XiaoHostTracer/XiaoHostTracer.ino`. Polls the node and emits JSON telemetry on USB CDC. Answers the `status` verb with counters including `replies`, `misses`, and `state`. Emits `trace` events for each packet sent and received.
+- **TracerHost** — `examples/TracerHost/TracerHost.ino`. Polls the node and emits JSON telemetry on USB CDC. Answers the `status` verb with counters including `replies`, `misses`, and `state`. Emits `trace` events for each packet sent and received.
 
 Both host sketches use the same RS485 port: `Esp32UartCMRISerialPort` on pin D3 for TXEN, with Serial1 at 28800 8N2.
 
@@ -72,8 +72,8 @@ Result over 10 s at 28800 8N2:
 Result over 10 s at 28800 8N2, all four DTR/RTS combinations:
 - dongle: 0 bytes for every combination.
 
-## Test 5 — tracer and dongle, Host R±, XiaoHostTracer
-- Host firmware: XiaoHostTracer
+## Test 5 — tracer and dongle, Host R±, TracerHost
+- Host firmware: TracerHost
 - Xiao #1 tap: poll pair
 - Xiao #2 tap: reply pair (Host R±) — counters not captured in this run
 - dongle tap: Host R+ and R− screw terminals (reply pair)
@@ -84,8 +84,8 @@ Result over 15 s:
 
 The tracer and the dongle agreed to the same frame bytes.
 
-## Test 6 — all three witnesses, Host R±, XiaoHostTracer (gap fill)
-- Host firmware: XiaoHostTracer
+## Test 6 — all three witnesses, Host R±, TracerHost (gap fill)
+- Host firmware: TracerHost
 - Xiao #1 tap: poll pair
 - Xiao #2 tap: reply pair (Host R±)
 - dongle tap: Host R+ and R− screw terminals (reply pair)
@@ -95,7 +95,7 @@ Result over 15 s:
 - Xiao #2: `framesDecoded` +1. MT distribution: R. `frame` events: 3. Counters not frozen.
 - dongle: 3 frames decoded. MT distribution: R=3. UA distribution: 95=3. Body: `00 00 00 03 FF 00 01`.
 
-All three witnesses decoded frames under XiaoHostTracer.
+All three witnesses decoded frames under TracerHost.
 
 ## Test 7 — all three witnesses, Host R±, SimpleHost (A/B/A return)
 - Host firmware: SimpleHost
@@ -109,11 +109,11 @@ Result over 15 s:
 - dongle: 0 bytes. No signal.
 
 ## Tests not run
-- The dongle on Node T± under XiaoHostTracer was not run. The facts do not show whether R reaches the Node end of the reply pair under the tracer.
+- The dongle on Node T± under TracerHost was not run. The facts do not show whether R reaches the Node end of the reply pair under the tracer.
 - The polarity inversion test was run earlier in the session by the operator. Inverting the polarity produced errors, which confirms that the current polarity is the driven one. The exact byte captures from that test are not in this record.
 
 ## Controlled variables
-The decisive comparison is Test 5 (XiaoHostTracer) against Test 7 (SimpleHost). Between these two runs:
+The decisive comparison is Test 5 (TracerHost) against Test 7 (SimpleHost). Between these two runs:
 - the dongle tap stayed on Host R+ and R− screw terminals
 - the Xiao #2 tap stayed on Host R± (reply pair)
 - the baud and framing stayed at 28800 8N2
@@ -130,8 +130,8 @@ The result changed from 809 R frames (tracer) to 0 bytes (SimpleHost) on the don
 | 2 | SimpleHost | — | — | 21 P/T (poll pair) |
 | 3 | SimpleHost | — | — | 0 bytes |
 | 4 | SimpleHost | — | — | 0 bytes (Node T±) |
-| 5 | XiaoHostTracer | — | not captured | 809 R |
-| 6 | XiaoHostTracer | +2 P | +1 R | 3 R |
+| 5 | TracerHost | — | not captured | 809 R |
+| 6 | TracerHost | +2 P | +1 R | 3 R |
 | 7 | SimpleHost | +70 P/T | frozen | 0 bytes |
 
 ## Facts that rule out causes
@@ -142,7 +142,7 @@ The result changed from 809 R frames (tracer) to 0 bytes (SimpleHost) on the don
 - A bad sniffer board is not the cause. Xiao #2 decoded R under the tracer on the same tap where it froze under SimpleHost.
 
 ## The open fact
-Under SimpleHost, the Host receives R (the node stays online and the bitwalk runs), but the dongle on Host R± sees no signal and Xiao #2 on Host R± shows frozen counters. Under XiaoHostTracer, the same taps see R. The Host firmware is the only controlled variable that changed.
+Under SimpleHost, the Host receives R (the node stays online and the bitwalk runs), but the dongle on Host R± sees no signal and Xiao #2 on Host R± shows frozen counters. Under TracerHost, the same taps see R. The Host firmware is the only controlled variable that changed.
 
 ## How to reproduce
 One-time setup: create the bench probe venv (see `extras/bench/setup.sh` and `extras/bench/README.md`). The two sniffers and the dongle must be wired to the bus with Xiao #1 on the poll pair and Xiao #2 and the dongle on the reply pair.
@@ -150,7 +150,7 @@ One-time setup: create the bench probe venv (see `extras/bench/setup.sh` and `ex
 Run the two-command A/B sequence from the repo root:
 ```shell
 extras/bench/flash_and_probe.sh SimpleHost
-extras/bench/flash_and_probe.sh XiaoHostTracer
+extras/bench/flash_and_probe.sh TracerHost
 ```
 
 Each command compiles the named sketch, uploads it to the Host board, boots it, captures all three witnesses for 15 s, and prints a VERDICT block. No file-content analysis is needed. The verdict names each witness PASS or FAIL and prints a one-line overall summary.
@@ -166,14 +166,14 @@ OVERALL: BUG REPRODUCED — poll pair active, reply pair deaf under SimpleHost.
 ======================================================
 ```
 
-Expected output under XiaoHostTracer:
+Expected output under TracerHost:
 ```
-=================== VERDICT (XiaoHostTracer) ===================
+=================== VERDICT (TracerHost) ===================
 Xiao #1 (poll pair):   PASS (sees frames)  [frames=N]
 Xiao #2 (reply pair):  PASS (sees frames)  [frames=N]
 Dongle (reply pair):   PASS (sees frames)  [frames=N]
 
-OVERALL: HEALTHY — both pairs active under XiaoHostTracer.
+OVERALL: HEALTHY — both pairs active under TracerHost.
 ======================================================
 ```
 
@@ -184,4 +184,4 @@ Root cause: `CMRIHost::runSchedule_` unconditionally sent a full `T` instead of 
 
 Fix (library, not the example sketch): `CMRIHost` now bounds how long a due poll can be deferred by a pending transmit (`CMRIHostConfig::maxOutputPreemptMs`, default 250 ms) — once a node's last real poll is that old, the scheduler forces the poll through regardless of `outputsDirty_`. This bound only holds if the round-robin's healthy-node cycle time stays well under that threshold, so a companion poll-retry backoff (`initialPollBackoffMs`/`maxPollBackoffMs`, doubling per consecutive miss up to 32 s, cleared immediately on any accepted reply) keeps a chronically offline node from taxing every round-robin pass at full priority. Without the backoff, the anti-starvation bound alone inverts into the mirror-image defect — transmit starvation — once the round-robin's baseline cycle time is itself pinned near the bound by an unrelated offline node; both changes ship together. See `src/CMRIHost.cpp`/`.h` and `src/RemoteNodeHandle.h`, and the regression tests in `tests/test_host.cpp` (`test_dirty_output_cannot_starve_poll_forever`, `test_anti_starvation_does_not_starve_transmit`, `test_poll_backoff_doubles_and_clears_on_reply`).
 
-Hardware re-verification (2026-08-19, same bench, unmodified `SimpleHost.ino`, fixed library): `extras/bench/flash_and_probe.sh SimpleHost` now reports `OVERALL: HEALTHY` with hundreds of `R` frames decoded per 15 s window by both the second sniffer and the dongle (A/B/A confirmed across three separate runs; `XiaoHostTracer` re-checked healthy in between). `extras/bench/verdict.py` no longer special-cases SimpleHost as an expected-silent case — a silent reply pair under any sketch is now a regression.
+Hardware re-verification (2026-08-19, same bench, unmodified `SimpleHost.ino`, fixed library): `extras/bench/flash_and_probe.sh SimpleHost` now reports `OVERALL: HEALTHY` with hundreds of `R` frames decoded per 15 s window by both the second sniffer and the dongle (A/B/A confirmed across three separate runs; `TracerHost` re-checked healthy in between). `extras/bench/verdict.py` no longer special-cases SimpleHost as an expected-silent case — a silent reply pair under any sketch is now a regression.

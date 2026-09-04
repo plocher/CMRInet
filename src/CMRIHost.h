@@ -485,6 +485,8 @@ class CMRIHost {
     kNoSuchNode,          ///< no live node holds that UA
     kInputBytesTooLarge,  ///< inputBytes > RemoteNodeHandle::kMaxInputBytes
     kOutputBytesTooLarge, ///< outputBytes > RemoteNodeHandle::kMaxOutputBytes
+    kUnsupportedNodeType, ///< NDP not supported by this Host build
+    kBadInit,             ///< type-specific INIT fields rejected
   };
 
   /// The engine holds the transport reference for its whole life.
@@ -536,6 +538,29 @@ class CMRIHost {
   ConfigStatus addRemoteNode(uint8_t UA,
                              uint16_t inputBytes,
                              uint16_t outputBytes);
+
+  /// Add a CPNODE ('C') with full INIT fields (opts + NI/NO).
+  ConfigStatus addRemoteNode(uint8_t UA, const CpnodeInit& init,
+                             const RemoteNodePolicy& policy);
+  ConfigStatus addRemoteNode(uint8_t UA, const CpnodeInit& init) {
+    return addRemoteNode(UA, init, RemoteNodePolicy());
+  }
+
+  /// Add an SMINI ('M'). Image geometry is fixed at 3/6 bytes.
+  ConfigStatus addRemoteNode(uint8_t UA, const SminiInit& init,
+                             const RemoteNodePolicy& policy);
+  ConfigStatus addRemoteNode(uint8_t UA, const SminiInit& init) {
+    return addRemoteNode(UA, init, RemoteNodePolicy());
+  }
+
+  /// Add a USIC ('N') or SUSIC ('X'). `type` must be kUsic or kSusic.
+  ConfigStatus addRemoteNode(uint8_t UA, NodeType type,
+                             const UsicFamilyInit& init,
+                             const RemoteNodePolicy& policy);
+  ConfigStatus addRemoteNode(uint8_t UA, NodeType type,
+                             const UsicFamilyInit& init) {
+    return addRemoteNode(UA, type, init, RemoteNodePolicy());
+  }
 
   /// Delete the node at `UA`. Returns kNoSuchNode when no live node
   /// holds it. Legal before and after begin().

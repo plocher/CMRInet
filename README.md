@@ -10,7 +10,7 @@ decisions D1-D17.
 
 Status: **Host and Node engines are built, with desktop loopback
 integration tests passing.** The front-door examples are `SimpleHost`
-and `SimpleNode`. Bench instruments (`XiaoHostTracer`, `XiaoSniffer`)
+and `SimpleNode`. Bench instruments (`TracerHost`, `XiaoSniffer`)
 are built for the testbed. See [docs/DESIGN.md](docs/DESIGN.md) for
 the architecture and [docs/adr/0004-library-boundary-and-transport-packaging.md](docs/adr/0004-library-boundary-and-transport-packaging.md)
 for the library boundary decision.
@@ -68,7 +68,7 @@ Wire the Host's T± to the Node's R± and the Host's R± to the Node's
 T±. Edit the `nodeTable` array in the sketch to match your nodes'
 addresses and I/O byte counts. Upload and open a serial monitor.
 
-The other Host examples are bench instruments. `XiaoHostTracer` is a
+The other Host examples are bench instruments. `TracerHost` is a
 command-driven R&D tracer. `XiaoSniffer` is a passive bus tap. Use the
 tracer to poke a node interactively. Use SimpleHost as the starting
 point for a layout.
@@ -116,7 +116,7 @@ against the Host tracer.
   OLED with segmented flush, miss/error health rows, behavior-only).
 - `examples/SimpleNode` — the front-door Node tutorial (Xiao ESP32-C6,
   pack/unpack seam, minimal GPIO).
-- `examples/XiaoHostTracer` — the bench R&D tracer (Xiao ESP32-C6, USB
+- `examples/TracerHost` — the bench R&D tracer (Xiao ESP32-C6, USB
   CDC command stream, JSON-lines telemetry).
 - `examples/TracerNode` — the bench Node test mule (capture, trace, C&C).
 - `examples/XiaoNode` — the full-featured Node (OLED, WiFi OTA, I2C
@@ -124,6 +124,8 @@ against the Host tracer.
 - `examples/XiaoSniffer` — a passive RS-485 bus tap (Xiao ESP32-C6,
   OLED, JSON-lines frame log).
 - `tests/` — desktop unit tests (290 tests, no Arduino dependencies).
+- `extras/bench/` — RS-485 bus probe scripts and single-use bench
+  jigs (`XiaoBenchCal`, `XiaoBenchEcho`, `XiaoBenchEchoCancel`).
 - `extras/desktop/` — the desktop tracer binary.
 
 Related libraries in this family: [`cpNode`](../cpNode) (deployed

@@ -53,12 +53,12 @@ def main() -> int:
         
     print("Configuring topology for session...")
     ser.write(
-        f"node add {args.real_ua} {args.real_in} {args.real_out}\n".encode("utf-8")
+        f"node add {args.real_ua} C {args.real_in} {args.real_out}\n".encode("utf-8")
     )
     time.sleep(0.1)
     ser.write(
         (
-            f"node add {args.phantom_ua} {args.phantom_in} {args.phantom_out}\n"
+            f"node add {args.phantom_ua} C {args.phantom_in} {args.phantom_out}\n"
         ).encode("utf-8")
     )
     time.sleep(0.1)

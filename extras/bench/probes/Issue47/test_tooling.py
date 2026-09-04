@@ -11,7 +11,7 @@ def test_sync_and_validate_boot_success():
     mock_ser.readline.side_effect = [
         b"",
         b"some garbage\n",
-        b'{"seq":0,"ts":0,"event":"epoch","image":"xiao_host_tracer","version":"0.4.0"}\n'
+        b'{"seq":0,"ts":0,"event":"epoch","image":"tracer_host","version":"0.4.0"}\n'
     ]
     assert sweep_47.sync_and_validate_boot(mock_ser, timeout=1.0) == True
 

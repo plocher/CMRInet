@@ -36,6 +36,26 @@
 //
 // No sketch support for OLED, WiFi, OTA or I2C
 
+// Type 'C' nodes use all 16 bits of bytes 0 and 1 for onboard I/O.
+// The cpNode-Xiao using the CMRInet:XiaoNode firmware has limited 
+// onboard I/O:
+//
+// Byte  Bit  Input            Output
+//   0    0    na               na
+//   0    1    na               Onboard LED
+//   0    2    D2 (pushbutton)  na
+//   0    3    na               na
+//   0    4    na               na
+//   0    5    na               na
+//   0    6    na               na
+//   0    7    na               na
+//   1   all   na               na
+ 
+// IO expander I/O depends on the node's INPUT and OUTPUT configuration
+// Each IOX expander has 16 bits organized into 2 bytes,
+// each of which can be configured as INPUT or OUTPUT.
+// The first I2C provided INPUT or OUTPUT byte is Byte 2.
+
 #include <Arduino.h>
 
 #include "CMRInet.h"               // CMRINode, CMRINodeConfig, IOBuffer

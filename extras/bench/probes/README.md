@@ -53,7 +53,7 @@ The directory listing is the catalog; there is no separate index document.
 
 ## Sketch Policy
 
-We avoid creating throwaway sketches for each issue. `examples/XiaoHostTracer/XiaoHostTracer.ino` and `TracerShell` are the durable programmable-testbed surface. 
+We avoid creating throwaway sketches for each issue. `examples/TracerHost/TracerHost.ino` and `TracerShell` are the durable programmable-testbed surface. 
 Verbs added for one investigation stay compatible for all subsequent ones. Any change that would break an old test suite must be backported into an earlier tracer version stored alongside the old investigation's tooling, or the change is not landed. Bump `kVersion` on every additive change.
 
 ## Data Directory Convention

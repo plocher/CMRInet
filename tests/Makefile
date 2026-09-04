@@ -21,12 +21,12 @@ LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRINode.h \
             ../src/IOBuffer.h \
             ../src/transport/mock.h ../src/transport/serial.h \
             ../src/transport/serialPort.h ../src/transport/serialStream.h \
-            ../src/transport/serialESP32.h ../src/RemoteNodeHandle.h \
+            ../src/transport/serialESP32.h ../src/RemoteNodeHandle.h ../src/NodeInit.h \
             ../src/SimpleHostMetrics.h
 
 TESTS   := test_codec test_time test_mock_transport test_serial_transport \
            test_host test_node test_tracer test_host_display_metrics \
-           test_xiao_generators test_conformance_fault test_cdc_line
+           test_xiao_generators test_conformance_fault test_cdc_line test_node_init
 TARGETS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean

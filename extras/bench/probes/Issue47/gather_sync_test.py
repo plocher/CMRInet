@@ -55,9 +55,9 @@ def main():
         if not _tracer_client.sync_and_validate_boot(ser):
             print("ERROR: Boot validation failed.", file=sys.stderr)
             return 1
-        ser.write(b"node add 30 7 7\n")
+        ser.write(b"node add 30 C 7 7\n")
         time.sleep(0.1)
-        ser.write(b"node add 31 4 4\n")
+        ser.write(b"node add 31 C 4 4\n")
         time.sleep(0.1)
         _tracer_client.flush_lines(ser)
         
@@ -95,9 +95,9 @@ def main():
             print("ERROR: Boot validation failed after reboot.", file=sys.stderr)
             return 1
             
-        ser.write(b"node add 30 7 7\n")
+        ser.write(b"node add 30 C 7 7\n")
         time.sleep(0.1)
-        ser.write(b"node add 31 4 4\n")
+        ser.write(b"node add 31 C 4 4\n")
         time.sleep(0.1)
         _tracer_client.flush_lines(ser)
         

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simultaneous: XiaoHostTracer CDC telemetry + RS485 dongle on Host R+/-.
+"""Simultaneous: TracerHost CDC telemetry + RS485 dongle on Host R+/-.
 Proves whether R reaches the Host UART (tracer replies/trace) while the
 dongle on Host R+/- sees nothing (the paradox), or resolves it."""
 import serial, time, re, sys, threading

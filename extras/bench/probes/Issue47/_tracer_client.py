@@ -349,7 +349,7 @@ def sync_and_validate_boot(ser, timeout=15.0):
     if snapshot is not None:
         image = snapshot.get("image")
         version = snapshot.get("version")
-        if image == "xiao_host_tracer" and version:
+        if image == "tracer_host" and version:
             ver_parts = tuple(int(x) for x in str(version).split("."))
             if ver_parts >= (0, 4, 0):
                 print(f"Verified boot: {image} v{version}")
@@ -359,9 +359,9 @@ def sync_and_validate_boot(ser, timeout=15.0):
                 file=sys.stderr,
             )
             sys.exit(1)
-        if image is not None and image != "xiao_host_tracer":
+        if image is not None and image != "tracer_host":
             print(
-                f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.",
+                f"ERROR: Expected image 'tracer_host', got '{image}'. Check flash.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -393,8 +393,8 @@ def sync_and_validate_boot(ser, timeout=15.0):
             image = img_match.group(1) if img_match else None
             version = ver_match.group(1) if ver_match else None
 
-        if image != "xiao_host_tracer":
-            print(f"ERROR: Expected image 'xiao_host_tracer', got '{image}'. Check flash.", file=sys.stderr)
+        if image != "tracer_host":
+            print(f"ERROR: Expected image 'tracer_host', got '{image}'. Check flash.", file=sys.stderr)
             sys.exit(1)
         if not version:
             print(f"ERROR: Expected version >= 0.4.0, got '{version}'. Check flash.", file=sys.stderr)

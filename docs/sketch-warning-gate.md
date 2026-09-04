@@ -15,7 +15,7 @@ make sketch-lint
 ```
 
 That runs `extras/sketch_lint.py`, which lints all three example sketches
-(`SimpleHost`, `XiaoHostTracer`, `XiaoSniffer`). Lint one:
+(`SimpleHost`, `TracerHost`, `XiaoSniffer`). Lint one:
 
 ```
 python3 extras/sketch_lint.py SimpleHost

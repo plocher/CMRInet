@@ -1,4 +1,4 @@
-// XiaoHostTracer.ino — the stage-2 Xiao Host R&D image (map issue
+// TracerHost.ino — the stage-2 Xiao Host R&D image (map issue
 // #21): CMRIHost on the cpNode-Xiao RS-485 block, command-and-control
 // over USB CDC. Same engine, same listeners as the desktop tracer
 // (extras/desktop/cmri_tracer.cpp) via testbed/TracerShell.h;
@@ -82,7 +82,7 @@ CMRInet::examples::HostStatusPanel panel;
 // -DARDUINO_USB_CDC_ON_BOOT=1 — which would silently move Serial off
 // the USB CDC console this image depends on.)
 #ifndef TRACER_UA
-#define TRACER_UA 30     // node UA; wire UA = UA + 65
+#define TRACER_UA 30     // soft default for generator C&C only; not a membership seed
 #endif
 #ifndef TRACER_INPUT_BYTES
 #define TRACER_INPUT_BYTES 7  // bench node: 2 phantom CPNODE + 5 IOX IN
@@ -108,7 +108,7 @@ CMRInet::examples::HostStatusPanel panel;
 
 namespace {
 
-constexpr const char* kImage = "xiao_host_tracer";
+constexpr const char* kImage = "tracer_host";
 // 0.1.1: hardware transmit-drain truth (Esp32SerialPort) — the
 // ~2 s C6 runtime stall made the estimate-based drain drop TXEN mid-ETX.
 // 0.1.2: 50 ms inter-byte tolerance — the same stall splits intact
@@ -286,6 +286,10 @@ bool readVerb(char* out, size_t len) {
 
 }  // namespace
 // ---- Generator definitions (Issue #55) -----------------------------------
+// Overlay note: these inline generators are the Tracer C&C surface today.
+// SimpleHost's Orchestrator + BitWalkerService / InputToggleService is the
+// preferred implementation shape for a later reshape (not core library).
+
 #include "GeneratorParser.h"
 constexpr uint8_t kGeneratorDefaultUA = TRACER_UA;
 constexpr uint8_t kBenchNodeUA = 31;
@@ -649,18 +653,32 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
 /// Draw the host status panel (shared HostStatusPanel, same layout as
 /// SimpleHost): header with alternating cadence, one per-node row with
 /// state / latency / recent errors. Defined after the anonymous
-/// namespace so it can see host, node, and TRACER_UA.
-void drawHostStatus() {
+/// namespace so it canvoid drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
-  // Resolved at the point of use, not cached: the operator can delete
-  // this node at runtime now, and a cached handle would keep drawing a
-  // tombstone -- or a different device that reused its slot (D5).
-  CMRInet::RemoteNodeHandle* node = host.node(TRACER_UA);
+
+  // Live membership: collect up to 4 nodes for the panel.
+  constexpr size_t kMaxRows = 4;
+  uint8_t uas[kMaxRows] = {};
+  size_t nRows = 0;
+  for (unsigned ua = 0; ua <= 127u && nRows < kMaxRows; ++ua) {
+    if (host.node(static_cast<uint8_t>(ua)) != nullptr) {
+      uas[nRows++] = static_cast<uint8_t>(ua);
+    }
+  }
+
   const auto& hs = host.statistics();
-  uint32_t nodeErrs[1] = {node ? node->statistics().errors : 0};
-  uint32_t nodeMisses[1] = {node ? node->statistics().noReplies : 0};
-  panel.sample(now, hs.pollsSent, hs.repliesAccepted, nodeErrs, nodeMisses, 1);
+  uint32_t nodeErrs[kMaxRows] = {};
+  uint32_t nodeMisses[kMaxRows] = {};
+  for (size_t i = 0; i < nRows; ++i) {
+    CMRInet::RemoteNodeHandle* n = host.node(uas[i]);
+    if (n != nullptr) {
+      nodeErrs[i] = n->statistics().errors;
+      nodeMisses[i] = n->statistics().noReplies;
+    }
+  }
+  panel.sample(now, hs.pollsSent, hs.repliesAccepted, nodeErrs, nodeMisses,
+               nRows > 0 ? nRows : 1);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -678,28 +696,34 @@ void drawHostStatus() {
   display.setCursor(0, 18);
   display.print(totals);
 
-  const bool online =
-      (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
-  const char* tag =
-      (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
-  const uint32_t latMs = (node != nullptr)
-      ? node->statistics().lastTurnaroundMs : 0;
-  char row[28];
-  panel.nodeRowText(row, sizeof(row), now, 0,
-                    TRACER_UA, online, tag, latMs);
-  display.setTextSize(1);
-  display.setCursor(0, 30);
-  display.print(row);
-  
-  // #64: print the bottom two lines if set
+  for (size_t i = 0; i < nRows; ++i) {
+    CMRInet::RemoteNodeHandle* node = host.node(uas[i]);
+    const bool online =
+        (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
+    const char* tag =
+        (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
+    const uint32_t latMs = (node != nullptr)
+        ? node->statistics().lastTurnaroundMs : 0;
+    char row[28];
+    panel.nodeRowText(row, sizeof(row), now, i, uas[i], online, tag, latMs);
+    display.setTextSize(1);
+    display.setCursor(0, 30 + static_cast<int>(i) * 10);
+    display.print(row);
+  }
+
   if (displayLine1[0] != '\0') {
     display.setCursor(0, 48);
     display.print(displayLine1);
   }
-if (displayLine2[0] != '\0') {
+  if (displayLine2[0] != '\0') {
     display.setCursor(0, 56);
     display.print(displayLine2);
   }
+
+  oledFlush.markDirty();
+}
+
+ }
 
   oledFlush.markDirty();
 }
@@ -747,19 +771,10 @@ void setup() {
     display.dim(true);
   }
 
-  CMRInet::RemoteNodeConfig nodeConfig;
-  nodeConfig.inputBytes = TRACER_INPUT_BYTES;
-  nodeConfig.outputBytes = TRACER_OUTPUT_BYTES;
-  const CMRInet::CMRIHost::ConfigStatus realStatus =
-      host.addRemoteNode(TRACER_UA, nodeConfig);
-  CMRInet::RemoteNodeConfig phantomNodeConfig;
-  phantomNodeConfig.inputBytes = TRACER_PHANTOM_INPUT_BYTES;
-  phantomNodeConfig.outputBytes = TRACER_PHANTOM_OUTPUT_BYTES;
-  const CMRInet::CMRIHost::ConfigStatus phantomStatus =
-      host.addRemoteNode(TRACER_PHANTOM_UA, phantomNodeConfig);
-  setupStatus = (realStatus != CMRInet::CMRIHost::ConfigStatus::kOk)
-      ? realStatus
-      : phantomStatus;
+  // Membership is C&C-driven (probes send `node add`). No permanent
+  // compiled-in topology: a probe owns the bench view and can delete/re-add.
+  // Optional empty boot — host.begin is still deferred via lazyBegin().
+  setupStatus = CMRInet::CMRIHost::ConfigStatus::kOk;
 
   // Bind unconditionally: the shell holds no node (Design v1.2 D5), so
   // there is nothing for a rejected compiled-in add to invalidate -- and

@@ -37,7 +37,7 @@ LIBS_DIR = "/Users/jplocher/Dropbox/Arduino/libraries"
 
 def _compile() -> None:
     build = f"/tmp/{SKETCH}_build"
-    sketch = REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino"
+    sketch = REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino"
     print(f">>> compile {SKETCH}")
     subprocess.run(
         ["arduino-cli", "compile", "--fqbn", FQBN,
@@ -55,7 +55,7 @@ def _upload(port: str) -> None:
     subprocess.run(
         ["arduino-cli", "upload", "-p", port, "--fqbn", FQBN,
          "--input-dir", f"/tmp/{SKETCH}_build",
-         str(REPO_DIR / "examples" / SKETCH / f"{SKETCH}.ino")],
+         str(REPO_DIR / "extras" / "bench" / SKETCH / f"{SKETCH}.ino")],
         check=True, cwd=str(REPO_DIR),
     )
 
@@ -84,7 +84,7 @@ def _validate_boot(ser, timeout_s: float = 15.0) -> bool:
     """Send `status` and confirm the probe image (not the shared tracer image).
 
     The shared _tracer_client.sync_and_validate_boot hard-codes the expected
-    image as 'xiao_host_tracer'; this probe is a different image, so it
+    image as 'tracer_host'; this probe is a different image, so it
     needs its own identity check.
     """
     import re
@@ -201,7 +201,7 @@ def main() -> int:
             _tracer_client.send_command(ser, f"node disable {args.ua}")
             _tracer_client.flush_lines(ser)
             _tracer_client.send_command(
-                ser, f"node add {node_ua} {node_in} {node_out}")
+                ser, f"node add {node_ua} C {node_in} {node_out}")
             _tracer_client.flush_lines(ser)
             _tracer_client.send_command(ser, f"node enable {node_ua}")
             _tracer_client.flush_lines(ser)

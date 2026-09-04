@@ -549,7 +549,7 @@ ax.text(leg_x + 3.8, py_leg - 0.24, 'OUT (8-Bit Output, 1 drives active-low)', f
 # # Findings Box Divider
 # ax.plot([leg_x + 0.3, leg_x + leg_w - 0.3], [leg_y + 1.35, leg_y + 1.35], color='#dee2e6', lw=1, zorder=5)
 # ax.text(leg_x + 0.3, leg_y + 1.15, 'Key Diagnosis Finding (A/B Controlled Experiment):', fontsize=7.5, fontweight='bold', color='#d90429', zorder=5)
-# ax.text(leg_x + 0.3, leg_y + 0.85, '• Under XiaoHostTracer: Reply pair carries R (809 frames on Host R± & Dongle)', fontsize=6.5, color='#212529', zorder=5)
+# ax.text(leg_x + 0.3, leg_y + 0.85, '• Under TracerHost: Reply pair carries R (809 frames on Host R± & Dongle)', fontsize=6.5, color='#212529', zorder=5)
 # ax.text(leg_x + 0.3, leg_y + 0.55, '• Under SimpleHost: Reply pair silent (0 bytes on Host R± & Dongle; Host LED bitwalks)', fontsize=6.5, color='#212529', zorder=5)
 # ax.text(leg_x + 0.3, leg_y + 0.25, '• Hardware & sniffer firmware verified intact; symptom is host-firmware dependent.', fontsize=6.5, color='#495057', zorder=5)
 ax.text(leg_x + 0.3, leg_y + 0.25, f'• Generated {now.strftime("%I:%M %p %B %d, %Y")} by extras/bench/generate_diagram.py.', fontsize=6.5, color='#495057', zorder=5)
