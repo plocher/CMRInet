@@ -420,6 +420,21 @@ CMRIHost::ConfigStatus CMRIHost::addRemoteNode(uint8_t UA, NodeType type,
   return ConfigStatus::kOk;
 }
 
+CMRIHost::ConfigStatus CMRIHost::addRemoteNode(
+    const HostNodeSpec& spec, const RemoteNodePolicy& policy) {
+  switch (spec.type) {
+    case NodeType::kCpnode:
+      return addRemoteNode(spec.UA, spec.init.cpnode, policy);
+    case NodeType::kSmini:
+      return addRemoteNode(spec.UA, spec.init.smini, policy);
+    case NodeType::kUsic:
+    case NodeType::kSusic:
+      return addRemoteNode(spec.UA, spec.type, spec.init.usic, policy);
+  }
+  return ConfigStatus::kUnsupportedNodeType;
+}
+
+
 RemoteNodeHandle* CMRIHost::node(uint8_t UA) {
   size_t slot = 0;
   return findSlot_(UA, slot) ? &nodes_[slot] : nullptr;

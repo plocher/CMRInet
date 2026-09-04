@@ -100,6 +100,72 @@ constexpr int     kCMRI_BAUD = 28800;
 // fires.
 
 // ---- Per-node info: sketch-local layout (not a shared library roster) ----
+// Each row is a HostNodeSpec: UA + NodeType + tagged INIT union.
+// Use hostNodeCpnode / hostNodeSmini / hostNodeUsic / hostNodeSusic helpers.
+using CMRInet::CpnodeInit;
+using CMRInet::HostNodeSpec;
+using CMRInet::hostNodeCpnode;
+
+// C++11: fill CpnodeInit fields explicitly (default member initializers
+// block brace-init of all four members in one go on some compilers).
+static CpnodeInit makeCpnode(uint16_t ni, uint16_t no) {
+  CpnodeInit init;
+  init.inputBytes = ni;
+  init.outputBytes = no;
+  return init;
+}
+
+HostNodeSpec nodeTable[] = {
+  hostNodeCpnode(30, makeCpnode(2 + 5, 2 + 5)),
+  hostNodeCpnode(31, makeCpnode(2 + 1, 2 + 1)),
+};
+constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
+
+#if USE_OLED
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "SimpleHostMetrics.h"          // pure display-metrics helpers
+#include "Ssd1306SegmentedFlush.h"      // non-blocking OLED push
+
+constexpr int      kScreenW       = 128;
+constexpr int      kScreenH       = 64;
+constexpr int      kScreenAddr    = 0x3C;
+constexpr uint32_t kDisplayRefreshMs = 120;   // redraw interval
+constexpr uint32_t kErrorWindowMs     = 5000; // rolling error count window (long enough that a transient burst stays visible)
+
+Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
+CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
+#endif
+
+// ---- Services
+#include "src/Services.h"
+
+// ---- Sketch specific details
+constexpr int     kCMRI_BAUD = 28800;
+
+// Behavior:
+//   -  Bitwalkers loop through all 8 bits of one byte, changing one bit
+//      value each step, looping. If the LEDs light up in sequence, the 
+//      node is seeing and reacting to TRANSMIT packets.
+//   -  Feedback Loops read an input bit and write its value to an output.
+//      When the output changes in step with the inputm this shows
+//      that node is seeing and responding to a POLL packet with its
+//      RESPONSE, and the Host is successfully sending the info in a
+//      TRANSMIT packet to the destination.
+
+//   You can expand these services to control your own test harness,
+//   drive turnouts, signals, and panel lamps from the output bits, and
+//   react to input from block detectors, pushbuttons, and turnout feedback.
+
+// Outputs are active-low by default in the cpNode sketch, so a looped
+// output reads back inverted (out 1 => in 0).
+
+// Note: inputBit(n) returns false for bits beyond the node's input image
+// with no error. A trigger bit past the last input byte silently never
+// fires.
+
+// ---- Per-node info: sketch-local layout (not a shared library roster) ----
 // Each row is a full add artifact: UA + node type + that type's INIT fields.
 // type is the NDP letter: 'C' CPNODE, 'M' SMINI, 'N' USIC, 'X' SUSIC.
 // For 'C': inputBytes/outputBytes are NI/NO; opts1/opts2 are I-body opts.
@@ -304,7 +370,7 @@ void setup() {
       CMRInet::CMRIHost::ConfigStatus::kOk;
   for (size_t i = 0; i < kNodeCount; ++i) {
     const CMRInet::CMRIHost::ConfigStatus st =
-        addNodeFromInfo(host, nodeTable[i]);
+        host.addRemoteNode(nodeTable[i]);
     if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&
         configStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
       configStatus = st;

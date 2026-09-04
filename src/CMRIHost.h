@@ -562,6 +562,13 @@ class CMRIHost {
     return addRemoteNode(UA, type, init, RemoteNodePolicy());
   }
 
+  /// Add from a tagged HostNodeSpec (sketch table row).
+  ConfigStatus addRemoteNode(const HostNodeSpec& spec,
+                             const RemoteNodePolicy& policy);
+  ConfigStatus addRemoteNode(const HostNodeSpec& spec) {
+    return addRemoteNode(spec, RemoteNodePolicy());
+  }
+
   /// Delete the node at `UA`. Returns kNoSuchNode when no live node
   /// holds it. Legal before and after begin().
   ///

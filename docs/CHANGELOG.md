@@ -17,6 +17,9 @@ High-level changes, newest first.
   carry `type`. In-repo bench/probe callers updated.
 
 ### Changed
+- SimpleHost layout rows are `HostNodeSpec` (tagged union of typed INIT
+  structs) with `hostNodeCpnode`/`hostNodeSmini`/… helpers and
+  `host.addRemoteNode(spec)`.
 - TracerHost membership is C&C-driven only (no UA/geometry/phantom
   seed macros); OLED iterates live nodes; generator defaults are neutral
   (configure via C&C). SimpleHost `NodeInfo` carries NDP type + INIT

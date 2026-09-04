@@ -173,4 +173,58 @@ inline InitBuildStatus buildUsicFamilyInitBody(NodeType type,
   return InitBuildStatus::kOk;
 }
 
+/// Sketch-facing "add one remote node" artifact: UA + type + that type's INIT.
+///
+/// Prefer this over a flat field bag. The active `init` arm is selected by
+/// `type`; the other arms are inactive and must not be read.
+///
+/// C++11 note: the union needs an explicit default ctor because the init
+/// structs use default member initializers (non-trivial). Helpers below
+/// build fully-formed rows without designated-initializer syntax.
+struct HostNodeSpec {
+  uint8_t UA = 0;
+  NodeType type = NodeType::kCpnode;
+  union Init {
+    CpnodeInit cpnode;
+    SminiInit smini;
+    UsicFamilyInit usic;
+    Init() : cpnode() {}
+  } init;
+
+  HostNodeSpec() = default;
+};
+
+inline HostNodeSpec hostNodeCpnode(uint8_t ua, const CpnodeInit& init) {
+  HostNodeSpec spec;
+  spec.UA = ua;
+  spec.type = NodeType::kCpnode;
+  spec.init.cpnode = init;
+  return spec;
+}
+
+inline HostNodeSpec hostNodeSmini(uint8_t ua, const SminiInit& init) {
+  HostNodeSpec spec;
+  spec.UA = ua;
+  spec.type = NodeType::kSmini;
+  spec.init.smini = init;
+  return spec;
+}
+
+inline HostNodeSpec hostNodeUsic(uint8_t ua, const UsicFamilyInit& init) {
+  HostNodeSpec spec;
+  spec.UA = ua;
+  spec.type = NodeType::kUsic;
+  spec.init.usic = init;
+  return spec;
+}
+
+inline HostNodeSpec hostNodeSusic(uint8_t ua, const UsicFamilyInit& init) {
+  HostNodeSpec spec;
+  spec.UA = ua;
+  spec.type = NodeType::kSusic;
+  spec.init.usic = init;
+  return spec;
+}
+
+
 }  // namespace CMRInet

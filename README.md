@@ -65,8 +65,8 @@ To run it you need:
   to 0 to compile the display out.
 
 Wire the Host's T± to the Node's R± and the Host's R± to the Node's
-T±. Edit the `nodeTable` array in the sketch to match your nodes'
-addresses and I/O byte counts. Upload and open a serial monitor.
+T±. Edit the `nodeTable` of `HostNodeSpec` rows in the sketch (UA, node
+type, and that type's INIT) to match your layout. Upload and open a serial monitor.
 
 The other Host examples are bench instruments. `TracerHost` is a
 command-driven R&D tracer. `XiaoSniffer` is a passive bus tap. Use the
