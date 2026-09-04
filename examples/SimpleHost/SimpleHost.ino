@@ -47,6 +47,7 @@
 // show bus and node status info
 
 #include <Arduino.h>
+#include <string.h>
 #include "CMRInet.h"                 // provides CMRIHost, RemoteNodeHandle
 #include "transport/serial.h"        // SerialCMRITransport
 #include "transport/serialESP32.h"   // ESP32 hardware transmit-drain port
@@ -98,21 +99,72 @@ constexpr int     kCMRI_BAUD = 28800;
 // with no error. A trigger bit past the last input byte silently never
 // fires.
 
-// ---- Per-node info: everything the sketch knows about each node ------
-// Sketch-local layout table. Each row is a CPNODE with NI/NO; type is
-// part of the add artifact (NodeType::kCpnode via CpnodeInit).
+// ---- Per-node info: sketch-local layout (not a shared library roster) ----
+// Each row is a full add artifact: UA + node type + that type's INIT fields.
+// type is the NDP letter: 'C' CPNODE, 'M' SMINI, 'N' USIC, 'X' SUSIC.
+// For 'C': inputBytes/outputBytes are NI/NO; opts1/opts2 are I-body opts.
+// For 'M': geometry is fixed 3/6 — inputBytes/outputBytes ignored on add;
+//          ns is searchlight pairs; ct[0..5] used when ns > 0.
+// For 'N'/'X': ns is 4-card sets; inputBytes/outputBytes are image sizes;
+//              ct[0..ns-1] are card-type bytes.
 struct NodeInfo {
   uint8_t  UA;
-  uint16_t inputBytes;
-  uint16_t outputBytes;
+  char     type;             // 'C' | 'M' | 'N' | 'X'
+  uint16_t inputBytes;       // C, N, X image NI (ignored for M)
+  uint16_t outputBytes;      // C, N, X image NO (ignored for M)
+  uint8_t  opts1;            // C only
+  uint8_t  opts2;            // C only
+  uint8_t  ns;               // M / N / X
+  uint8_t  ct[16];           // M: up to 6; N/X: ns entries
 };
 
-// Add or remove rows to match your layout — plain loop, no shared roster.
+// Add or remove rows to match your layout — plain for-loop, no helper lib.
 NodeInfo nodeTable[] = {
-  {30,  2+5,  2+5},   // Node 30: 2 onboard phantom + IOX expanders
-  {31,  2+1,  2+1},   // Node 31: 2 onboard phantom + 1 IOX board
+  // UA, type, in, out, opts1, opts2, ns, ct...
+  {30, 'C', 2 + 5, 2 + 5, 0, 0, 0, {0}},  // CPNODE + IOX expanders
+  {31, 'C', 2 + 1, 2 + 1, 0, 0, 0, {0}},  // CPNODE + 1 IOX
 };
 constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
+
+/// Register one table row with the Host using the typed add API.
+CMRInet::CMRIHost::ConfigStatus addNodeFromInfo(
+    CMRInet::CMRIHost& host, const NodeInfo& row) {
+  using CMRInet::NodeType;
+  NodeType ndp;
+  if (!CMRInet::nodeTypeFromNdp(row.type, ndp)) {
+    return CMRInet::CMRIHost::ConfigStatus::kUnsupportedNodeType;
+  }
+  switch (ndp) {
+    case NodeType::kCpnode: {
+      CMRInet::CpnodeInit init;
+      init.inputBytes = row.inputBytes;
+      init.outputBytes = row.outputBytes;
+      init.opts1 = row.opts1;
+      init.opts2 = row.opts2;
+      return host.addRemoteNode(row.UA, init);
+    }
+    case NodeType::kSmini: {
+      CMRInet::SminiInit init;
+      init.ns = row.ns;
+      if (row.ns > 0) {
+        memcpy(init.ct, row.ct, CMRInet::SminiInit::kCtCount);
+      }
+      return host.addRemoteNode(row.UA, init);
+    }
+    case NodeType::kUsic:
+    case NodeType::kSusic: {
+      CMRInet::UsicFamilyInit init;
+      init.ns = row.ns;
+      init.inputBytes = row.inputBytes;
+      init.outputBytes = row.outputBytes;
+      if (row.ns > 0 && row.ns <= CMRInet::UsicFamilyInit::kMaxNs) {
+        memcpy(init.ct, row.ct, row.ns);
+      }
+      return host.addRemoteNode(row.UA, ndp, init);
+    }
+  }
+  return CMRInet::CMRIHost::ConfigStatus::kUnsupportedNodeType;
+}
 
 #if USE_OLED
 bool oledOk = false;
@@ -251,11 +303,8 @@ void setup() {
   CMRInet::CMRIHost::ConfigStatus configStatus =
       CMRInet::CMRIHost::ConfigStatus::kOk;
   for (size_t i = 0; i < kNodeCount; ++i) {
-    CMRInet::CpnodeInit init;
-    init.inputBytes = nodeTable[i].inputBytes;
-    init.outputBytes = nodeTable[i].outputBytes;
     const CMRInet::CMRIHost::ConfigStatus st =
-        host.addRemoteNode(nodeTable[i].UA, init);
+        addNodeFromInfo(host, nodeTable[i]);
     if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&
         configStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
       configStatus = st;

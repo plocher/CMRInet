@@ -13,7 +13,7 @@ The unit test's population is three nodes, and so is this one:
 - UA31 (degraded, misconfigured): a real alive node declared 4/4
   against its physical 3/3 — its replies carry the wrong geometry and
   are rejected. This is the #80 condition.
-- UA32 (degraded, silent): the compiled-in phantom — a nonexistent
+- UA32 (degraded, silent): the runtime-added phantom via node add — a nonexistent
   node that never replies. Its polls are valid degraded-lane traffic,
   not pollution: the 80/20 rule bounds ALL imperfect nodes, and a
   silent node is the other failure mode the gates exist to bound.

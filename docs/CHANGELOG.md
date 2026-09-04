@@ -17,10 +17,11 @@ High-level changes, newest first.
   carry `type`. In-repo bench/probe callers updated.
 
 ### Changed
-- TracerHost membership is C&C-driven (no permanent macro topology seed);
-  OLED iterates live nodes. SimpleHost registers via sketch-local table
-  + `CpnodeInit`. Tracer generators remain sketch-local; SimpleHost
-  Orchestrator services remain the overlay model (not core).
+- TracerHost membership is C&C-driven only (no UA/geometry/phantom
+  seed macros); OLED iterates live nodes; generator defaults are neutral
+  (configure via C&C). SimpleHost `NodeInfo` carries NDP type + INIT
+  fields and dispatches typed `addRemoteNode`. Tracer generators remain
+  sketch-local; SimpleHost Orchestrator services remain the overlay model.
 - Renamed `examples/XiaoHostTracer` to `examples/TracerHost` (and the
   image identity `xiao_host_tracer` → `tracer_host`) so the Host tracer
   matches the `Simple*` / `Tracer*` example naming pattern.

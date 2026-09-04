@@ -173,7 +173,7 @@ def main() -> int:
         _tracer_client.send_command(ser, f"node add {args.ua_b} C {args.ua_b_in} {args.ua_b_out}")
         _tracer_client.send_command(ser, f"node enable {args.ua_a}")
         _tracer_client.send_command(ser, f"node enable {args.ua_b}")
-        # Disable the compiled-in phantom node (UA32) so its backoff
+        # Disable the runtime-added phantom via node add node (UA32) so its backoff
         # ladder doesn't inject ~260ms pauses into the capture.
         _tracer_client.send_command(ser, "node disable 32")
         _tracer_client.flush_lines(ser)

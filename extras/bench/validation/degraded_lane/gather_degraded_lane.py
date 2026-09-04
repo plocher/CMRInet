@@ -8,7 +8,7 @@ population the unit test uses (test_degraded_participation_is_bounded):
 - UA31 (degraded, misconfigured): a real alive node declared 4/4
   against its physical 3/3. Its replies carry the wrong geometry and
   are rejected — this is the #80 condition.
-- UA32 (degraded, silent): the compiled-in phantom — a nonexistent
+- UA32 (degraded, silent): the runtime-added phantom via node add — a nonexistent
   node that never replies. Its polls are valid degraded-lane traffic,
   not pollution: the 80/20 rule bounds ALL imperfect nodes, and a
   silent node is the other failure mode the gates exist to bound.
@@ -114,7 +114,7 @@ def main() -> int:
     parser.add_argument("--misconfigured-ua", type=int, default=31)
     parser.add_argument("--misconfigured-in", type=int, default=4)
     parser.add_argument("--misconfigured-out", type=int, default=4)
-    # UA32 is the silent degraded node: the compiled-in phantom, a
+    # UA32 is the silent degraded node: the runtime-added phantom via node add, a
     # nonexistent node that never replies. Its polls are valid
     # degraded-lane traffic — the 80/20 rule bounds ALL imperfect nodes.
     parser.add_argument("--silent-ua", type=int, default=32)
