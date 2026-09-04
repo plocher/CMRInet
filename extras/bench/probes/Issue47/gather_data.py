@@ -68,10 +68,10 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
     
     # Traffic
     if "fast" in traffic:
-        ser.write(b"enable fastwalker\n")
+        ser.write(b"enable fastwalker UA 30\n")
         time.sleep(0.1)
     if "slow" in traffic:
-        ser.write(b"enable slowwalker\n")
+        ser.write(b"enable slowwalker UA 30\n")
         time.sleep(0.1)
         
     # Stall

@@ -267,167 +267,100 @@ bool readVerb(char* out, size_t len) {
 }
 
 }  // namespace
-// ---- Generator definitions (Issue #55) -----------------------------------
-// Overlay note: these inline generators are the Tracer C&C surface today.
-// SimpleHost's Orchestrator + BitWalkerService / InputToggleService is the
-// preferred implementation shape for a later reshape (not core library).
-
+// ---- Services (HostServices overlay) --------------------------------------
+// Node-scoped C&C needs UA. Stall has no UA.
 #include "GeneratorParser.h"
-// Generator C&C must name a UA (or omit to use this soft default). This is
-// NOT a membership seed — probes still `node add` before enable.
-constexpr uint8_t kGeneratorDefaultUA = 30;
-constexpr size_t kGeneratorUACount = 128;
+#include "HostServices.h"
 
-struct FastWalkerGenerator {
-  bool enabled = false;
-  uint32_t period_ms = 250;
-  uint8_t byte = 3;
-  uint32_t last_ms = 0;
-  uint8_t step = 0;
-  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
-    if (!enabled || target == nullptr || byte >= target->outputLength()) return;
-    if (now_ms - last_ms >= period_ms) {
-      target->setOutputBit(byte, step, false);
-      if (step > 0) {
-        target->setOutputBit(byte, step - 1, true);
-      } else if (last_ms != 0) {
-        target->setOutputBit(byte, 7, true);
-      }
-      step = (step + 1) % 8;
-      last_ms = now_ms;
-    }
-  }
-};
+using CMRInet::app::BitWalkerConfig;
+using CMRInet::app::BitWalkerService;
+using CMRInet::app::InputToggleConfig;
+using CMRInet::app::InputToggleMode;
+using CMRInet::app::InputToggleService;
+using CMRInet::app::StallConfig;
+using CMRInet::app::StallMode;
+using CMRInet::app::StallService;
 
-struct SlowWalkerGenerator {
-  bool enabled = false;
-  uint32_t period_ms = 1000;
-  uint8_t byte = 5;
-  uint32_t last_ms = 0;
-  uint8_t step = 0;
-  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
-    if (!enabled || target == nullptr || byte >= target->outputLength()) return;
-    if (now_ms - last_ms >= period_ms) {
-      target->setOutputBit(byte, step, true);
-      if (step > 0) {
-        target->setOutputBit(byte, step - 1, false);
-      } else if (last_ms != 0) {
-        target->setOutputBit(byte, 7, false);
-      }
-      step = (step + 1) % 8;
-      last_ms = now_ms;
-    }
-  }
-};
+constexpr size_t kServiceUACount = 128;
 
-struct ToggleOutFromInputGenerator {
-  enum class Mode { kToggleOnRise, kWriteRead };
-  bool enabled = false;
-  uint16_t in_bit = 48;
-  uint16_t out_bit = 32;
-  Mode mode = Mode::kToggleOnRise;
-  bool last_in = false;
-  void tick(uint32_t now_ms, CMRInet::RemoteNodeHandle* target) {
-    if (!enabled || target == nullptr) return;
-    const size_t in_bits = target->inputLength() * 8u;
-    const size_t out_bits = target->outputLength() * 8u;
-    if (in_bit >= in_bits || out_bit >= out_bits) return;
-    bool current_in = target->inputBit(in_bit / 8u, in_bit % 8u);
-    if (mode == Mode::kWriteRead) {
-      if (target->outputBit(out_bit / 8u, out_bit % 8u) != current_in) {
-        target->setOutputBit(out_bit / 8u, out_bit % 8u, current_in);
-      }
-    } else if (current_in && !last_in) {
-      target->setOutputBit(out_bit / 8u, out_bit % 8u,
-                           !target->outputBit(out_bit / 8u, out_bit % 8u));
-    }
-    last_in = current_in;
-  }
-};
+BitWalkerService fastwalkerByUA[kServiceUACount];
+BitWalkerService slowwalkerByUA[kServiceUACount];
+InputToggleService toggleByUA[kServiceUACount];
+bool serviceSlotReady[kServiceUACount] = {false};
+StallService stallService;
 
-struct StallGenerator {
-  bool enabled = false;
-  uint32_t ms = 0;
-  uint32_t period_ms = 150;
-  enum class Mode { kYield, kBusy } mode = Mode::kYield;
-  uint32_t last_ms = 0;
-  void tick(uint32_t now_ms) {
-    if (!enabled || ms == 0) return;
-    if (now_ms - last_ms >= period_ms || last_ms == 0) {
-      if (mode == Mode::kYield) {
-        delay(ms);
-      } else {
-        uint32_t start = millis();
-        while (millis() - start < ms) {
-          // busy spin
-        }
-      }
-      last_ms = millis();
-    }
-  }
-};
+void ensureServiceSlot(uint8_t UA) {
+  if (UA >= kServiceUACount || serviceSlotReady[UA]) return;
+  BitWalkerConfig fast;
+  fast.nodeUA = UA;
+  fast.byte = 3;
+  fast.startBit = 0;
+  fast.bitsCount = 8;
+  fast.periodMs = 250;
+  fast.inverted = true;
+  fastwalkerByUA[UA].setConfig(fast);
+  fastwalkerByUA[UA].setEnabled(false);
 
-FastWalkerGenerator fastwalkerByUA[kGeneratorUACount];
-SlowWalkerGenerator slowwalkerByUA[kGeneratorUACount];
-ToggleOutFromInputGenerator toggleoutfrominputByUA[kGeneratorUACount];
-bool generatorDefaultsInitialized[kGeneratorUACount] = {false};
-StallGenerator stall;
+  BitWalkerConfig slow;
+  slow.nodeUA = UA;
+  slow.byte = 5;
+  slow.startBit = 0;
+  slow.bitsCount = 8;
+  slow.periodMs = 1000;
+  slow.inverted = false;
+  slowwalkerByUA[UA].setConfig(slow);
+  slowwalkerByUA[UA].setEnabled(false);
 
-void initializeGeneratorDefaults(uint8_t UA) {
-  if (UA >= kGeneratorUACount || generatorDefaultsInitialized[UA]) return;
-  // Neutral defaults only. Bench-specific byte/bit targets come from
-  // `configure ...` / `enable ...` C&C, not compiled-in topology.
-  fastwalkerByUA[UA] = FastWalkerGenerator{};
-  slowwalkerByUA[UA] = SlowWalkerGenerator{};
-  toggleoutfrominputByUA[UA] = ToggleOutFromInputGenerator{};
-  generatorDefaultsInitialized[UA] = true;
+  InputToggleConfig tog;
+  tog.inNodeUA = UA;
+  tog.outNodeUA = UA;
+  tog.inByte = 6;
+  tog.inBit = 0;
+  tog.outByte = 4;
+  tog.outBit = 0;
+  tog.mode = InputToggleMode::kToggleOnRise;
+  toggleByUA[UA].setConfig(tog);
+  toggleByUA[UA].setEnabled(false);
+
+  serviceSlotReady[UA] = true;
 }
 
-void disableAllNodeScopedGenerators() {
-  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
-    if (!generatorDefaultsInitialized[UA]) continue;
-    fastwalkerByUA[UA].enabled = false;
-    slowwalkerByUA[UA].enabled = false;
-    toggleoutfrominputByUA[UA].enabled = false;
+void tickHostServices(uint32_t now_ms) {
+  for (size_t ua = 0; ua < kServiceUACount; ++ua) {
+    if (!serviceSlotReady[ua]) continue;
+    fastwalkerByUA[ua].tick(host, now_ms);
+    slowwalkerByUA[ua].tick(host, now_ms);
+    toggleByUA[ua].tick(host, now_ms);
+  }
+  stallService.tick(host, now_ms);
+}
+
+void disableAllNodeScopedServices() {
+  for (size_t ua = 0; ua < kServiceUACount; ++ua) {
+    if (!serviceSlotReady[ua]) continue;
+    fastwalkerByUA[ua].setEnabled(false);
+    slowwalkerByUA[ua].setEnabled(false);
+    toggleByUA[ua].setEnabled(false);
   }
 }
 
 size_t countEnabledFastwalker() {
-  size_t count = 0;
-  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
-    if (generatorDefaultsInitialized[UA] && fastwalkerByUA[UA].enabled) ++count;
-  }
-  return count;
+  size_t n = 0;
+  for (size_t ua = 0; ua < kServiceUACount; ++ua)
+    if (serviceSlotReady[ua] && fastwalkerByUA[ua].enabled()) ++n;
+  return n;
 }
-
 size_t countEnabledSlowwalker() {
-  size_t count = 0;
-  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
-    if (generatorDefaultsInitialized[UA] && slowwalkerByUA[UA].enabled) ++count;
-  }
-  return count;
+  size_t n = 0;
+  for (size_t ua = 0; ua < kServiceUACount; ++ua)
+    if (serviceSlotReady[ua] && slowwalkerByUA[ua].enabled()) ++n;
+  return n;
 }
-
-size_t countEnabledLoopback() {
-  size_t count = 0;
-  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
-    if (generatorDefaultsInitialized[UA] && toggleoutfrominputByUA[UA].enabled) ++count;
-  }
-  return count;
-}
-
-void tickNodeScopedGenerators(uint32_t now_ms) {
-  for (size_t UA = 0; UA < kGeneratorUACount; ++UA) {
-    if (!generatorDefaultsInitialized[UA]) continue;
-    FastWalkerGenerator& fast = fastwalkerByUA[UA];
-    SlowWalkerGenerator& slow = slowwalkerByUA[UA];
-    ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[UA];
-    if (!fast.enabled && !slow.enabled && !loopback.enabled) continue;
-    CMRInet::RemoteNodeHandle* target = host.node(static_cast<uint8_t>(UA));
-    fast.tick(now_ms, target);
-    slow.tick(now_ms, target);
-    loopback.tick(now_ms, target);
-  }
+size_t countEnabledToggle() {
+  size_t n = 0;
+  for (size_t ua = 0; ua < kServiceUACount; ++ua)
+    if (serviceSlotReady[ua] && toggleByUA[ua].enabled()) ++n;
+  return n;
 }
 
 void emitGeneratorEvent(const char* event, const char* generator,
@@ -450,9 +383,9 @@ bool handleGeneratorControl(char* cmd) {
   char* action = strtok_r(cmd, " ", &saveptr);
   if (!action) return false;
 
-  bool is_enable = (strcmp(action, "enable") == 0);
-  bool is_disable = (strcmp(action, "disable") == 0);
-  bool is_configure = (strcmp(action, "configure") == 0);
+  const bool is_enable = (strcmp(action, "enable") == 0);
+  const bool is_disable = (strcmp(action, "disable") == 0);
+  const bool is_configure = (strcmp(action, "configure") == 0);
   if (!is_enable && !is_disable && !is_configure) return false;
 
   char* gen_name = strtok_r(nullptr, " ", &saveptr);
@@ -463,10 +396,11 @@ bool handleGeneratorControl(char* cmd) {
     return true;
   }
 
-  const bool valid_gen = (strcmp(gen_name, "fastwalker") == 0 ||
-                          strcmp(gen_name, "slowwalker") == 0 ||
-                          strcmp(gen_name, "toggleoutfrominput") == 0 ||
-                          strcmp(gen_name, "stall") == 0);
+  const bool valid_gen =
+      (strcmp(gen_name, "fastwalker") == 0 ||
+       strcmp(gen_name, "slowwalker") == 0 ||
+       strcmp(gen_name, "toggleoutfrominput") == 0 ||
+       strcmp(gen_name, "stall") == 0);
   if (!valid_gen) {
     Serial.print("{\"event\":\"error\",\"error\":\"badVerb\",\"message\":\"unknown generator '");
     Serial.print(gen_name);
@@ -474,10 +408,11 @@ bool handleGeneratorControl(char* cmd) {
     return true;
   }
 
-  const bool node_scoped_gen =
+  const bool node_scoped =
       (strcmp(gen_name, "fastwalker") == 0 ||
        strcmp(gen_name, "slowwalker") == 0 ||
        strcmp(gen_name, "toggleoutfrominput") == 0);
+
   ParsedGeneratorParams p;
   char* args = strtok_r(nullptr, "", &saveptr);
   if (args != nullptr) {
@@ -492,154 +427,169 @@ bool handleGeneratorControl(char* cmd) {
     }
   }
 
-  uint8_t target_ua = kGeneratorDefaultUA;
-  if (node_scoped_gen && p.has_UA) target_ua = p.UA;
-  if (node_scoped_gen) initializeGeneratorDefaults(target_ua);
+  uint8_t target_ua = 0;
+  if (node_scoped) {
+    if (!p.has_UA) {
+      Serial.println(
+          "{\"event\":\"error\",\"error\":\"badVerb\","
+          "\"message\":\"node-scoped generator needs UA <n>\"}");
+      return true;
+    }
+    if (p.UA >= kServiceUACount) {
+      Serial.println(
+          "{\"event\":\"error\",\"error\":\"badValue\","
+          "\"message\":\"UA out of range\"}");
+      return true;
+    }
+    target_ua = p.UA;
+    ensureServiceSlot(target_ua);
+  }
 
   if (is_disable) {
-    if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].enabled = false;
-    else if (strcmp(gen_name, "slowwalker") == 0) slowwalkerByUA[target_ua].enabled = false;
-    else if (strcmp(gen_name, "toggleoutfrominput") == 0) toggleoutfrominputByUA[target_ua].enabled = false;
-    else if (strcmp(gen_name, "stall") == 0) stall.enabled = false;
-    emitGeneratorEvent("disable", gen_name, node_scoped_gen, target_ua);
+    if (strcmp(gen_name, "fastwalker") == 0)
+      fastwalkerByUA[target_ua].setEnabled(false);
+    else if (strcmp(gen_name, "slowwalker") == 0)
+      slowwalkerByUA[target_ua].setEnabled(false);
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0)
+      toggleByUA[target_ua].setEnabled(false);
+    else if (strcmp(gen_name, "stall") == 0)
+      stallService.setEnabled(false);
+    emitGeneratorEvent("disable", gen_name, node_scoped, target_ua);
     return true;
   }
 
-  if (strcmp(gen_name, "fastwalker") == 0 || strcmp(gen_name, "slowwalker") == 0) {
-    if (args != nullptr) {
-      if (p.has_period) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].period_ms = p.period_ms;
-        else slowwalkerByUA[target_ua].period_ms = p.period_ms;
-      }
-      if (p.has_byte) {
-        if (strcmp(gen_name, "fastwalker") == 0) fastwalkerByUA[target_ua].byte = p.byte_idx;
-        else slowwalkerByUA[target_ua].byte = p.byte_idx;
-      }
-    }
+  if (strcmp(gen_name, "fastwalker") == 0 ||
+      strcmp(gen_name, "slowwalker") == 0) {
+    BitWalkerService& svc = (strcmp(gen_name, "fastwalker") == 0)
+        ? fastwalkerByUA[target_ua]
+        : slowwalkerByUA[target_ua];
+    BitWalkerConfig cfg = svc.config();
+    cfg.nodeUA = target_ua;
+    if (p.has_period) cfg.periodMs = p.period_ms;
+    if (p.has_byte) cfg.byte = p.byte_idx;
+    svc.setConfig(cfg);
   } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
-    if (args != nullptr) {
-      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[target_ua];
-      if (p.has_in) loopback.in_bit = p.in_bit;
-      if (p.has_out) loopback.out_bit = p.out_bit;
-      if (p.has_src_byte && p.has_src_bit) {
-        loopback.in_bit = static_cast<uint16_t>(p.src_byte) * 8u + p.src_bit;
-      }
-      if (p.has_dst_byte && p.has_dst_bit) {
-        loopback.out_bit = static_cast<uint16_t>(p.dst_byte) * 8u + p.dst_bit;
-      }
-      if (p.has_loopback_mode) {
-        loopback.mode = p.loopback_mode_write_read
-            ? ToggleOutFromInputGenerator::Mode::kWriteRead
-            : ToggleOutFromInputGenerator::Mode::kToggleOnRise;
-      }
+    InputToggleService& svc = toggleByUA[target_ua];
+    InputToggleConfig cfg = svc.config();
+    cfg.inNodeUA = target_ua;
+    cfg.outNodeUA = target_ua;
+    if (p.has_in) {
+      cfg.inByte = static_cast<uint8_t>(p.in_bit / 8u);
+      cfg.inBit = static_cast<uint8_t>(p.in_bit % 8u);
     }
+    if (p.has_out) {
+      cfg.outByte = static_cast<uint8_t>(p.out_bit / 8u);
+      cfg.outBit = static_cast<uint8_t>(p.out_bit % 8u);
+    }
+    if (p.has_src_byte && p.has_src_bit) {
+      cfg.inByte = p.src_byte;
+      cfg.inBit = p.src_bit;
+    }
+    if (p.has_dst_byte && p.has_dst_bit) {
+      cfg.outByte = p.dst_byte;
+      cfg.outBit = p.dst_bit;
+    }
+    if (p.has_loopback_mode) {
+      cfg.mode = p.loopback_mode_write_read
+          ? InputToggleMode::kLevelFollow
+          : InputToggleMode::kToggleOnRise;
+    }
+    svc.setConfig(cfg);
   } else if (strcmp(gen_name, "stall") == 0) {
-    if (args != nullptr) {
-      if (p.has_stall_ms) stall.ms = p.stall_ms;
-      if (p.has_period) stall.period_ms = p.period_ms;
-      if (p.has_mode) {
-        stall.mode = p.mode_busy
-            ? StallGenerator::Mode::kBusy
-            : StallGenerator::Mode::kYield;
-      }
-    }
+    StallConfig cfg = stallService.config();
+    if (p.has_stall_ms) cfg.stallMs = p.stall_ms;
+    if (p.has_period) cfg.periodMs = p.period_ms;
+    if (p.has_mode)
+      cfg.mode = p.mode_busy ? StallMode::kBusy : StallMode::kYield;
+    stallService.setConfig(cfg);
   }
 
   if (is_enable) {
     lazyBegin();
-    if (strcmp(gen_name, "fastwalker") == 0) {
-      FastWalkerGenerator& fast = fastwalkerByUA[target_ua];
-      fast.enabled = true;
-      fast.last_ms = 0;
-      fast.step = 0;
-    } else if (strcmp(gen_name, "slowwalker") == 0) {
-      SlowWalkerGenerator& slow = slowwalkerByUA[target_ua];
-      slow.enabled = true;
-      slow.last_ms = 0;
-      slow.step = 0;
-    } else if (strcmp(gen_name, "toggleoutfrominput") == 0) {
-      ToggleOutFromInputGenerator& loopback = toggleoutfrominputByUA[target_ua];
-      loopback.enabled = true;
-      CMRInet::RemoteNodeHandle* target = host.node(target_ua);
-      const size_t in_bits = target ? (target->inputLength() * 8u) : 0u;
-      loopback.last_in = (target != nullptr && loopback.in_bit < in_bits)
-          ? target->inputBit(loopback.in_bit / 8u, loopback.in_bit % 8u)
-          : false;
-    } else if (strcmp(gen_name, "stall") == 0) {
-      if (stall.ms == 0) stall.enabled = false;
-      else {
-        stall.enabled = true;
-        stall.last_ms = 0;
-      }
-    }
+    if (strcmp(gen_name, "fastwalker") == 0)
+      fastwalkerByUA[target_ua].setEnabled(true);
+    else if (strcmp(gen_name, "slowwalker") == 0)
+      slowwalkerByUA[target_ua].setEnabled(true);
+    else if (strcmp(gen_name, "toggleoutfrominput") == 0)
+      toggleByUA[target_ua].setEnabled(true);
+    else if (strcmp(gen_name, "stall") == 0)
+      stallService.setEnabled(stallService.config().stallMs != 0);
   }
 
-  emitGeneratorEvent(action, gen_name, node_scoped_gen, target_ua);
+  emitGeneratorEvent(action, gen_name, node_scoped, target_ua);
   return true;
 }
 
-/// Append the generator block to a status line.
-///
-/// This used to also emit a `nodes` array, which the shell now owns as
-/// `roster`. Two reasons it had to move: the shell can keep it in step
-/// with runtime membership changes, and the copy here keyed each entry by
-/// `n->wireUA()` -- the *wire byte* (95), not the UA (30) -- so
-/// analyze_bench_validation.py built its map on 95 and looked it up on
-/// 30, missed every time, and left its UNINITIALIZED/OFFLINE check dead.
-/// See #90.
-void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity) {
-  initializeGeneratorDefaults(kGeneratorDefaultUA);
-  const FastWalkerGenerator& defaultFastwalker = fastwalkerByUA[kGeneratorDefaultUA];
-  const SlowWalkerGenerator& defaultSlowwalker = slowwalkerByUA[kGeneratorDefaultUA];
-  const ToggleOutFromInputGenerator& defaultLoopback = toggleoutfrominputByUA[kGeneratorDefaultUA];
-  const char* loopbackMode =
-      (defaultLoopback.mode == ToggleOutFromInputGenerator::Mode::kWriteRead)
-          ? "write_read"
-          : "toggle";
+void emitGeneratorsStatus(void* /*context*/, char* buffer,
+                          size_t remaining_capacity) {
+  uint8_t fastUa = 0, slowUa = 0, togUa = 0;
+  const BitWalkerService* fast = nullptr;
+  const BitWalkerService* slow = nullptr;
+  const InputToggleService* tog = nullptr;
+  for (size_t ua = 0; ua < kServiceUACount; ++ua) {
+    if (!serviceSlotReady[ua]) continue;
+    if (!fast && fastwalkerByUA[ua].enabled()) {
+      fast = &fastwalkerByUA[ua];
+      fastUa = static_cast<uint8_t>(ua);
+    }
+    if (!slow && slowwalkerByUA[ua].enabled()) {
+      slow = &slowwalkerByUA[ua];
+      slowUa = static_cast<uint8_t>(ua);
+    }
+    if (!tog && toggleByUA[ua].enabled()) {
+      tog = &toggleByUA[ua];
+      togUa = static_cast<uint8_t>(ua);
+    }
+  }
+  const char* loopMode = "toggle";
+  uint16_t inBit = 0, outBit = 0;
+  if (tog) {
+    const InputToggleConfig& c = tog->config();
+    inBit = static_cast<uint16_t>(c.inByte) * 8u + c.inBit;
+    outBit = static_cast<uint16_t>(c.outByte) * 8u + c.outBit;
+    loopMode = (c.mode == InputToggleMode::kLevelFollow) ? "write_read"
+                                                         : "toggle";
+  }
+  BitWalkerConfig z{};
+  const BitWalkerConfig& fc = fast ? fast->config() : z;
+  const BitWalkerConfig& sc = slow ? slow->config() : z;
+  const StallConfig& stc = stallService.config();
 
-  snprintf(buffer, remaining_capacity, 
-    ",\"generators\":{"
-    "\"fastwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
-    "\"slowwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,\"enabled_count\":%u},"
-    "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,\"mode\":\"%s\",\"enabled_count\":%u},"
-    "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
-    "}",
-    static_cast<unsigned>(kGeneratorDefaultUA),
-    defaultFastwalker.enabled ? "true" : "false",
-    (unsigned long)defaultFastwalker.period_ms,
-    defaultFastwalker.byte,
-    static_cast<unsigned>(countEnabledFastwalker()),
-    static_cast<unsigned>(kGeneratorDefaultUA),
-    defaultSlowwalker.enabled ? "true" : "false",
-    (unsigned long)defaultSlowwalker.period_ms,
-    defaultSlowwalker.byte,
-    static_cast<unsigned>(countEnabledSlowwalker()),
-    static_cast<unsigned>(kGeneratorDefaultUA),
-    defaultLoopback.enabled ? "true" : "false",
-    defaultLoopback.in_bit,
-    defaultLoopback.out_bit,
-    loopbackMode,
-    static_cast<unsigned>(countEnabledLoopback()),
-    stall.enabled ? "true" : "false", (unsigned long)stall.ms, (unsigned long)stall.period_ms, stall.mode == StallGenerator::Mode::kYield ? "yield" : "busy"
-  );
+  snprintf(
+      buffer, remaining_capacity,
+      ",\"generators\":{"
+      "\"fastwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,"
+      "\"enabled_count\":%u},"
+      "\"slowwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,"
+      "\"enabled_count\":%u},"
+      "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,"
+      "\"mode\":\"%s\",\"enabled_count\":%u},"
+      "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
+      "}",
+      static_cast<unsigned>(fastUa), fast ? "true" : "false",
+      (unsigned long)fc.periodMs, fc.byte,
+      static_cast<unsigned>(countEnabledFastwalker()),
+      static_cast<unsigned>(slowUa), slow ? "true" : "false",
+      (unsigned long)sc.periodMs, sc.byte,
+      static_cast<unsigned>(countEnabledSlowwalker()),
+      static_cast<unsigned>(togUa), tog ? "true" : "false",
+      inBit, outBit, loopMode,
+      static_cast<unsigned>(countEnabledToggle()),
+      stallService.enabled() ? "true" : "false",
+      (unsigned long)stc.stallMs, (unsigned long)stc.periodMs,
+      stc.mode == StallMode::kYield ? "yield" : "busy");
 }
-// --------------------------------------------------------------------------
 
-/// Draw the host status panel (shared HostStatusPanel, same layout as
-/// SimpleHost): header with alternating cadence, one per-node row with
-/// state / latency / recent errors. Defined after the anonymous
-/// namespace so it canvoid drawHostStatus() {
+void drawHostStatus() {
   if (!oledOk) return;
   const uint32_t now = millis();
 
-  // Live membership only — no compiled-in UA list.
   constexpr size_t kMaxRows = 4;
   uint8_t uas[kMaxRows] = {};
   size_t nRows = 0;
   for (unsigned ua = 0; ua <= 127u && nRows < kMaxRows; ++ua) {
-    if (host.node(static_cast<uint8_t>(ua)) != nullptr) {
+    if (host.node(static_cast<uint8_t>(ua)) != nullptr)
       uas[nRows++] = static_cast<uint8_t>(ua);
-    }
   }
 
   const auto& hs = host.statistics();
@@ -674,11 +624,12 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
   for (size_t i = 0; i < nRows; ++i) {
     CMRInet::RemoteNodeHandle* node = host.node(uas[i]);
     const bool online =
-        (node != nullptr) && (node->state() == CMRInet::RemoteNodeState::kOnline);
+        (node != nullptr) &&
+        (node->state() == CMRInet::RemoteNodeState::kOnline);
     const char* tag =
         (node != nullptr) ? CMRInet::remoteNodeStateTag(node->state()) : "---";
-    const uint32_t latMs = (node != nullptr)
-        ? node->statistics().lastTurnaroundMs : 0;
+    const uint32_t latMs =
+        (node != nullptr) ? node->statistics().lastTurnaroundMs : 0;
     char row[28];
     panel.nodeRowText(row, sizeof(row), now, i, uas[i], online, tag, latMs);
     display.setTextSize(1);
@@ -697,6 +648,7 @@ void emitGeneratorsStatus(void* context, char* buffer, size_t remaining_capacity
 
   oledFlush.markDirty();
 }
+
 
 void setup() {
   Serial.begin(115200);  // USB CDC: the command-and-control stream
@@ -766,8 +718,7 @@ void loop() {
   engine.setNow(nowMs);
   if (!finished) {
     host.tick(nowMs);
-    tickNodeScopedGenerators(nowMs);
-    stall.tick(nowMs);
+    tickHostServices(nowMs);
   }
 
   if (run_active) {
@@ -885,8 +836,8 @@ void loop() {
       run_polls = 0;
       run_loop_its = 0;
       run_it_frames = 0;
-      disableAllNodeScopedGenerators();
-      stall.enabled = false;
+      disableAllNodeScopedServices();
+      stallService.setEnabled(false);
       Serial.println("{\"event\":\"reset\"}");
       handled = true;
     } else if (strcmp(verb, "status") == 0) {

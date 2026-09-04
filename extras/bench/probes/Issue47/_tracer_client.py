@@ -495,17 +495,17 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
         dstring = ""
         dstringsep = "t:"
         if "fast" in traffic:
-            ser.write(b"enable fastwalker\n")
+            ser.write(b"enable fastwalker UA 30\n")
             dstring += f"{dstringsep}f"
             dstringsep = ", "
             time.sleep(0.1)
         if "slow" in traffic:
-            ser.write(b"enable slowwalker\n")
+            ser.write(b"enable slowwalker UA 30\n")
             dstring += f"{dstringsep}s"
             dstringsep = ", "
             time.sleep(0.1)
         if "loopback" in traffic:
-            ser.write(b"enable toggleoutfrominput\n")
+            ser.write(b"enable toggleoutfrominput UA 30\n")
             dstring += f"{dstringsep}l"
             dstringsep = ", "
             time.sleep(0.1)

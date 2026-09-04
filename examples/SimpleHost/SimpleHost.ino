@@ -65,7 +65,7 @@ constexpr int      kScreenW       = 128;
 constexpr int      kScreenH       = 64;
 constexpr int      kScreenAddr    = 0x3C;
 constexpr uint32_t kDisplayRefreshMs = 120;
-constexpr uint32_t kErrorWindowMs     = 5000;
+constexpr uint32_t kErrorWindowMs     = 10000;
 
 Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
 CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
@@ -105,11 +105,11 @@ using CMRInet::hostNodeCpnode;
 
 HostNodeSpec nodeTable[] = {
   // UA 30: CPNODE — 2 onboard + 5 IOX bytes in and out
-  hostNodeCpnode(30, CpnodeInit(2 + 5, 2 + 5)),
+  hostNodeCpnode(30, CpnodeInit(2 + 5, 2 + 5 /* o1=0, o2=0 */)),
   // UA 31: CPNODE — 2 onboard + 1 IOX byte in and out
-  hostNodeCpnode(31, CpnodeInit(2 + 1, 2 + 1)),
+  hostNodeCpnode(31, CpnodeInit(2 + 1, 2 + 1 /* o1=0, o2=0 */)),
   // Examples of other types (uncomment / edit as needed):
-  // hostNodeSmini(5, CMRInet::SminiInit(/*ns=*/0)),
+  hostNodeSmini(5, CMRInet::SminiInit(/*ns=*/0)),
   // hostNodeSusic(10, CMRInet::UsicFamilyInit(/*ns=*/1, /*NI=*/4, /*NO=*/4)),
 };
 constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
@@ -252,7 +252,7 @@ void setup() {
   }
   host.begin();
 
-  // Services (sketch overlay — not core CMRInet).
+  // Services
   BitWalkerConfig bitwalker1 = {  30,  3,   0,   8,   1000, true, };
   g_orchestrator.add(new BitWalkerService(bitwalker1));
   BitWalkerConfig bitwalker2 = {  30,  4,   3,   3,   500,  true, };
@@ -260,9 +260,7 @@ void setup() {
   BitWalkerConfig bitwalker3 = {  31,  2,   0,   8,   250,  false, };
   g_orchestrator.add(new BitWalkerService(bitwalker3));
 
-  InputToggleConfig inputToggle = {
-    31, 2, 0, 30, 6, 1, false,
-  };
+  InputToggleConfig inputToggle = {31, 2,   0,  30,  6,  1, false, };
   g_orchestrator.add(new InputToggleService(inputToggle));
 }
 
