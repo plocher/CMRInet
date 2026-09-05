@@ -35,6 +35,12 @@ def main():
     parser.add_argument("--stalls", default="6 7 8 9 10 11 12")
     parser.add_argument("--periods", default="150")
     parser.add_argument("--traffic", default="")
+    parser.add_argument("--walker-period-ms", type=int,
+                        default=_tracer_client.DEFAULT_WALKER_PERIOD_MS)
+    parser.add_argument("--walker-byte", type=int,
+                        default=_tracer_client.DEFAULT_WALKER_BYTE)
+    parser.add_argument("--walker-invert", type=int, choices=(0, 1),
+                        default=_tracer_client.DEFAULT_WALKER_INVERT)
     parser.add_argument("--out", default="sweep_results")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -113,7 +119,10 @@ def main():
                         
                         res = _tracer_client.run_combo(
                             ser, s, p, mode, args.traffic, args.secs, out_dir, tag,
-                            capture_sniffers=True
+                            capture_sniffers=True,
+                            walker_period_ms=args.walker_period_ms,
+                            walker_byte=args.walker_byte,
+                            walker_invert=args.walker_invert,
                         )
                         
                         # Keep round-1 compat output plus new columns

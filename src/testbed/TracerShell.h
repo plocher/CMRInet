@@ -134,10 +134,16 @@ class TracerShell {
   /// as its stream requires.
   using LineWriter = void (*)(void* context, const char* line);
 
-/// Callback emitting a generators JSON fragment (leading comma OK).
-  /// Invoked on its own line after the status/roster pair.
-  using StatusExtender = void (*)(void* context, char* buffer,
-                                  size_t remaining_capacity);
+/// Writes one reporting item's JSON object (no leading/trailing comma)
+  /// into `buffer`, for the given 0-based `index`, and returns its
+  /// length -- or 0 if that index has nothing to report right now (e.g.
+  /// a disabled pool slot; the shell skips it and keeps enumerating,
+  /// indices need not be densely populated). Called once per index in
+  /// [0, itemCount) registered via setStatusExtender, each producing at
+  /// most one small CDC line -- never one shared buffer that an
+  /// unbounded item count could silently overflow/truncate.
+  using StatusItemWriter = size_t (*)(void* context, int index,
+                                      char* buffer, size_t cap);
 
   /// What handleVerb() asks of the surrounding main loop.
   enum class VerbResult : uint8_t {
@@ -165,12 +171,17 @@ class TracerShell {
     host.onTrace(&TracerShell::onHostTrace_, this);
   }
 
-/// Register an optional callback that emits a generators JSON fragment
-  /// (e.g. `,"generators":{...}`) as its own line after `status`.
-  /// Kept off the counters/roster lines so a long extender cannot
-  /// truncate the host ledger under CDC backpressure.
-  void setStatusExtender(StatusExtender extender, void* context = nullptr) {
-    statusExtender_ = extender;
+/// Register an optional per-item status writer. After `status`'s
+  /// counters/roster lines, the shell calls `writer(context, i, ...)`
+  /// for i in [0, itemCount) and emits one `event:"generator"` line per
+  /// non-empty result. Each line is independently sized, so neither a
+  /// large item count nor a large single item can truncate the host
+  /// ledger or roster under CDC backpressure -- the failure mode a
+  /// single shared buffer had.
+  void setStatusExtender(StatusItemWriter writer, int itemCount,
+                        void* context = nullptr) {
+    statusItemWriter_ = writer;
+    statusItemCount_ = itemCount;
     statusExtenderContext_ = context;
   }
 
@@ -901,14 +912,19 @@ if (strcmp(verb, "status") == 0) {
   // flat line was only possible while the shell pretended there was
   // exactly one node.
   //
-  // Host-scope `status` is further split into a three-line bundle so no
-  // single CDC write carries counters + roster + generators at once:
-  //   1. event="status"      host counters + degraded ledger + identity
-  //   2. event="roster"      the live node table only
-  //   3. event="generators"  optional StatusExtender payload (sketch)
+  // Host-scope `status` is further split into a bundle so no single CDC
+  // write carries counters + roster + generator status at once:
+  //   1. event="status"    host counters + degraded ledger + identity
+  //   2. event="roster"    the live node table only
+  //   3. event="generator" zero or more lines, one per reporting service
+  //      instance (registered via setStatusExtender). N enabled services
+  //      means N small lines, not one shared buffer sized for a guess at
+  //      the worst case -- that guess is exactly what silently truncated
+  //      before.
   // Epoch still carries roster on one line: it is rare and small enough.
 
-  /// Emit the host-scope status bundle as three short JSON lines.
+  /// Emit the host-scope status bundle: counters, roster, then one
+  /// "generator" line per reporting item.
   void emitStatusBundle_() {
     // 1) Counters and ledger — the fields degraded-lane scoring needs.
     emitHostLine_(nowMs_, "status", kNoUA, nullptr, nullptr,
@@ -916,30 +932,29 @@ if (strcmp(verb, "status") == 0) {
     // 2) Roster alone — the membership view dual-node scoring needs.
     emitHostLine_(nowMs_, "roster", kNoUA, nullptr, nullptr,
                   /*identity=*/false, /*config=*/false, /*roster=*/true);
-    // 3) Generators, when the wrapping main registered an extender.
-    if (statusExtender_ != nullptr) {
-      emitGeneratorsLine_();
-    }
+    // 3) One line per reporting service instance, when registered.
+    emitGeneratorLines_();
   }
 
-  /// Own line for the StatusExtender payload. The extender still returns
-  /// a leading-comma fragment (historical contract with emitHostLine_);
-  /// we strip the comma and wrap it as a complete object.
-  void emitGeneratorsLine_() {
-    char extBuf[256] = {0};
-    statusExtender_(statusExtenderContext_, extBuf, sizeof(extBuf));
-    const char* payload = extBuf;
-    if (payload[0] == ',') {
-      ++payload;
+  /// Emit zero or more "generator" lines, one per non-empty item the
+  /// registered StatusItemWriter reports. Each item gets its own small,
+  /// independently-bounded line -- an item that doesn't fit its own
+  /// buffer is a local truncation of one line, never a corrupt shared
+  /// blob, and a large item count is just more lines, not overflow.
+  void emitGeneratorLines_() {
+    if (statusItemWriter_ == nullptr) return;
+    char itemBuf[192];
+    for (int i = 0; i < statusItemCount_; ++i) {
+      const size_t n =
+          statusItemWriter_(statusExtenderContext_, i, itemBuf, sizeof(itemBuf));
+      if (n == 0) continue;
+      itemBuf[(n < sizeof(itemBuf)) ? n : sizeof(itemBuf) - 1] = '\0';
+      int written = appendf_(
+          0, "{\"seq\":%u,\"ts\":%u,\"event\":\"generator\",\"role\":\"host\",%s",
+          static_cast<unsigned>(++seq_),
+          static_cast<unsigned>(nowMs_ - epochMs_), itemBuf);
+      finish_(written);
     }
-    if (payload[0] == '\0') {
-      return;
-    }
-    int written = appendf_(
-        0, "{\"seq\":%u,\"ts\":%u,\"event\":\"generators\",\"role\":\"host\",%s",
-        static_cast<unsigned>(++seq_),
-        static_cast<unsigned>(nowMs_ - epochMs_), payload);
-    finish_(written);
   }
 
   void emitHostLine_(uint32_t nowMs, const char* event, int UA,
@@ -1012,9 +1027,9 @@ if (strcmp(verb, "status") == 0) {
       written = appendf_(written, ",\"%s\":\"%s\"", extraKey, extraValue);
     }
 if (roster) {
-      // Roster only. Generators ride their own line via
-      // emitGeneratorsLine_ so a long extender cannot truncate the
-      // membership view under CDC backpressure.
+      // Roster only. Generator status rides its own lines via
+      // emitGeneratorLines_ so an unbounded item count cannot truncate
+      // the membership view under CDC backpressure.
       written = appendRoster_(written);
     }
     finish_(written);
@@ -1208,7 +1223,8 @@ if (roster) {
   const char* version_ = "";
   LineWriter writeLine_ = nullptr;
   void* writeContext_ = nullptr;
-  StatusExtender statusExtender_ = nullptr;
+  StatusItemWriter statusItemWriter_ = nullptr;
+  int statusItemCount_ = 0;
   void* statusExtenderContext_ = nullptr;
 
   uint32_t nowMs_ = 0;    ///< the main loop's injected clock

@@ -99,12 +99,13 @@ def _configure_real_node_traffic(
     walker_byte_a: int,
     walker_byte_b: int,
     walker_period_ms: int,
+    walker_invert: int,
     loopback_byte_a: int,
     loopback_bit_a: int,
     loopback_byte_b: int,
     loopback_bit_b: int,
 ) -> None:
-    """Enable slowwalker and write(read()) loopback for the two real-node UAs."""
+    """Enable walker and write(read()) loopback for the two real-node UAs."""
     for ua, walker_byte, loopback_byte, loopback_bit in (
         (ua_a, walker_byte_a, loopback_byte_a, loopback_bit_a),
         (ua_b, walker_byte_b, loopback_byte_b, loopback_bit_b),
@@ -112,11 +113,11 @@ def _configure_real_node_traffic(
         _tracer_client.send_generator_command(
             ser,
             "configure",
-            "slowwalker",
+            "walker",
             ua=ua,
-            extra_args=f"byte {walker_byte} period {walker_period_ms}",
+            extra_args=f"byte {walker_byte} period {walker_period_ms} invert {walker_invert}",
         )
-        _tracer_client.send_generator_command(ser, "enable", "slowwalker", ua=ua)
+        _tracer_client.send_generator_command(ser, "enable", "walker", ua=ua)
         _tracer_client.configure_loopback_write_read(
             ser,
             ua=ua,
@@ -212,6 +213,13 @@ def main() -> int:
     parser.add_argument("--ua-a-walker-byte", type=int, default=3)
     parser.add_argument("--ua-b-walker-byte", type=int, default=2)
     parser.add_argument("--walker-period-ms", type=int, default=1000)
+    parser.add_argument(
+        "--walker-invert",
+        type=int,
+        default=0,
+        choices=(0, 1),
+        help="Walker polarity: 0 = active-high walk, 1 = active-low walk",
+    )
     parser.add_argument("--ua-a-loopback-byte", type=int, default=3)
     parser.add_argument("--ua-a-loopback-bit", type=int, default=1)
     parser.add_argument("--ua-b-loopback-byte", type=int, default=2)
@@ -255,6 +263,7 @@ def main() -> int:
             walker_byte_a=args.ua_a_walker_byte,
             walker_byte_b=args.ua_b_walker_byte,
             walker_period_ms=args.walker_period_ms,
+            walker_invert=args.walker_invert,
             loopback_byte_a=args.ua_a_loopback_byte,
             loopback_bit_a=args.ua_a_loopback_bit,
             loopback_byte_b=args.ua_b_loopback_byte,

@@ -388,9 +388,9 @@ static void test_node_status_line_carries_outputs_hex(void) {
 static void test_host_status_reports_the_table_not_one_node(void) {
   TracerRig rig;
   rig.verb("status");
-  // Bare status is a two-line bundle (no extender registered here):
-  // counters/ledger, then roster. Generators only appear when a sketch
-  // registers a StatusExtender.
+  // Bare status is a two-line bundle (no item writer registered here):
+  // counters/ledger, then roster. "generator" lines only appear when a
+  // sketch registers a StatusItemWriter (one line per reporting item).
   const std::string* status =
       findContaining(rig.lines, "\"event\":\"status\"");
   const std::string* roster =

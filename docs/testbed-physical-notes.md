@@ -83,13 +83,16 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
 - Power: all boards can run from Mac USB during bench work. Note any externally powered configuration in the scenario, since brownout during pattern bursts would masquerade as protocol faults.
 - Manual production-test wiring (card N outputs to card M inputs) is operator work, guided step by step by the runner. The bench does not attempt relay matrices or automated patch panels.
 ## Wire-visible signatures for TracerHost stimulus generators
-When `TracerHost` (v0.3.0+) drives a stimulus generator, the T-frame payload has a specific bit pattern. This lets a bench observer confirm the generator is correct without relying only on CDC verb responses. The first #55 implementation inverted the `fastwalker` logic. Wire inspection caught the problem; unit tests did not.
-- **`fastwalker`** (default byte 3, 250 ms period): walks a cleared bit through a field of set bits. Byte 3 progresses `0xFF → 0xFE → 0xFD → 0xFB → 0xF7 → 0xEF → 0xDF → 0xBF → 0x7F → 0xFF …`.
-- **`slowwalker`** (default byte 5, 1000 ms period): walks a set bit through a field of cleared bits. Byte 5 progresses `0x00 → 0x01 → 0x02 → 0x04 → 0x08 → 0x10 → 0x20 → 0x40 → 0x80 → 0x00 …`.
+When `TracerHost` (v0.3.0+) drives a stimulus generator, the T-frame payload has a specific bit pattern. This lets a bench observer confirm the generator is correct without relying only on CDC verb responses. Early #55 work inverted walker polarity once; wire inspection caught it; unit tests did not.
+- **`walker`** — C&C: `enable|disable|configure walker UA <n> [period <ms>] [byte <n>] [invert <0|1>]`. The three parameters are independent knobs: there are no canonical combinations, and no setting carries diagnostic significance. (An earlier two-verb speed split existed only to diagnose #47 — stall-triggered protocol retries at high walker speed; #47 is fixed.)
+  - `period <ms>` — the step interval in milliseconds. Any period in the 250–1000 ms band gives a visually identifiable pattern on the bench LEDs; pick by how brisk you want the walk to look.
+  - `byte <n>` — the output byte index the walker drives. Any implemented output byte works; the bench I/O expander jumper inventory (in "Wiring and electrical notes" above) shows which bytes are implemented and wired for loopback visibility on each node.
+  - `invert <0|1>` — the walk polarity. `1` walks a cleared bit through a field of set bits; `0` walks a set bit through a field of cleared bits.
+  - `invert 1` on the wire: the driven byte progresses `0xFF → 0xFE → 0xFD → 0xFB → 0xF7 → 0xEF → 0xDF → 0xBF → 0x7F → 0xFF …`.
+  - `invert 0` on the wire: the driven byte progresses `0x00 → 0x01 → 0x02 → 0x04 → 0x08 → 0x10 → 0x20 → 0x40 → 0x80 → 0x00 …`.
+  - Multiple walkers may run concurrently when they target different output bytes. UA=30 uses a 7-byte output image on this bench.
 - **`toggleoutfrominput`** (default input bit 48 → output bit 32): inverts output bit 32 on the rising edge of input bit 48. On the wire, this is a single-bit toggle in byte 4, bit 0 of the T payload.
-- **`stall`**: has no direct T-payload signature. Its signature is a change in poll cadence, specifically the miss/backoff behavior on the phantom UA that #47 investigates.
-
-The walkers use different output bytes by default so they can run concurrently without modifying the same byte. UA=30 uses a 7-byte output image on this bench.
+- **`stall`**: has no direct T-payload signature. Its signature is a change in poll cadence, specifically the miss/backoff behavior on the phantom UA that #47 investigated (now fixed; the generator remains as a cadence-perturbation stimulus).
 
 ## USB board identity and recovery
 Multiple Xiao ESP32-C6 boards enumerate with similar and unstable `/dev/cu.usbmodem*` names. A port number is not a board identity. During #55 validation, `TracerHost` was initially uploaded to the passive Sniffer board. Commands were accepted, but the supposed Host stayed offline and emitted only miss behavior because the physical bench roles had been reversed.

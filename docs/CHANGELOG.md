@@ -20,7 +20,16 @@ High-level changes, newest first.
 - `toSemanticUA` / `toWireUA` live in `CMRIPacket.h` beside `isLegalWireUA`.
   TracerHost no longer keeps local copies.
 - TracerHost walkers use one `BitWalkerService` pool under `Orchestrator`.
-  `fastwalker`/`slowwalker` are C&C aliases with different defaults.
+  Single C&C verb `walker` with explicit, orthogonal keys `UA` / `period` /
+  `byte` / `invert`, replacing the two former named speed-preset verbs;
+  no aliases kept, and walker speed carries no diagnostic significance
+  now that #47 is fixed.
+- TracerHost generator status is per-instance, one small `event:"generator"`
+  CDC line per enabled service (N enabled walkers means N lines), replacing
+  both the one fixed walker/toggle/stall shape and an interim single-buffer
+  array design that could silently truncate/corrupt once enough services
+  were enabled to overflow one shared line. Generator C&C verb
+  recognition/node-scoping is table-driven.
 - TracerHost generators use shared `HostServices` (BitWalker, InputToggle,
   Stall). Node-scoped C&C needs `UA`. Soft default UA is gone. Bench
   scripts pass `UA 30`.
@@ -96,12 +105,14 @@ High-level changes, newest first.
   "baud rate unachievable", leaving `polls=0` on the bench.
 - TracerShell bare `status` is now a multi-line host-scope bundle instead of
   one monolithic JSON line: `event=status` (counters + degraded ledger +
-  identity), `event=roster` (live node table), and optional
-  `event=generators` from the StatusExtender. The old single-line shape
+  identity), `event=roster` (live node table), and zero or more
+  `event=generator` lines (one per enabled generator service instance,
+  from a registered `StatusItemWriter`). The old single-line shape
   routinely truncated under CDC backpressure and left gather manifests with
-  a null `status_snapshot`. Gather scripts merge the bundle back into one
-  dict for analyzers; analyzers read membership from `roster` (with legacy
-  `nodes`-as-list accepted).
+  a null `status_snapshot`. Gather scripts merge the status+roster pair
+  into one dict for analyzers and do not wait on the generator tail, since
+  its length varies with how many services are enabled; analyzers read
+  membership from `roster` (with legacy `nodes`-as-list accepted).
 
 ### Added
 - `IOBuffer` — the bounds-safe I/O image container, now the
@@ -685,7 +696,7 @@ High-level changes, newest first.
 - XiaoHostTracer dual-node validation support (issue #33): generator verbs now
   accept an optional `ua` target (`configure|enable|disable ... ua <n>`),
   defaulting to UA30 when omitted for backward compatibility. Generator runtime
-  state is now per-UA so `slowwalker` and `toggleoutfrominput` can run
+  state is now per-UA so `walker` and `toggleoutfrominput` can run
   concurrently on multiple nodes. `toggleoutfrominput` gained explicit
   byte/bit loopback controls (`src_byte`, `src_bit`, `dst_byte`, `dst_bit`) and
   a `mode write_read` option to support loopback `write(read())` validation

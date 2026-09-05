@@ -21,7 +21,7 @@ real RS485 bench with the same three-node shape.
 One scenario: `degraded_lane_bounding`. Three nodes, matching the unit
 test's population:
 
-- **UA30** (healthy): compiled in at 7/7, conforming, with slowwalker
+- **UA30** (healthy): compiled in at 7/7, conforming, with walker
   generator load so the round-robin has real contention.
 - **UA31** (degraded, misconfigured): a real alive node declared 4/4
   against its physical 3/3. Its replies carry the wrong geometry and

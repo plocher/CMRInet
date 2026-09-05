@@ -32,7 +32,7 @@ def test_run_combo_timeout():
     mock_ser = MagicMock()
     mock_ser.in_waiting = 0
     mock_ser.readline.return_value = b""
-    res = sweep_47.run_combo(mock_ser, 25, 150, "yield", "fast", 1, Path("/tmp"), "tag")
+    res = sweep_47.run_combo(mock_ser, 25, 150, "yield", "walker", 1, Path("/tmp"), "tag")
     assert res.verdict == "ERROR_TIMEOUT"
 
 def test_run_combo_success(tmp_path):
@@ -51,7 +51,7 @@ def test_run_combo_success(tmp_path):
         b"", b"", b"", b""
     ]
     
-    res = sweep_47.run_combo(mock_ser, 25, 150, "yield", "fast", 1, tmp_path, "test_tag")
+    res = sweep_47.run_combo(mock_ser, 25, 150, "yield", "walker", 1, tmp_path, "test_tag")
     
     assert res.verdict != "ERROR_TIMEOUT"
     assert (tmp_path / "test_tag.log").exists()

@@ -49,8 +49,8 @@ def main():
     t_rx.start()
     
     try:
-        # Cycle 1: Fast walker only
-        print("\n--- Cycle 1: Fast walker only (10s) ---")
+        # Cycle 1: walker only
+        print("\n--- Cycle 1: walker only (10s) ---")
         ser = _tracer_client.reboot_and_reconnect(args.host_port)
         if not _tracer_client.sync_and_validate_boot(ser):
             print("ERROR: Boot validation failed.", file=sys.stderr)
@@ -61,7 +61,7 @@ def main():
         time.sleep(0.1)
         _tracer_client.flush_lines(ser)
         
-        res = _tracer_client.run_combo(ser, 0, 0, "yield", "fast", 10, out_dir, "cycle1_fast")
+        res = _tracer_client.run_combo(ser, 0, 0, "yield", "walker", 10, out_dir, "cycle1_walker")
         print(f"  -> {res.verdict}")
         
         # Inter-cycle 1: Reset (software)
@@ -70,9 +70,11 @@ def main():
         time.sleep(2)
         _tracer_client.flush_lines(ser)
         
-        # Cycle 2: Slow walker only
-        print("\n--- Cycle 2: Slow walker only (10s) ---")
-        res = _tracer_client.run_combo(ser, 0, 0, "yield", "slow", 10, out_dir, "cycle2_slow")
+        # Cycle 2: walker only, second sync point (independent of cycle 1's
+        # walker parameters -- this scenario tests sync across reset/reboot,
+        # not walker speed).
+        print("\n--- Cycle 2: walker only (10s) ---")
+        res = _tracer_client.run_combo(ser, 0, 0, "yield", "walker", 10, out_dir, "cycle2_walker")
         print(f"  -> {res.verdict}")
         
         # Inter-cycle 2: Reboot (hardware)

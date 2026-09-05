@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "CMRInet.h"
@@ -17,10 +18,28 @@ namespace CMRInet {
 namespace app {
 
 /// Base service — tick once per host loop.
+///
+/// Status is a per-instance contract, not a per-sketch one: `kind()`
+/// names the service type for a status consumer, and `writeStatus`
+/// renders exactly one instance's own JSON object. A caller that wants
+/// a status report for N services (e.g. the walker pool) reports N
+/// objects -- one per instance via `Orchestrator::serviceAt` -- not one
+/// struct that only had room for the first two, and not one shared
+/// buffer sized for a guessed worst-case N.
 class Service {
  public:
   virtual ~Service() = default;
   virtual void tick(CMRIHost& host, uint32_t now) = 0;
+
+  /// Short, stable type name for status/telemetry (e.g. "walker").
+  virtual const char* kind() const = 0;
+
+  /// Write this instance's status as one JSON object into `buf`
+  /// (no leading/trailing comma). Returns the object's length, or 0
+  /// when the instance has nothing to report (e.g. disabled) — a
+  /// caller skips zero-length instances rather than emitting an
+  /// empty placeholder.
+  virtual size_t writeStatus(char* buf, size_t cap) const = 0;
 };
 
 /// Fixed-capacity orchestrator (no heap after setup for SimpleHost;
@@ -47,6 +66,16 @@ class Orchestrator {
 
   int count() const { return serviceCount_; }
 
+  /// Bounds-checked access by index, for a caller that reports each
+  /// service instance as its own status line/message instead of
+  /// aggregating them into one shared buffer (a shared buffer sized
+  /// for a guessed worst case is exactly what silently truncated/
+  /// corrupted status under a large or growing service count).
+  Service* serviceAt(int index) const {
+    if (index < 0 || index >= serviceCount_) return nullptr;
+    return services_[index];
+  }
+
  private:
   Service* services_[kMaxServices];
   int serviceCount_;
@@ -60,7 +89,7 @@ struct BitWalkerConfig {
   uint8_t startBit = 0;
   uint8_t bitsCount = 8;
   uint32_t periodMs = 250;
-  bool inverted = false;  // true: active-low walk (Tracer fastwalker style)
+  bool inverted = false;  // true: active-low walk (cleared bit through 1s)
 };
 
 /// Walks one bit of one output byte. Enable/disable and reconfigure at runtime.
@@ -85,6 +114,22 @@ class BitWalkerService : public Service {
     }
   }
   bool enabled() const { return enabled_; }
+
+  const char* kind() const override { return "walker"; }
+
+  size_t writeStatus(char* buf, size_t cap) const override {
+    if (!enabled_) return 0;
+    const int n = snprintf(
+        buf, cap,
+        "{\"kind\":\"walker\",\"ua\":%u,\"byte\":%u,\"period_ms\":%lu,"
+        "\"invert\":%s}",
+        static_cast<unsigned>(config_.nodeUA),
+        static_cast<unsigned>(config_.byte),
+        static_cast<unsigned long>(config_.periodMs),
+        config_.inverted ? "true" : "false");
+    if (n <= 0) return 0;
+    return (static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : cap - 1;
+  }
 
   void tick(CMRIHost& host, uint32_t now) override {
     if (!enabled_) return;
@@ -156,6 +201,27 @@ class InputToggleService : public Service {
   }
   bool enabled() const { return enabled_; }
 
+  const char* kind() const override { return "toggle"; }
+
+  size_t writeStatus(char* buf, size_t cap) const override {
+    if (!enabled_) return 0;
+    const uint16_t inBit =
+        static_cast<uint16_t>(config_.inByte) * 8u + config_.inBit;
+    const uint16_t outBit =
+        static_cast<uint16_t>(config_.outByte) * 8u + config_.outBit;
+    const char* modeStr = (config_.mode == InputToggleMode::kLevelFollow)
+                              ? "write_read"
+                              : "toggle";
+    const int n = snprintf(
+        buf, cap,
+        "{\"kind\":\"toggle\",\"ua_in\":%u,\"ua_out\":%u,\"in\":%u,"
+        "\"out\":%u,\"mode\":\"%s\"}",
+        static_cast<unsigned>(config_.inNodeUA),
+        static_cast<unsigned>(config_.outNodeUA), inBit, outBit, modeStr);
+    if (n <= 0) return 0;
+    return (static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : cap - 1;
+  }
+
   void tick(CMRIHost& host, uint32_t /*now*/) override {
     if (!enabled_) return;
     RemoteNodeHandle* inNode = host.node(config_.inNodeUA);
@@ -218,6 +284,21 @@ class StallService : public Service {
     lastMs_ = 0;
   }
   bool enabled() const { return enabled_; }
+
+  const char* kind() const override { return "stall"; }
+
+  size_t writeStatus(char* buf, size_t cap) const override {
+    if (!enabled_) return 0;
+    const char* modeStr =
+        (config_.mode == StallMode::kYield) ? "yield" : "busy";
+    const int n = snprintf(
+        buf, cap, "{\"kind\":\"stall\",\"ms\":%lu,\"period_ms\":%lu,"
+        "\"mode\":\"%s\"}",
+        static_cast<unsigned long>(config_.stallMs),
+        static_cast<unsigned long>(config_.periodMs), modeStr);
+    if (n <= 0) return 0;
+    return (static_cast<size_t>(n) < cap) ? static_cast<size_t>(n) : cap - 1;
+  }
 
   void tick(CMRIHost& /*host*/, uint32_t now) override {
     if (!enabled_ || config_.stallMs == 0) return;
