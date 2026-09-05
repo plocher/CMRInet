@@ -11,6 +11,7 @@ using Orchestrator = CMRInet::app::Orchestrator;
 using BitWalkerConfig = CMRInet::app::BitWalkerConfig;
 using BitWalkerService = CMRInet::app::BitWalkerService;
 using InputToggleConfig = CMRInet::app::InputToggleConfig;
+using InputToggleMode = CMRInet::app::InputToggleMode;
 using InputToggleService = CMRInet::app::InputToggleService;
 
 // Global orchestrator for this sketch
