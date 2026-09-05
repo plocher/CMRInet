@@ -57,7 +57,10 @@ def flush_lines(ser):
     while ser.in_waiting:
         ser.readline()
 
-def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
+def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
+              walker_period_ms: int = 500,
+              walker_byte: int = 3,
+              walker_invert: int = 0):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
     log_file = out_dir / f"{tag}.log"
     
@@ -67,11 +70,12 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag):
     flush_lines(ser)
     
     # Traffic
-    if "fast" in traffic:
-        ser.write(b"enable fastwalker UA 30\n")
-        time.sleep(0.1)
-    if "slow" in traffic:
-        ser.write(b"enable slowwalker UA 30\n")
+    if "walker" in traffic:
+        cmd = (
+            f"enable walker UA 30 period {walker_period_ms} "
+            f"byte {walker_byte} invert {walker_invert}\n"
+        )
+        ser.write(cmd.encode('utf-8'))
         time.sleep(0.1)
         
     # Stall
@@ -141,7 +145,13 @@ def main():
     parser.add_argument("--secs", type=int, default=60)
     parser.add_argument("--stalls", default="1 3 5 7 8 9 10 11 12 15 20 30 50 100 250")
     parser.add_argument("--periods", default="125 145 150 155 200 233 250 373 500")
-    parser.add_argument("--traffic", default="fast")
+    parser.add_argument("--traffic", default="walker")
+    parser.add_argument("--walker-period-ms", type=int, default=500,
+                        help="Walker step period in ms (250-1000 reads well on bench LEDs)")
+    parser.add_argument("--walker-byte", type=int, default=3,
+                        help="Output byte index the walker drives")
+    parser.add_argument("--walker-invert", type=int, default=0, choices=[0, 1],
+                        help="0=active-high walk, 1=active-low walk")
     parser.add_argument("--busy", action="store_true")
     parser.add_argument("--yield", dest="mode_yield", action="store_true")
     parser.add_argument("--out", default="sweep_results")
@@ -182,6 +192,8 @@ def main():
     print(f"    port    : {args.port}")
     print(f"    mode    : {mode}")
     print(f"    traffic : {args.traffic}")
+    print(f"    walker  : period={args.walker_period_ms}ms "
+          f"byte={args.walker_byte} invert={args.walker_invert}")
     
     if args.dry_run:
         print("\nDry run complete. Matrix:")
@@ -241,7 +253,10 @@ def main():
                     i += 1
                     continue
                 
-                res = run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag)
+                res = run_combo(ser, s, p, mode, args.traffic, args.secs, out_dir, tag,
+                                walker_period_ms=args.walker_period_ms,
+                                walker_byte=args.walker_byte,
+                                walker_invert=args.walker_invert)
                 
                 # Keep round-1 compat output plus new columns
                 writer.writerow([

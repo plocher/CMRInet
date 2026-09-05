@@ -3,7 +3,7 @@
 
 Reproduces the #80 condition on hardware with the same three-node
 population the unit test uses (test_degraded_participation_is_bounded):
-- UA30 (healthy): compiled in at 7/7, conforming, with slowwalker
+- UA30 (healthy): compiled in at 7/7, conforming, with walker
   generator load so the round-robin has real contention.
 - UA31 (degraded, misconfigured): a real alive node declared 4/4
   against its physical 3/3. Its replies carry the wrong geometry and
@@ -123,6 +123,13 @@ def main() -> int:
     # Generator load on the healthy node creates round-robin contention.
     parser.add_argument("--walker-byte", type=int, default=5)
     parser.add_argument("--walker-period-ms", type=int, default=1000)
+    parser.add_argument(
+        "--walker-invert",
+        type=int,
+        default=0,
+        choices=(0, 1),
+        help="Walker polarity: 0 = active-high walk, 1 = active-low walk",
+    )
     parser.add_argument("--tag", default="degraded_lane_validation")
     parser.add_argument("--out", default="auto")
     args = parser.parse_args()
@@ -167,10 +174,13 @@ def main() -> int:
         print("Configuring generator load on healthy node...")
         _display(ser, 1, f"u{healthy_ua} walker byte {args.walker_byte}")
         _tracer_client.send_generator_command(
-            ser, "configure", "slowwalker", ua=healthy_ua,
-            extra_args=f"byte {args.walker_byte} period {args.walker_period_ms}",
+            ser, "configure", "walker", ua=healthy_ua,
+            extra_args=(
+                f"byte {args.walker_byte} period {args.walker_period_ms} "
+                f"invert {args.walker_invert}"
+            ),
         )
-        _tracer_client.send_generator_command(ser, "enable", "slowwalker", ua=healthy_ua)
+        _tracer_client.send_generator_command(ser, "enable", "walker", ua=healthy_ua)
         _tracer_client.flush_lines(ser)
 
         print(f"Starting capture for {args.secs}s...")

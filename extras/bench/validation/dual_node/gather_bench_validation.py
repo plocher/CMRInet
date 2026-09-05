@@ -80,12 +80,13 @@ def _configure_dual_node_traffic(
     walker_byte_a: int,
     walker_byte_b: int,
     walker_period_ms: int,
+    walker_invert: int,
     loopback_byte_a: int,
     loopback_bit_a: int,
     loopback_byte_b: int,
     loopback_bit_b: int,
 ) -> None:
-    """Enable slowwalker and write(read()) loopback on both nodes."""
+    """Enable walker and write(read()) loopback on both nodes."""
     for ua, walker_byte, loopback_byte, loopback_bit in (
         (ua_a, walker_byte_a, loopback_byte_a, loopback_bit_a),
         (ua_b, walker_byte_b, loopback_byte_b, loopback_bit_b),
@@ -93,14 +94,14 @@ def _configure_dual_node_traffic(
         _tracer_client.send_generator_command(
             ser,
             "configure",
-            "slowwalker",
+            "walker",
             ua=ua,
-            extra_args=f"byte {walker_byte} period {walker_period_ms}",
+            extra_args=f"byte {walker_byte} period {walker_period_ms} invert {walker_invert}",
         )
         _tracer_client.send_generator_command(
             ser,
             "enable",
-            "slowwalker",
+            "walker",
             ua=ua,
         )
         _tracer_client.configure_loopback_write_read(
@@ -141,6 +142,13 @@ def main() -> int:
     parser.add_argument("--ua-a-walker-byte", type=int, default=5)
     parser.add_argument("--ua-b-walker-byte", type=int, default=2)
     parser.add_argument("--walker-period-ms", type=int, default=1000)
+    parser.add_argument(
+        "--walker-invert",
+        type=int,
+        default=0,
+        choices=(0, 1),
+        help="Walker polarity: 0 = active-high walk, 1 = active-low walk",
+    )
     parser.add_argument("--ua-a-loopback-byte", type=int, default=3)
     parser.add_argument("--ua-a-loopback-bit", type=int, default=1)
     parser.add_argument("--ua-b-loopback-byte", type=int, default=2)
@@ -178,7 +186,7 @@ def main() -> int:
         _tracer_client.send_command(ser, "node disable 32")
         _tracer_client.flush_lines(ser)
 
-        print("Configuring dual-node traffic (slowwalker + write(read()) loopback)...")
+        print("Configuring dual-node traffic (walker + write(read()) loopback)...")
         _display(ser, 1, f"u{args.ua_a}s{args.ua_a_walker_byte} u{args.ua_b}s{args.ua_b_walker_byte}")
         _display(
             ser,
@@ -195,12 +203,13 @@ def main() -> int:
             walker_byte_a=args.ua_a_walker_byte,
             walker_byte_b=args.ua_b_walker_byte,
             walker_period_ms=args.walker_period_ms,
+            walker_invert=args.walker_invert,
             loopback_byte_a=args.ua_a_loopback_byte,
             loopback_bit_a=args.ua_a_loopback_bit,
             loopback_byte_b=args.ua_b_loopback_byte,
             loopback_bit_b=args.ua_b_loopback_bit,
         )
-        _display(ser, 1, "slow+loopback on")
+        _display(ser, 1, "walker+loopback on")
         _display(ser, 2, "behaviors enabled")
         _tracer_client.flush_lines(ser)
 
@@ -243,6 +252,7 @@ def main() -> int:
             handle.write(f"# ua_a_walker_byte: {args.ua_a_walker_byte}\n")
             handle.write(f"# ua_b_walker_byte: {args.ua_b_walker_byte}\n")
             handle.write(f"# walker_period_ms: {args.walker_period_ms}\n")
+            handle.write(f"# walker_invert: {args.walker_invert}\n")
             handle.write(f"# ua_a_loopback_byte: {args.ua_a_loopback_byte}\n")
             handle.write(f"# ua_a_loopback_bit: {args.ua_a_loopback_bit}\n")
             handle.write(f"# ua_b_loopback_byte: {args.ua_b_loopback_byte}\n")
@@ -267,6 +277,7 @@ def main() -> int:
             "ua_a_walker_byte": args.ua_a_walker_byte,
             "ua_b_walker_byte": args.ua_b_walker_byte,
             "walker_period_ms": args.walker_period_ms,
+            "walker_invert": args.walker_invert,
             "ua_a_loopback_byte": args.ua_a_loopback_byte,
             "ua_a_loopback_bit": args.ua_a_loopback_bit,
             "ua_b_loopback_byte": args.ua_b_loopback_byte,

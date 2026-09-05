@@ -75,7 +75,7 @@ This same AMBIGUOUS verdict is the expected result for
 
 The script opens the Host CDC port (DTR/RTS asserted, so
 `CdcConsole::open()` reads true), validates boot identity, then enables
-fastwalker on UA30 to drive trace density. It does not send `run
+walker on UA30 to drive trace density. It does not send `run
 <secs>`: the sketch's `ourOnTrace` routes packets to the RAM ring while
 a run is active, not to CDC. With no run active, every poll's I/T/P/R
 trace line flows through `writeCdcLine` to CDC — the path under test.

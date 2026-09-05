@@ -103,7 +103,7 @@ constexpr const char* kImage = "tracer_host";
 // 0.2.0: I/T bench slice (map issue #30) — onTrace packet telemetry and
 // output verbs (setbit/writeoutputs/forcetx) so T is exercisable from C&C.
 // 0.3.0: Add generator-control verbs (enable, disable, configure) for
-// fastwalker, slowwalker, toggleoutfrominput, and stall stimulus (#55).
+// walker, toggleoutfrominput, and stall stimulus (#55).
 // 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
 // 0.7.0 (#86): every node verb names its UA, and the node verbs moved
 // into the shared shell so both tracer images speak one vocabulary. New
@@ -257,9 +257,9 @@ bool readVerb(char* out, size_t len) {
 
 }  // namespace
 // ---- Services (HostServices + Orchestrator) -------------------------------
-// One walker type (BitWalkerService). fastwalker/slowwalker are C&C aliases
-// that only set different defaults (invert/period/byte).
-// Pool of walker and toggle slots. Orchestrator ticks the pool.
+// One walker type (BitWalkerService). C&C verb is `walker` with keys
+// UA / period / byte / invert. Pool of walker and toggle slots;
+// Orchestrator ticks the pool.
 #include "GeneratorParser.h"
 #include "HostServices.h"
 
@@ -341,21 +341,30 @@ void disableAllNodeScopedServices() {
   }
 }
 
-size_t countEnabledWalkers(bool inverted) {
-  size_t n = 0;
-  for (size_t i = 0; i < kMaxWalkers; ++i) {
-    if (walkerLive[i] && walkers[i].enabled() &&
-        walkers[i].config().inverted == inverted)
-      ++n;
-  }
-  return n;
-}
+// Generator verb recognition and node-scoping, table-driven: adding a
+// generator kind means adding a row here, not another cascade branch
+// in handleGeneratorControl. Each kind's enable/disable/configure
+// bodies stay separate (see handleGeneratorControl) because they
+// operate on genuinely different pool shapes, not duplicated logic.
+struct GeneratorKindEntry {
+  const char* name;
+  bool nodeScoped;  // requires "UA <n>" in the verb
+};
+constexpr GeneratorKindEntry kGeneratorKindTable[] = {
+    {"walker", true},
+    {"toggleoutfrominput", true},
+    {"stall", false},
+};
+constexpr size_t kGeneratorKindTableCount =
+    sizeof(kGeneratorKindTable) / sizeof(kGeneratorKindTable[0]);
 
-size_t countEnabledToggles() {
-  size_t n = 0;
-  for (size_t i = 0; i < kMaxToggles; ++i)
-    if (toggleLive[i] && toggles[i].enabled()) ++n;
-  return n;
+const GeneratorKindEntry* findGeneratorKind(const char* name) {
+  for (size_t i = 0; i < kGeneratorKindTableCount; ++i) {
+    if (strcmp(name, kGeneratorKindTable[i].name) == 0) {
+      return &kGeneratorKindTable[i];
+    }
+  }
+  return nullptr;
 }
 
 void emitGeneratorEvent(const char* event, const char* generator,
@@ -393,30 +402,28 @@ bool handleGeneratorControl(char* cmd) {
     return true;
   }
 
-  // walker is the real service. fastwalker/slowwalker are aliases.
-  const bool is_fast = (strcmp(gen_name, "fastwalker") == 0);
-  const bool is_slow = (strcmp(gen_name, "slowwalker") == 0);
-  const bool is_walker = (strcmp(gen_name, "walker") == 0) || is_fast || is_slow;
-  const bool is_toggle = (strcmp(gen_name, "toggleoutfrominput") == 0);
-  const bool is_stall = (strcmp(gen_name, "stall") == 0);
-  if (!is_walker && !is_toggle && !is_stall) {
+  // Verb recognition and node-scoping are table-driven: adding a
+  // generator kind means adding a row here, not another cascade branch.
+  // The enable/disable/configure bodies below stay separate per kind
+  // because each operates on a genuinely different pool shape (walker
+  // slots keyed by UA+byte, toggle slots keyed by UA, one stall config)
+  // -- that is real behavioral difference, not duplicated knowledge.
+  const GeneratorKindEntry* kindEntry = findGeneratorKind(gen_name);
+  if (kindEntry == nullptr) {
     Serial.print("{\"event\":\"error\",\"error\":\"badVerb\",\"message\":\"unknown generator '");
     Serial.print(gen_name);
     Serial.println("'\"}");
     return true;
   }
-
-  const bool node_scoped = is_walker || is_toggle;
-  const char* report_name = gen_name;
-  if (is_walker && strcmp(gen_name, "walker") == 0) report_name = "walker";
+  const bool is_walker = (strcmp(gen_name, "walker") == 0);
+  const bool is_toggle = (strcmp(gen_name, "toggleoutfrominput") == 0);
+  const bool is_stall = (strcmp(gen_name, "stall") == 0);
+  const bool node_scoped = kindEntry->nodeScoped;
 
   ParsedGeneratorParams p;
   char* args = strtok_r(nullptr, "", &saveptr);
   if (args != nullptr) {
-    // Parser still keys on fastwalker/slowwalker/toggle/stall names.
-    const char* parse_as = gen_name;
-    if (strcmp(gen_name, "walker") == 0) parse_as = "fastwalker";
-    p = parseGeneratorParams(args, parse_as);
+    p = parseGeneratorParams(args, gen_name);
     if (p.error_code) {
       Serial.print("{\"event\":\"error\",\"error\":\"");
       Serial.print(p.error_code);
@@ -457,13 +464,12 @@ bool handleGeneratorControl(char* cmd) {
   }
 
   if (is_walker) {
-    bool invert = is_fast ? true : false;
-    if (is_slow) invert = false;
-    // bare "walker" defaults to non-inverted unless invert set later
-    if (strcmp(gen_name, "walker") == 0) invert = false;
-
-    uint8_t byteIdx = is_fast ? 3 : (is_slow ? 5 : 3);
-    uint32_t period = is_fast ? 250 : (is_slow ? 1000 : 250);
+    // period/byte/invert are independent knobs with no named presets;
+    // an omitted key falls back to these defaults.
+    bool invert = false;
+    uint8_t byteIdx = 3;
+    uint32_t period = 250;
+    if (p.has_invert) invert = p.invert;
     if (p.has_byte) byteIdx = p.byte_idx;
     if (p.has_period) period = p.period_ms;
 
@@ -478,13 +484,11 @@ bool handleGeneratorControl(char* cmd) {
         for (size_t i = 0; i < kMaxWalkers; ++i) {
           if (!walkerLive[i]) continue;
           if (walkers[i].config().nodeUA != target_ua) continue;
-          if (is_fast && !walkers[i].config().inverted) continue;
-          if (is_slow && walkers[i].config().inverted) continue;
           walkers[i].setEnabled(false);
           walkerLive[i] = false;
         }
       }
-      emitGeneratorEvent("disable", report_name, true, target_ua);
+      emitGeneratorEvent("disable", "walker", true, target_ua);
       return true;
     }
 
@@ -510,7 +514,7 @@ bool handleGeneratorControl(char* cmd) {
       lazyBegin();
       walkers[idx].setEnabled(true);
     }
-    emitGeneratorEvent(action, report_name, true, target_ua);
+    emitGeneratorEvent(action, "walker", true, target_ua);
     return true;
   }
 
@@ -571,68 +575,16 @@ bool handleGeneratorControl(char* cmd) {
   return true;
 }
 
-void emitGeneratorsStatus(void* /*context*/, char* buffer,
-                          size_t remaining_capacity) {
-  // Report first enabled inverted walker as "fastwalker", first non-inverted
-  // as "slowwalker", first toggle as toggleoutfrominput.
-  const BitWalkerService* fast = nullptr;
-  const BitWalkerService* slow = nullptr;
-  const InputToggleService* tog = nullptr;
-  uint8_t fastUa = 0, slowUa = 0, togUa = 0;
-  for (size_t i = 0; i < kMaxWalkers; ++i) {
-    if (!walkerLive[i] || !walkers[i].enabled()) continue;
-    if (walkers[i].config().inverted && !fast) {
-      fast = &walkers[i];
-      fastUa = walkers[i].config().nodeUA;
-    } else if (!walkers[i].config().inverted && !slow) {
-      slow = &walkers[i];
-      slowUa = walkers[i].config().nodeUA;
-    }
-  }
-  for (size_t i = 0; i < kMaxToggles; ++i) {
-    if (!toggleLive[i] || !toggles[i].enabled()) continue;
-    tog = &toggles[i];
-    togUa = toggles[i].config().inNodeUA;
-    break;
-  }
-
-  BitWalkerConfig z{};
-  const BitWalkerConfig& fc = fast ? fast->config() : z;
-  const BitWalkerConfig& sc = slow ? slow->config() : z;
-  const char* loopMode = "toggle";
-  uint16_t inBit = 0, outBit = 0;
-  if (tog) {
-    const InputToggleConfig& c = tog->config();
-    inBit = static_cast<uint16_t>(c.inByte) * 8u + c.inBit;
-    outBit = static_cast<uint16_t>(c.outByte) * 8u + c.outBit;
-    loopMode = (c.mode == InputToggleMode::kLevelFollow) ? "write_read"
-                                                         : "toggle";
-  }
-  const StallConfig& stc = stallService.config();
-
-  snprintf(
-      buffer, remaining_capacity,
-      ",\"generators\":{"
-      "\"fastwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,"
-      "\"enabled_count\":%u},"
-      "\"slowwalker\":{\"ua\":%u,\"enabled\":%s,\"period_ms\":%lu,\"byte\":%u,"
-      "\"enabled_count\":%u},"
-      "\"toggleoutfrominput\":{\"ua\":%u,\"enabled\":%s,\"in\":%u,\"out\":%u,"
-      "\"mode\":\"%s\",\"enabled_count\":%u},"
-      "\"stall\":{\"enabled\":%s,\"ms\":%lu,\"period_ms\":%lu,\"mode\":\"%s\"}"
-      "}",
-      static_cast<unsigned>(fastUa), fast ? "true" : "false",
-      (unsigned long)fc.periodMs, fc.byte,
-      static_cast<unsigned>(countEnabledWalkers(true)),
-      static_cast<unsigned>(slowUa), slow ? "true" : "false",
-      (unsigned long)sc.periodMs, sc.byte,
-      static_cast<unsigned>(countEnabledWalkers(false)),
-      static_cast<unsigned>(togUa), tog ? "true" : "false",
-      inBit, outBit, loopMode,
-      static_cast<unsigned>(countEnabledToggles()),
-      stallService.enabled() ? "true" : "false",
-      (unsigned long)stc.stallMs, (unsigned long)stc.periodMs,
-      stc.mode == StallMode::kYield ? "yield" : "busy");
+// One `event:"generator"` CDC line per enabled service instance
+// (TracerShell::StatusItemWriter contract): index i maps directly to
+// the orchestrator's service slot i. Each line is independently sized,
+// so N enabled walkers means N small lines -- never one shared buffer
+// that has to guess a worst-case size for an unbounded service count.
+size_t writeGeneratorItem(void* /*context*/, int index, char* buffer,
+                          size_t cap) {
+  CMRInet::app::Service* service = g_orchestrator.serviceAt(index);
+  if (service == nullptr) return 0;
+  return service->writeStatus(buffer, cap);
 }
 
 void drawHostStatus() {
@@ -760,7 +712,7 @@ void setup() {
   engine.bind(host, transport, kImage, kVersion,
               &CMRInet::testbed::writeCdcLineCb, &cdc);
   host.onTrace(ourOnTrace, nullptr);
-  engine.setStatusExtender(emitGeneratorsStatus, nullptr);
+  engine.setStatusExtender(writeGeneratorItem, g_orchestrator.count(), nullptr);
 
   engine.setNow(millis());
   char bootMs[16];

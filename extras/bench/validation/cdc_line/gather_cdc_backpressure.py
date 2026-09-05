@@ -12,14 +12,14 @@ Why not `run <secs>`
 --------------------
 The sketch's ourOnTrace routes packets to the RAM ring while a run is
 active, NOT to the CDC stream. So this script does NOT send `run`: with
-fastwalker enabled and no run active, every poll's I/T/P/R trace line
+walker enabled and no run active, every poll's I/T/P/R trace line
 flows through writeCdcLine to CDC, which is the path under test.
 
 Method
 ------
   1. Open the Host CDC port (DTR/RTS asserted so CdcConsole::open() is
      true and writes proceed) and validate boot identity.
-  2. Enable fastwalker on UA30 to maximise trace density.
+  2. Enable walker on UA30 to maximise trace density.
   3. For --secs, drain the CDC stream SLOWLY (at most --chunk bytes per
      --sleep-ms) so the ring fills: body writes are dropped while
      terminators must still land within their reserved 50 ms slice.
@@ -257,9 +257,15 @@ def main() -> int:
     parser.add_argument("--tail-secs", type=float, default=10.0,
                         help="Max fast-drain window after quit to catch `final`")
     parser.add_argument("--ua", type=int, default=30,
-                        help="Node UA to drive with fastwalker")
+                        help="Node UA to drive with walker")
     parser.add_argument("--walker-period-ms", type=int, default=120,
-                        help="Fastwalker period (shorter = dirtier image)")
+                        help="Walker period (shorter = dirtier image)")
+    parser.add_argument("--walker-byte", type=int, default=3,
+                        help="Output byte the walker drives")
+    parser.add_argument("--walker-invert", type=int, default=1,
+                        choices=(0, 1),
+                        help="Walker polarity: 0 = active-high, 1 = active-low "
+                             "(default 1: maximum trace density)")
     parser.add_argument("--min-truncated", type=int, default=20,
                         help="Vacuity floor: truncated-but-terminated chunks")
     parser.add_argument("--min-seq", type=int, default=100,
@@ -288,13 +294,16 @@ def main() -> int:
             print("ERROR: boot validation failed", file=sys.stderr)
             return 1
 
-        print("Enabling fastwalker to drive trace density on CDC...")
+        print("Enabling walker to drive trace density on CDC...")
         _tracer_client.send_generator_command(
-            ser, "configure", "fastwalker", ua=args.ua,
-            extra_args=f"period {args.walker_period_ms}",
+            ser, "configure", "walker", ua=args.ua,
+            extra_args=(
+                f"period {args.walker_period_ms} byte {args.walker_byte} "
+                f"invert {args.walker_invert}"
+            ),
         )
         _tracer_client.send_generator_command(
-            ser, "enable", "fastwalker", ua=args.ua,
+            ser, "enable", "walker", ua=args.ua,
         )
         _tracer_client.flush_lines(ser)
 
@@ -336,6 +345,8 @@ def main() -> int:
             "tail_secs": args.tail_secs,
             "ua": args.ua,
             "walker_period_ms": args.walker_period_ms,
+            "walker_byte": args.walker_byte,
+            "walker_invert": args.walker_invert,
             "verdict": verdict,
             "stats": stats,
             "reasons": reasons,

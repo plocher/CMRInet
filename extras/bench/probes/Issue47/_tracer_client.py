@@ -64,6 +64,12 @@ DEFAULT_PHANTOM_UA = 31
 DEFAULT_NODE_ADDRESSES = (DEFAULT_REAL_UA, DEFAULT_PHANTOM_UA)
 DEFAULT_LOOPBACK_BYTE = 2
 DEFAULT_LOOPBACK_BIT = 1
+# Walker defaults: no speed presets -- walk speed carries no diagnostic
+# meaning now that #47 is fixed; any period in the 250-1000ms band gives
+# a visually identifiable pattern on the bench LEDs.
+DEFAULT_WALKER_PERIOD_MS = 500
+DEFAULT_WALKER_BYTE = 3
+DEFAULT_WALKER_INVERT = 0
 
 
 def _write_command(ser, cmd: bytes, delay_s: float = 0.1) -> None:
@@ -161,8 +167,7 @@ def quiesce_traffic_preserving_ring(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
                                     line_sink: Optional[Callable[[str], None]] = None,
                                     raw_line_sink: Optional[Callable[[bytes], None]] = None) -> bool:
     for ua in node_addresses:
-        send_generator_command(ser, "disable", "fastwalker", ua=ua)
-        send_generator_command(ser, "disable", "slowwalker", ua=ua)
+        send_generator_command(ser, "disable", "walker", ua=ua)
         send_generator_command(ser, "disable", "toggleoutfrominput", ua=ua)
     for ua in node_addresses:
         _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
@@ -212,8 +217,7 @@ def shutdown_and_verify_quiet(ser, node_addresses=DEFAULT_NODE_ADDRESSES,
     print("Host quiesced.")
 
     for ua in node_addresses:
-        send_generator_command(ser, "disable", "fastwalker", ua=ua)
-        send_generator_command(ser, "disable", "slowwalker", ua=ua)
+        send_generator_command(ser, "disable", "walker", ua=ua)
         send_generator_command(ser, "disable", "toggleoutfrominput", ua=ua)
     for ua in node_addresses:
         _write_command(ser, f"node disable {ua}\n".encode("utf-8"))
@@ -257,15 +261,19 @@ def reboot_and_reconnect(port, timeout=10.0):
 def read_host_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
     """Read the host-scope status bundle from the tracer shell.
 
-    Bare `status` emits two or three short JSON lines:
-      event=status      host counters + degraded ledger + identity
-      event=roster      live node table
-      event=generators  optional StatusExtender payload
+    Bare `status` emits:
+      event=status     host counters + degraded ledger + identity
+      event=roster     live node table
+      event=generator  zero or more lines, one per enabled generator
+                        service instance (walker/toggle/stall)
 
-    Older firmware emitted one monolithic line with all three. This
-    reader accepts either shape: a single status line with an embedded
-    roster still works, and a split bundle is merged into one dict so
-    analyzers keep a stable status_snapshot contract.
+    The generator lines are a diagnostic tail of unknown length (one per
+    currently-enabled service), so this reader does not wait on them:
+    it returns as soon as status+roster are both seen. Any "generator"
+    lines still on the wire are harmless -- later reads that only match
+    on "status"/"roster"/a specific UA simply skip past them. Older
+    firmware emitted one monolithic line with status+roster combined;
+    that shape still works here too.
     """
     try:
         ser.reset_input_buffer()
@@ -275,7 +283,6 @@ def read_host_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
     deadline = time.time() + timeout_s
     status_doc: Optional[dict] = None
     roster_doc: Optional[dict] = None
-    generators_doc: Optional[dict] = None
 
     while time.time() < deadline:
         line = ser.readline().decode("utf-8", errors="replace").strip()
@@ -290,24 +297,15 @@ def read_host_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
         # "ua". Host-scope status has no top-level ua (only roster entries do).
         if event == "status" and "ua" not in doc:
             status_doc = doc
-            # Legacy single-line shape already carries roster/generators.
-            if isinstance(doc.get("roster"), list) or "generators" in doc:
+            # Legacy single-line shape already carries the roster.
+            if isinstance(doc.get("roster"), list):
                 return doc
         elif event == "roster":
             roster_doc = doc
-        elif event == "generators":
-            generators_doc = doc
         if status_doc is not None and roster_doc is not None:
-            # Generators is optional and arrives third. Hold the pair until
-            # it shows up or a short tail of the deadline elapses, so a
-            # healthy extender is not raced out of the merge.
-            if generators_doc is None and (time.time() + 0.4) < deadline:
-                continue
             merged = dict(status_doc)
             if "roster" in roster_doc:
                 merged["roster"] = roster_doc["roster"]
-            if generators_doc is not None and "generators" in generators_doc:
-                merged["generators"] = generators_doc["generators"]
             return merged
     # Prefer a partial status line (ledger/identity) over nothing: the
     # degraded-lane analyzer can still score grants/denials without a
@@ -316,8 +314,6 @@ def read_host_status_snapshot(ser, timeout_s: float = 8.0) -> Optional[dict]:
         merged = dict(status_doc)
         if "roster" in roster_doc:
             merged["roster"] = roster_doc["roster"]
-        if generators_doc is not None and "generators" in generators_doc:
-            merged["generators"] = generators_doc["generators"]
         return merged
     return status_doc
 
@@ -415,7 +411,10 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
               capture_sniffers: bool = False,
               sniffer_tx_port: Optional[str] = None,
               sniffer_rx_port: Optional[str] = None,
-              phantom_ua: int = DEFAULT_PHANTOM_UA):
+              phantom_ua: int = DEFAULT_PHANTOM_UA,
+              walker_period_ms: int = DEFAULT_WALKER_PERIOD_MS,
+              walker_byte: int = DEFAULT_WALKER_BYTE,
+              walker_invert: int = DEFAULT_WALKER_INVERT):
     print(f"\n--- Running combo: stall={s}ms period={p}ms mode={mode} ---")
     log_file = out_dir / f"{tag}.log"
     host_raw_file = out_dir / f"packets.{tag}.Host.raw"
@@ -480,6 +479,9 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
             period_ms=p,
             mode=mode,
             traffic=traffic,
+            walker_period_ms=walker_period_ms,
+            walker_byte=walker_byte,
+            walker_invert=walker_invert,
             secs=secs,
         )
 
@@ -494,14 +496,13 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
         # Traffic
         dstring = ""
         dstringsep = "t:"
-        if "fast" in traffic:
-            ser.write(b"enable fastwalker UA 30\n")
-            dstring += f"{dstringsep}f"
-            dstringsep = ", "
-            time.sleep(0.1)
-        if "slow" in traffic:
-            ser.write(b"enable slowwalker UA 30\n")
-            dstring += f"{dstringsep}s"
+        if "walker" in traffic:
+            cmd = (
+                f"enable walker UA 30 period {walker_period_ms} "
+                f"byte {walker_byte} invert {walker_invert}\n"
+            )
+            ser.write(cmd.encode("utf-8"))
+            dstring += f"{dstringsep}w"
             dstringsep = ", "
             time.sleep(0.1)
         if "loopback" in traffic:
@@ -608,6 +609,10 @@ def run_combo(ser, s, p, mode, traffic, secs, out_dir, tag,
             f.write(f"# period_ms: {p}\n")
             f.write(f"# mode: {mode}\n")
             f.write(f"# traffic: {traffic}\n")
+            f.write(
+                f"# walker: period_ms={walker_period_ms} "
+                f"byte={walker_byte} invert={walker_invert}\n"
+            )
             f.write(f"# secs: {secs}\n")
             f.write(f"# timestamp: {datetime.datetime.now().isoformat()}\n")
             for line in dump_lines:

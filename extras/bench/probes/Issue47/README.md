@@ -49,7 +49,7 @@ The `gather_stall_sweep.py` script sweeps the grid (stall duration × stall peri
 ### Rerun performed
    - Flashed updated firmware.
    -  Ran:
-       -   gather_single_cycle.py --stall 9 --period 150 --mode yield --traffic "fast slow loopback" --secs 60 --tag s9_p150_yield_bothua_diag
+       -   gather_single_cycle.py --stall 9 --period 150 --mode yield --traffic "walker loopback" --secs 60 --tag s9_p150_yield_bothua_diag
    -   Artifacts:
        -   data/results_single_cycle/s9_p150_yield_bothua_diag.log
        -  data/results_single_cycle/packets.s9_p150_yield_bothua_diag.Host.raw
@@ -126,7 +126,7 @@ Change made
 Verification run
 •  Rebuilt and flashed TracerHost.
 •  Ran your specified command:
-◦  gather_single_cycle.py --stall 9 --period 150 --mode yield --traffic "fast slow loopback" --secs 60 --tag s9_p150_yield_fix_fallback
+◦  gather_single_cycle.py --stall 9 --period 150 --mode yield --traffic "walker loopback" --secs 60 --tag s9_p150_yield_fix_fallback
 
 Result
 •  Before fix: FAIL_CYCLING

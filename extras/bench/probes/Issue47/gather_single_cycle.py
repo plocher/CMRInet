@@ -15,7 +15,13 @@ def main() -> int:
     parser.add_argument("--stall", type=int, default=1)
     parser.add_argument("--period", type=int, default=550)
     parser.add_argument("--mode", choices=["yield", "busy"], default="yield")
-    parser.add_argument("--traffic", default="fast slow loopback")
+    parser.add_argument("--traffic", default="walker loopback")
+    parser.add_argument("--walker-period-ms", type=int, default=500,
+                        help="Walker step period in ms (250-1000 reads well on bench LEDs)")
+    parser.add_argument("--walker-byte", type=int, default=3,
+                        help="Output byte index the walker drives")
+    parser.add_argument("--walker-invert", type=int, default=0, choices=[0, 1],
+                        help="0=active-high walk, 1=active-low walk")
     parser.add_argument("--tag", default="single_cycle")
     parser.add_argument("--real-ua", type=int, default=30)
     parser.add_argument("--real-in", type=int, default=7)
@@ -39,6 +45,8 @@ def main() -> int:
     print(f"    period  : {p} ms")
     print(f"    mode    : {mode}")
     print(f"    traffic : {traffic}")
+    print(f"    walker  : period={args.walker_period_ms}ms "
+          f"byte={args.walker_byte} invert={args.walker_invert}")
     print(f"    secs    : {args.secs}")
     print(
         f"    topology: real ua{args.real_ua} ({args.real_in}/{args.real_out}) "
@@ -69,7 +77,10 @@ def main() -> int:
     try:
         res = _tracer_client.run_combo(
             ser, s, p, mode, traffic, args.secs, out_dir, tag,
-            capture_sniffers=True, phantom_ua=args.phantom_ua
+            capture_sniffers=True, phantom_ua=args.phantom_ua,
+            walker_period_ms=args.walker_period_ms,
+            walker_byte=args.walker_byte,
+            walker_invert=args.walker_invert,
         )
         print(f"  -> {res.verdict} max_gap={res.max_gap}")
         _gap_deltas.print_result_text(res)
@@ -80,12 +91,10 @@ def main() -> int:
         _tracer_client.flush_lines(ser)
         print("Host quiesced.")
         
-        # Disable all traffic generators
-        ser.write(b"disable fastwalker\n")
+        # Disable all traffic generators (node-scoped needs UA).
+        ser.write(f"disable walker UA {args.real_ua}\n".encode("utf-8"))
         time.sleep(0.1)
-        ser.write(b"disable slowwalker\n")
-        time.sleep(0.1)
-        ser.write(b"disable toggleoutfrominput\n")
+        ser.write(f"disable toggleoutfrominput UA {args.real_ua}\n".encode("utf-8"))
         time.sleep(0.1)
         ser.write(f"node disable {args.real_ua}\n".encode("utf-8"))
         time.sleep(0.1)
