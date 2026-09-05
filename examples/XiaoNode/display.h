@@ -101,5 +101,5 @@ class NodeDisplay {
   uint8_t anim_ = 0;       // status-line spinner frame
 
   const char* name_ = "";
-  char spinner_[5] = "-\|/";
+  char spinner_[5] = "-\\|/";
 };
