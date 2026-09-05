@@ -51,28 +51,18 @@
 #include "transport/serial.h"        // SerialCMRITransport
 #include "transport/serialESP32.h"   // ESP32 hardware transmit-drain port
 
-// ---- OLED (optional)
+// ---- OLED (optional). SimpleDisplay mirrors TracerHost's TracerDisplay
+// shape (examples/TracerHost/display.h): one class owning its own OLED
+// state instead of loose globals.
 #define USE_OLED 1
 
 #if USE_OLED
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include "SimpleHostMetrics.h"
-#include "Ssd1306SegmentedFlush.h"
-
-constexpr int      kScreenW       = 128;
-constexpr int      kScreenH       = 64;
-constexpr int      kScreenAddr    = 0x3C;
-constexpr uint32_t kDisplayRefreshMs = 120;
-constexpr uint32_t kErrorWindowMs     = 10000;
-
-Adafruit_SSD1306 display(kScreenW, kScreenH, &Wire, -1);
-CMRInet::examples::Ssd1306SegmentedFlush oledFlush(display, kScreenAddr);
+#include "display.h"
+SimpleDisplay hostDisplay;
 #endif
 
 // ---- Services
-#include "src/Services.h"
+#include "Services.h"
 
 // ---- Sketch specific details
 constexpr int kCMRI_BAUD = 28800;
@@ -114,67 +104,6 @@ HostNodeSpec nodeTable[] = {
 };
 constexpr size_t kNodeCount = sizeof(nodeTable) / sizeof(nodeTable[0]);
 
-#if USE_OLED
-bool oledOk = false;
-uint32_t lastDisplayMs = 0;
-
-extern CMRInet::CMRIHost host;
-
-CMRInet::examples::HostStatusPanel panel;
-
-/// Draw the host status panel.
-void drawHostStatus() {
-  if (!oledOk) return;
-  const uint32_t now = millis();
-
-  const auto& hs = host.statistics();
-  uint32_t nodeErrs[kNodeCount] = {};
-  uint32_t nodeMisses[kNodeCount] = {};
-  for (size_t i = 0; i < kNodeCount; ++i) {
-    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
-    if (n != nullptr) {
-      nodeErrs[i] = n->statistics().errors;
-      nodeMisses[i] = n->statistics().noReplies;
-    }
-  }
-  panel.sample(now, hs.pollsSent, hs.repliesAccepted,
-               nodeErrs, nodeMisses, kNodeCount);
-
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-
-  display.setTextSize(2);
-  display.setCursor(0, 0);
-  display.print(F("HOST"));
-  display.setTextSize(1);
-  char header[16];
-  panel.headerText(header, sizeof(header), now);
-  display.setCursor(60, 4);
-  display.print(header);
-
-  char totals[24];
-  panel.hostTotalsText(totals, sizeof(totals), now);
-  display.setCursor(0, 18);
-  display.print(totals);
-
-  for (size_t i = 0; i < kNodeCount; ++i) {
-    CMRInet::RemoteNodeHandle* n = host.node(nodeTable[i].UA);
-    const bool online =
-        (n != nullptr) && (n->state() == CMRInet::RemoteNodeState::kOnline);
-    const char* tag =
-        (n != nullptr) ? CMRInet::remoteNodeStateTag(n->state()) : "---";
-    const uint32_t latMs = (n != nullptr)
-        ? n->statistics().lastTurnaroundMs : 0;
-    char row[28];
-    panel.nodeRowText(row, sizeof(row), now, i,
-                      nodeTable[i].UA, online, tag, latMs);
-    display.setCursor(0, 30 + static_cast<int>(i) * 12);
-    display.print(row);
-  }
-  oledFlush.markDirty();
-}
-#endif
-
 // ---- Host wiring (static/stack; the library never allocates) --------------
 CMRInet::Esp32SerialPort port(Serial1, D3, kCMRI_BAUD, RX /* D7 */, TX /* D6 */);
 CMRInet::SerialCMRITransport transport(port);
@@ -183,29 +112,26 @@ CMRInet::CMRIHost host(transport);
 /// On rejection, print what the remote node sent for diagnosis.
 void onHostEvent(void* /*context*/, const CMRInet::CMRIHostEvent& event) {
   if (event.type != CMRInet::CMRIHostEventType::kReplyRejected) return;
-  Serial.print(F("REJECT: "));
-  Serial.print(CMRInet::replyRejectReasonString(event.rejectReason));
+  const char* reason = CMRInet::replyRejectReasonString(event.rejectReason);
   switch (event.rejectReason) {
     case CMRInet::ReplyRejectReason::kGeometryMismatch:
-      Serial.print(F(" — expected "));
-      Serial.print(event.node->inputLength());
-      Serial.print(F(" input bytes, got "));
-      Serial.print(event.replyLength);
+      Serial.printf("REJECT: %s -- expected %u input bytes, got %u\n", reason,
+                    static_cast<unsigned>(event.node->inputLength()),
+                    static_cast<unsigned>(event.replyLength));
       break;
     case CMRInet::ReplyRejectReason::kWireUAMismatch:
-      Serial.print(F(" — polled UA "));
-      Serial.print(event.node->wireUA());
-      Serial.print(F(", got UA "));
-      Serial.print(event.replyWireUA);
+      Serial.printf("REJECT: %s -- polled UA %u, got UA %u\n", reason,
+                    static_cast<unsigned>(event.node->wireUA()),
+                    static_cast<unsigned>(event.replyWireUA));
       break;
     case CMRInet::ReplyRejectReason::kMtMismatch:
-      Serial.print(F(" — expected MT 'R', got MT 0x"));
-      Serial.print(event.replyMt, HEX);
+      Serial.printf("REJECT: %s -- expected MT 'R', got MT 0x%02X\n", reason,
+                    static_cast<unsigned>(event.replyMt));
       break;
     default:
+      Serial.printf("REJECT: %s\n", reason);
       break;
   }
-  Serial.println();
 }
 
 void setup() {
@@ -214,37 +140,36 @@ void setup() {
   transport.setInterByteTimeoutMs(50);
 
 #if USE_OLED
-  Wire.begin(D4 /* SDA */, D5 /* SCL */);
-  oledOk = display.begin(SSD1306_SWITCHCAPVCC, kScreenAddr);
-  if (oledOk) {
-    display.dim(true);
-  }
+  hostDisplay.begin();  // degrades to headless on failure
 #endif
 
   host.onEvent(onHostEvent);
 
-  CMRInet::CMRIHost::ConfigStatus configStatus =
-      CMRInet::CMRIHost::ConfigStatus::kOk;
+  bool anyRejected = false;
+#if USE_OLED
+  char errorMsg[8*32];   errorMsg[0] = '\0';
+  char nodeErrorMsg[32]; nodeErrorMsg[0] = '\0';
+#endif
+
   for (size_t i = 0; i < kNodeCount; ++i) {
-    const CMRInet::CMRIHost::ConfigStatus st =
-        host.addRemoteNode(nodeTable[i]);
-    if (st != CMRInet::CMRIHost::ConfigStatus::kOk &&
-        configStatus == CMRInet::CMRIHost::ConfigStatus::kOk) {
-      configStatus = st;
+    const CMRInet::CMRIHost::ConfigStatus st = host.addRemoteNode(nodeTable[i]);
+    if (st != CMRInet::CMRIHost::ConfigStatus::kOk) {
+      anyRejected = true;
+      Serial.printf("ERROR: node[%u] UA=%u: %s\n", static_cast<unsigned>(i),
+                    static_cast<unsigned>(nodeTable[i].UA),
+                    CMRInet::configStatusString(st));
+#if USE_OLED
+      snprintf(nodeErrorMsg, sizeof(nodeErrorMsg), "\nUA %u: %s",
+               static_cast<unsigned>(nodeTable[i].UA),
+               CMRInet::configStatusString(st));
+      strncat(errorMsg, nodeErrorMsg, sizeof(errorMsg) - strlen(errorMsg) - 1);
+#endif
     }
   }
-  if (configStatus != CMRInet::CMRIHost::ConfigStatus::kOk) {
+  if (anyRejected) {
+    Serial.println(F("FATAL: one or more addRemoteNode calls had errors at setup(); halting."));
 #if USE_OLED
-    if (oledOk) {
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(0, 0);
-      display.print(F("addRemoteNode\nrejected:\n"));
-      display.print(CMRInet::configStatusString(configStatus));
-      oledFlush.markDirty();
-      oledFlush.serviceUntilIdle();
-    }
+    hostDisplay.showFatalError("Setup FAILED", errorMsg);
 #endif
     for (;;) {
       delay(1000);
@@ -252,16 +177,12 @@ void setup() {
   }
   host.begin();
 
-  // Services
-  BitWalkerConfig bitwalker1 = {  30,  3,   0,   8,   1000, true, };
-  g_orchestrator.add(new BitWalkerService(bitwalker1));
-  BitWalkerConfig bitwalker2 = {  30,  4,   3,   3,   500,  true, };
-  g_orchestrator.add(new BitWalkerService(bitwalker2));
-  BitWalkerConfig bitwalker3 = {  31,  2,   0,   8,   250,  false, };
-  g_orchestrator.add(new BitWalkerService(bitwalker3));
-
-  InputToggleConfig inputToggle = {31, 2,   0,  30,  6,  1, false, };
-  g_orchestrator.add(new InputToggleService(inputToggle));
+  g_orchestrator.add(new BitWalkerService({.nodeUA = 30, .byte = 3, .startBit = 0, .bitsCount = 8, .periodMs = 1000, .inverted = true }));
+  g_orchestrator.add(new BitWalkerService({.nodeUA = 30, .byte = 4, .startBit = 3, .bitsCount = 3, .periodMs = 500,  .inverted = true }));
+  g_orchestrator.add(new BitWalkerService({.nodeUA = 31, .byte = 2, .startBit = 0, .bitsCount = 8, .periodMs = 250,  .inverted = false}));
+  g_orchestrator.add(new InputToggleService({.inNodeUA  = 31, .inByte  = 2, .inBit  = 0,
+                                              .outNodeUA = 30, .outByte = 6, .outBit = 1,
+                                              .mode = InputToggleMode::kLevelFollow}));
 }
 
 void loop() {
@@ -270,10 +191,7 @@ void loop() {
   g_orchestrator.tick(host, now);
 
 #if USE_OLED
-  if (now - lastDisplayMs >= kDisplayRefreshMs || lastDisplayMs == 0) {
-    drawHostStatus();
-    lastDisplayMs = now;
-  }
-  oledFlush.service();
+  hostDisplay.render(host, nodeTable, kNodeCount, now);
+  hostDisplay.service();
 #endif
 }
