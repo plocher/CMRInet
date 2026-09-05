@@ -17,6 +17,10 @@ High-level changes, newest first.
   carry `type`. In-repo bench/probe callers updated.
 
 ### Changed
+- `toSemanticUA` / `toWireUA` live in `CMRIPacket.h` beside `isLegalWireUA`.
+  TracerHost no longer keeps local copies.
+- TracerHost walkers use one `BitWalkerService` pool under `Orchestrator`.
+  `fastwalker`/`slowwalker` are C&C aliases with different defaults.
 - TracerHost generators use shared `HostServices` (BitWalker, InputToggle,
   Stall). Node-scoped C&C needs `UA`. Soft default UA is gone. Bench
   scripts pass `UA 30`.
