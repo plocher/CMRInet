@@ -720,7 +720,7 @@ if (strcmp(verb, "status") == 0) {
         legal ? "true" : "false");
     if (legal) {
       written = appendf_(written, "%u",
-          static_cast<unsigned>(packet.wireUA - kWireUAOffset));
+          static_cast<unsigned>(toSemanticUA(packet.wireUA)));
     } else {
       written = appendf_(written, "null");
     }

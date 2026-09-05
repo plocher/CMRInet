@@ -720,6 +720,17 @@ static void test_decode_null_while_hunting_does_nothing(void) {
 
 // ------------------------------------------------------------------ main
 
+
+void test_wire_ua_helpers(void) {
+  TEST_ASSERT_TRUE(CMRInet::isLegalWireUA(65));
+  TEST_ASSERT_TRUE(CMRInet::isLegalWireUA(192));
+  TEST_ASSERT_FALSE(CMRInet::isLegalWireUA(64));
+  TEST_ASSERT_FALSE(CMRInet::isLegalWireUA(193));
+  TEST_ASSERT_EQUAL_UINT8(0, CMRInet::toSemanticUA(65));
+  TEST_ASSERT_EQUAL_UINT8(30, CMRInet::toSemanticUA(95));
+  TEST_ASSERT_EQUAL_UINT8(95, CMRInet::toWireUA(30));
+}
+
 int main(void) {
   UNITY_BEGIN();
   // encoder
@@ -766,5 +777,6 @@ int main(void) {
   // Phase B (issue #104): trailing NULL safety through the decoder
   RUN_TEST(test_decode_null_after_frame_is_dropped_cleanly);
   RUN_TEST(test_decode_null_while_hunting_does_nothing);
+  RUN_TEST(test_wire_ua_helpers);
   return UNITY_END();
 }

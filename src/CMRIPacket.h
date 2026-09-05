@@ -42,6 +42,17 @@ inline bool isLegalWireUA(uint8_t wireUA) {
          wireUA <= static_cast<uint8_t>(kWireUAOffset + 127u);
 }
 
+/// Semantic UA (0..127) from a legal wire-UA byte.
+/// PRECONDITION: isLegalWireUA(wireUA).
+inline uint8_t toSemanticUA(uint8_t wireUA) {
+  return static_cast<uint8_t>(wireUA - kWireUAOffset);
+}
+
+/// Wire-UA byte from a semantic UA (0..127).
+inline uint8_t toWireUA(uint8_t ua) {
+  return static_cast<uint8_t>(ua + kWireUAOffset);
+}
+
 // Message types the polled strategy speaks.
 // VALIDATION: Interop v1.1 E9: the codec never validates MT — fielded
 // networks carry JMRI extensions (E/Q/D/W/A/C/M) and the codec must not
