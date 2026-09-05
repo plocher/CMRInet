@@ -224,7 +224,7 @@ class InputToggleService : public Service {
 
   void tick(CMRIHost& host, uint32_t /*now*/) override {
     if (!enabled_) return;
-    RemoteNodeHandle* inNode = host.node(config_.inNodeUA);
+    RemoteNodeHandle* inNode  = host.node(config_.inNodeUA);
     RemoteNodeHandle* outNode = host.node(config_.outNodeUA);
     if (inNode == nullptr || outNode == nullptr ||
         inNode->state() != RemoteNodeState::kOnline ||
@@ -233,10 +233,20 @@ class InputToggleService : public Service {
     }
     const bool inVal = inNode->inputBit(config_.inByte, config_.inBit);
     if (!haveLast_) {
+      // Seed tick: establish a baseline, never treat it as an edge. We have
+      // no prior sample to compare against, so a pin that is already HIGH
+      // here is not (yet) a rising edge -- it takes a full LOW->HIGH cycle
+      // after this point before the first toggle fires. This also means
+      // every setEnabled(true) re-arms the detector from scratch.
       lastIn_ = inVal;
       haveLast_ = true;
       if (config_.mode == InputToggleMode::kLevelFollow) {
         outNode->setOutputBit(config_.outByte, config_.outBit, inVal);
+      } else {
+        // Force a known starting output state (LOW) so "toggle" has a
+        // well-defined meaning regardless of whatever the output bit held
+        // from a prior enable/disable cycle or node default.
+        outNode->setOutputBit(config_.outByte, config_.outBit, false);
       }
       return;
     }
