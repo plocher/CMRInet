@@ -1,0 +1,16 @@
+- 0.1.1: hardware transmit-drain truth (Esp32SerialPort) — the ~2 s C6 runtime stall made the estimate-based drain drop TXEN mid-ETX.
+- 0.1.2: 50 ms inter-byte tolerance — the same stall splits intact replies at the tick level; the rate-derived timeout misread the gap.
+- 0.1.3 (#27): Esp32SerialPort promoted from this sketch into the library (src/); the library's inter-byte abort doctrine now ships a tolerant default (Design D13). This image keeps its explicit 50 ms override, so runtime behavior is unchanged from 0.1.2.
+- 0.2.0: I/T bench slice (map issue #30) — onTrace packet telemetry and output verbs (setbit/writeoutputs/forcetx) so T is exercisable from C&C.
+- 0.3.0: Add generator-control verbs (enable, disable, configure) for walker, toggleoutfrominput, and stall stimulus (#55).
+- 0.4.0: Capture-mode ring + run/dump/reset + runtime node topology (#47).
+- 0.7.0 (#86): every node verb names its UA, and the node verbs moved into the shared shell so both tracer images speak one vocabulary. New `node delete` / `node geometry`; `node add` works after begin() now that D5 unlocked the table. `status` reports host scope plus a roster; `status <UA>` reports one node. Telemetry carries the UA and never the wire byte, so the roster is keyed the way its readers key it (#90).
+- 0.8.0 (#90): ring-dump PKT lines now emit semantic UA (0..127), never the CMRI wire byte. This keeps decoded telemetry uniform: framing and escaping are already removed when these lines are produced.
+- 0.8.1 (#90): semantic-UA dump path now validates wire UA at the call site and marks invalid records explicitly instead of silently normalizing them into plausible semantic addresses.
+- 0.9.0 (#87): D17 telemetry. Host lines carry the degraded-lane ledger (grants, per-gate denials, clamp bypasses); node lines carry the derived service class, the conformance breaker's position, and the conformance run. Two new events, breaker_open and breaker_close. An analyzer keying on 0.8.x will not find these fields, which is why the minor bumps rather than the patch.
+- 0.9.1: bare `status` is a multi-line bundle (status/roster/generators) so CDC no longer truncates the host ledger under backpressure.
+- 0.9.2: Esp32SerialPort ctor is (stream, txen, baud, rx, tx) — the leftover UART_NUM_1 arg made baud=D3 and pins=28800, which the ESP UART driver rejected as "baud rate unachievable" and left polls=0.
+- 0.10.0 (#112): dense full-T Host belief timeline — live miss/reject/ xchg/unsolicited during `run`, gate/kind on those lines, transport snapshot on miss/reject, T body `fp` on packet traces.
+- 0.10.1 (#112): echo-cancel discards only own-frame wire length; post-deassert RX (incl. prompt R after ETX, interop 2.3.15 / E10) is not treated as endless self-echo. One-char drain hold unchanged.
+- 0.10.2 (#112): accept matching R while P is still kAwaitSendComplete; Esp32 hardwareTransmitDrain ends TXEN without estimate veto.
+- 0.12.0: TracerHost.ino split into capture.h/.cpp, display.h/.cpp, and generators.h/.cpp -- the router/glue that's left is a small fraction of the file this used to be. No wire/verb/telemetry behavior change.
