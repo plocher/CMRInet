@@ -91,8 +91,8 @@ void setup() {
   CMRInet::CMRINodeConfig cfg;
   cfg.ua          = 30;
   cfg.nodeType    = 'C';
-  cfg.inputBytes  = 1;
-  cfg.outputBytes = 1;
+  cfg.inputBytes  = 2; // JMRI's 'C type' node uses 2 bytes for onboard I/O
+  cfg.outputBytes = 2; 
   node.config(cfg);
   node.onPack(packInputs);
   node.onUnpack(unpackOutputs);
