@@ -9,9 +9,10 @@ Example sketches:
 
 Bench test instruments:
  - `TracerHost` and `TracerNode` are instrumented with a USB serial remote command and control protocol, allowing test harness orchestration, monitoring and validation of an attached hardware test bench.
- - `XiaoSniffer` is a cpNode-Xiao set up as a RS422/RS485 to USB serial data logger.  We use two of these on our test bench to capture both the Host commands and the Node's responses, and validate the correct operation and timing of the protocol flow.
+ - `XiaoSniffer` is a cpNode-Xiao set up as a passive RS422/RS485 to USB serial data logger.  We use two of these on our test bench to capture both the Host commands and the Node's responses, and validate the correct operation and timing of the protocol flow.
 
 Native simulators/emulators:
+TBD - need to list the fixtures that run on the development computer
 
 ## Architecture at a glance
 
@@ -20,25 +21,29 @@ This library implements the NMRA CMRInet specification, both Host and Node persp
 2. the serial protocol layer - I, T, P and R packets passed between Hosts and Nodes
 3. the physical layer - the framing and makeup of the packets, wiring, bit representations and timing.
 
-After setting up its environment (Host or Node, identity, provisioning...), a sketch deals with the data layer, content freshness and health, leaving the library to handle the mechanics of packet reception and transmission, errro handling, etc.
+After setting up its environment (Host or Node, identity, provisioning...), a sketch deals with the data layer, content freshness and health, leaving the library to handle the mechanics of packet reception and transmission, error handling, etc.
 
 ### As a Host, the core API is 
   - `RemoteNodeHandle`s, one per node, provide access to output writes, input reads, input age, health state, and statistics. 
   - `RemoteNodeState` is strategy-neutral and derived from (liveness, image state, conformance): `UNINITIALIZED`, `ONLINE`, `STALE`, `OFFLINE`, `MISCONFIGURED`,
 `DEGRADED`.
+  - `addRemoteNode()`
   - `host.node(UA)->setOutputBit(byte, bit, value)`
   - `value = host.node(UA)->inputBit(byte, bit)`
+  - `begin()`, `tick()`
 ### As a Node, the core API is
-  - `packInputs(CMRInet::IOBuffer& ib)` and `ib.setBit(byte, bit, value)`
-  - `unpackOutputs(CMRInet::IOBuffer& ob)` and `ob.getBit(byte, bit)`
+  - `CMRINodeConfig (ua, nodeType, inputBytes, outputBytes)`
+  - `onPack() callback` and `ib.setBit(byte, bit, value)`
+  - `OnUnpack() callback` and `ob.getBit(byte, bit)`
+  - `begin()`, `tick()`
 
 ## Getting started
 
  - `examples/SimpleHost/SimpleHost.ino`. The tutorial example for the Host side. The sketch polls a predefined list of remote nodes, shows each node's health on an OLED, and runs a set of simplistic behavior services: blinking outputs and an output that follows an input.
 
- - `examples/SinpleNode/SimpleNode.ino`. The tutorial example for the Node side and uses a cpNode-Xiao board with a button and LED.
+ - `examples/SimpleNode/SimpleNode.ino`. The tutorial example for the Node side and uses a cpNode-Xiao board with a button and LED.
 
- - `examples/SinpleNode/XiaoNode.ino`. A full featured CMRInet node for use with a cpNode-Xiao board and cpNode-IOX I2C boards.  It supports the onboard OLED, displaying the I/O state of all the expanders, as well as WiFi OTA for firmware updates.
+ - `examples/SimpleNode/XiaoNode.ino`. A full featured CMRInet node for use with a cpNode-Xiao board and cpNode-IOX I2C boards.  It supports the onboard OLED, displaying the I/O state of all the expanders, as well as WiFi OTA for firmware updates.
 
 ### You will need:
 
@@ -48,14 +53,41 @@ After setting up its environment (Host or Node, identity, provisioning...), a sk
 - The Adafruit SSD1306 and GFX libraries for the OLED. Undefine `USE_OLED` to compile without this display.
 - The ArduinoOTA library if WiFi OTA support is desired.
 
+### cpNoce-Xiao details:
+Seeed XIAO ESP32-C6 + MAX3491 RS422 bus transceiver + SSD1306 OLED wired as follows:
+```
+   D7 - RX      CMRI 4-wire RS485 receive
+   D6 - TX      CMRI 4-wire RS485 transmit
+   D5 - SCL     I2C (unused in this example)
+   D4 - SDA     I2C (unused in this example)
+   D3 - TXEN    RS422/485 transmit enable
+   D2 -         pushbutton input (active-low)
+   na - GPIO15  LED_BUILTIN (not brought out to a pin)
+```
+
 ### Bus Wiring:
- - Host's T± to the Node's R± and 
- - Host's R± to the Node's T±. This is a crossover cable.
- - All the Nodes on the bus are wired in parallel, their T± pairs and R± pairs daisy chained to each other, plus to plus, minus to minus.
+ - 4-wire RS422 topology
+   - Host's T± to the Node's R± and 
+   - Host's R± to the Node's T±. This is a crossover cable.
+   - All the Nodes on the bus are wired with a straight through cable, their T± pairs and R± pairs daisy chained to each other, plus to plus, minus to minus.
+ - 2-wire RS485 topology
+   - All the devices (Host and Node) are wired straight thru with their A+/B- pair daisy chained to each other, plus to plus, minus to minus.
+ - Hybrid 4-wire in a 2-wire topology
+   - Many boards in the CMRI ecosystem have a 5-pin bus connector, with a T± pair, an R± pair and Shield.
+   - You can use them with a 2-wire device by
+     - connecting all the 4-wire devices as "4-wire" above.
+     - looping back the T± pair to the R± pair at one end of the 4-wire segment
+     - connecting the A+/B- RS485 pair to either the T± pair OR the R± pair (since the previous step connected them, there is no difference between them anymore)
+     - This ONLY WORKS WITH CMRI Host implementations and RS485 interface hardware that supports TX Enable.  CMRInet and the cpNode-Xiao fully support TXEN in a full duplex RS485 environment.
 
 ### Host side
  - Edit the `nodeTable` of `HostNodeSpec` rows to match your layout:
 ```
+// Each IO expander is 16 bits, divided into two 8-bit ports.  Each port can
+// be configured as either an IN or OUT byte; the total number of bytes so allocated
+// is captured below in `CpnodeInit(IN bytes, OUT bytes)`.  This count is in 
+// addition to the 2 bytes of onboard IN and 2 bytes of onboard OUT that the "C" type
+// cpNode specification.
 HostNodeSpec nodeTable[] = {
   // UA 30: CPNODE — 2 onboard + 0 IOX bytes in and out
   hostNodeCpnode(30, CpnodeInit(2, 2)),
@@ -68,7 +100,7 @@ HostNodeSpec nodeTable[] = {
  - Upload and open a serial monitor.
 
 ### Node side
- - SimpleHost: Set the Node's UA and Edit the onPack and onUnpack routines:
+ - SimpleNode: Set the Node's UA and Edit the onPack and onUnpack routines:
 ```
   cfg.ua          = 30;
 ```
@@ -91,10 +123,9 @@ void unpackOutputs(CMRInet::IOBuffer& ob) {
   digitalWrite(LED_BUILTIN, ob.getBit(0, 1) ? HIGH : LOW);
 }
 ```
- - XiaoHost: Edit the IOX table.  The onPack/onUnpack routines know about this table and automatically handle everything.
+ - XiaoNode: Edit the IOX table.  The onPack/onUnpack routines know about this table and automatically handle everything.
 ```
 IOX_Config expanders[] =
-#if NODE_ID == 30
 {
     { 0x20, IN,     OUT    },
     { 0x21, IN,     OUT    },
@@ -104,7 +135,7 @@ IOX_Config expanders[] =
     { 0x25, UNUSED, UNUSED },
     { 0x26, UNUSED, UNUSED },
     { 0x27, UNUSED, UNUSED },
-};
+}
 ```
 
 ## Documents
@@ -121,7 +152,7 @@ IOX_Config expanders[] =
 
 ## Repository layout
 
-- `src/` — the serial packet codec, the polled Host and Node engines,   handle types, and the shared testbed shell.
+- `src/` — the serial packet codec, the polled Host and Node engines, handle types, and the shared testbed shell.
 - `src/transport/` — transport implementations: `mock.h` (test double),
   `serial.h` (RS-485), `serialESP32.h` (hardware TX-drain port), and
   the byte-port seam (`serialPort.h`, `serialStream.h`). The umbrella
@@ -138,7 +169,7 @@ IOX_Config expanders[] =
   expanders via pack/unpack).
 - `examples/XiaoSniffer` — a passive RS-485 bus tap (Xiao ESP32-C6,
   OLED, JSON-lines frame log).
-- `tests/` — desktop unit tests (290 tests, no Arduino dependencies).
+- `tests/` — desktop unit tests
 - `extras/bench/` — RS-485 bus probe scripts and single-use bench
   jigs (`XiaoBenchCal`, `XiaoBenchEcho`, `XiaoBenchEchoCancel`).
 - `extras/desktop/` — the desktop tracer binary.

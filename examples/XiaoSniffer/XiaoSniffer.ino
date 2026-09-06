@@ -1,11 +1,12 @@
-// XiaoSniffer.ino — passive RS-485 bus sniffer for the CMRInet testbed.
+// XiaoSniffer.ino — passive RS-422/RS-485 data logger for the CMRInet testbed.
 //
-// A spare cpNode-Xiao board wires its R± to one bus pair (T± parked) and
-// logs every decoded CMRInet frame over USB CDC as a JSON line. It never
-// drives the bus: no Host, no transport, no TXEN assertion — just the
-// standalone CMRIFrameDecoder fed byte-at-a-time from Serial1. The
-// decoder is the exact code the Host transport uses, so a frame this
-// sniffer decodes is a frame the wire actually carried.
+// A spare cpNode-Xiao board wires its R± to one bus pair and logs every
+// decoded CMRInet frame over USB CDC as a JSON line. It never
+// drives the TX T±bus.
+// As a CMRI protocol datalogger, it uses the CMRInet CMRIFrameDecoder 
+// fed byte-at-a-time from Serial1. The decoder is the exact code the Host
+// and Node transport uses, so a frame this logger decodes is a frame the
+// wire actually carried.
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491), same pinout as a
 // node or Host — the inversion is entirely in what you wire:
@@ -15,16 +16,25 @@
 //   D4 - SDA  I2C for the OLED status panel (optional)
 //   D5 - SCL  I2C for the OLED status panel (optional)
 //
-// One board = one pair. The MAX3491 receiver hears only the pair wired
-// to R±, so a complete poll+reply conversation needs two sniffers (one
-// per pair) or a 2-wire bench. This sniffer logs whichever pair it is
-// on; it is direction-blind and reports "observed" — the MT still
-// identifies the frame (I/T/P are Host->Node, R is Node->Host).
+// 4-wire (2-pair) RS-422:
+// Only theHost transmits on one pair, the Nodes only transmit when asked
+// on the other.  This means that TWO data loggers will be needed to "see"
+// both sides of the protocol conversation
+//  - one will report INIT/TRANSMIT/POLL frames (Host->Node)
+//  - the other will report REPLY frames (Every Node->Host)
+// This sniffer logs whichever pair it is wired to, and since
+// the JSON lines include the wireUA and MT, the observer can derive 
+// which side of the conversation it is seeing. 
+//
+// 2-wire (1-pair) RS-485:
+// The Host and Nodes share the same pair, so a single sniffer sees both
+// sides of the conversation. The JSON lines include the wireUA and MT, so
+// the observer can watch the entire conversation.
 //
 // OLED (SSD1306 128x64 @ 0x3C): a big "SNIFFER" header confirms at a
-// glance the new firmware is actually running (not a stale node image),
-// with a live packet count and per-MT tally. Degrades gracefully: if
-// the display is absent, the JSON CDC stream still works.
+// glance the new firmware is actually running, with a live packet count
+// and per-MT tally. Degrades gracefully: if the display is absent, 
+// the JSON CDC data logging stream still works.
 //
 // Output (one JSON line each over USB CDC):
 //   epoch  {"seq":N,"ts":0,"event":"epoch","image":"xiao_sniffer",...}
@@ -33,13 +43,8 @@
 // ts is integer ms since boot (the epoch anchor), matching the tracer
 // engine's relative-clock convention so a runner can diff the two
 // streams without special-casing the clock. stats lines emit every
-// SNIFFER_STATS_INTERVAL_MS so decoder health (restarts, aborts,
-// slowGaps) is visible even on a quiet bus.
-//
-// VALIDATION: map issue #30 — the passive tap witness for I/T/P frames
-// (acceptance #2/#3). Born with the I/T bench slice; a reusable testbed
-// asset the software notes point at for the adversarial and
-// host-conformance use cases too.
+// 5 seconds (SNIFFER_STATS_INTERVAL_MS) so decoder health (restarts,
+// aborts, slowGaps) is visible even on a quiet bus.
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -51,23 +56,24 @@
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
 
-#ifndef SNIFFER_BAUD
-#define SNIFFER_BAUD 28800
+#ifndef CMRI_BAUD
+#define CMRI_BAUD 28800
 #endif
-#ifndef SNIFFER_INTER_BYTE_TIMEOUT_MS
+#ifndef CMRI_INTER_BYTE_TIMEOUT_MS
 // Tolerate the ESP32-C6 ~2 s runtime stall (arrival gaps != wire gaps);
 // the decoder measures gaps at tick granularity. Same doctrine as the
 // Xiao Host tracer (#21 finding 2).
-#define SNIFFER_INTER_BYTE_TIMEOUT_MS 50
+#define CMRI_INTER_BYTE_TIMEOUT_MS 50
 #endif
+
 #ifndef SNIFFER_STATS_INTERVAL_MS
 #define SNIFFER_STATS_INTERVAL_MS 5000
 #endif
 #ifndef SNIFFER_DISPLAY_INTERVAL_MS
 #define SNIFFER_DISPLAY_INTERVAL_MS 150
 #endif
-#ifndef SNIFFER_USE_OLED
-#define SNIFFER_USE_OLED 1  // set to 0 to compile out the display
+#ifndef  USE_OLED
+#define  USE_OLED 1  // set to 0 to compile out the display
 #endif
 
 namespace {
@@ -92,7 +98,7 @@ struct Tally {
 };
 Tally tally;
 
-#if SNIFFER_USE_OLED
+#if  USE_OLED
 constexpr int kScreenW = 128;
 constexpr int kScreenH = 64;
 constexpr int kScreenAddr = 0x3C;
@@ -192,7 +198,7 @@ void emitStats() {
   emitLine();
 }
 
-#if SNIFFER_USE_OLED
+#if  USE_OLED
 void drawSplash() {
   if (!oledOk) return;
   display.clearDisplay();
@@ -291,7 +297,7 @@ void setup() {
   Serial.setRxBufferSize(1024);
 #endif
 
-#if SNIFFER_USE_OLED
+#if  USE_OLED
   // SSD1306 at 0x3C on the board I2C (D4/D5). Degrade gracefully: a
   // missing display does not stop the JSON stream.
   if (display.begin(SSD1306_SWITCHCAPVCC, kScreenAddr)) {
@@ -307,11 +313,11 @@ void setup() {
   // Observe the CMRI wire: 28800 8N2 on the MAX3491 UART RX pin. The TX
   // pin is configured only because Serial1.begin wants one; with TXEN
   // low the driver output is high-Z and D6 drives nothing on the bus.
-  Serial1.begin(SNIFFER_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
+  Serial1.begin(CMRI_BAUD, SERIAL_8N2, RX /* D7 */, TX /* D6 */);
   pinMode(kTxenPin, OUTPUT);
   digitalWrite(kTxenPin, LOW);  // driver off — listen-only
 
-  decoder.setInterByteTimeoutMs(SNIFFER_INTER_BYTE_TIMEOUT_MS);
+  decoder.setInterByteTimeoutMs(CMRI_INTER_BYTE_TIMEOUT_MS);
   // Rate-derived slow-gap observability for 28800 8N2 (~385 us/char):
   // lo = 1 ms (streaming floor), hi = 2 ms (suspicion floor). The raised
   // 50 ms abort keeps the slow band open so a genuine stall is annotated
@@ -343,7 +349,7 @@ void loop() {
     lastStatsMs = now;
   }
 
-#if SNIFFER_USE_OLED
+#if  USE_OLED
   if (now - lastDisplayMs >= SNIFFER_DISPLAY_INTERVAL_MS) {
     drawStatus();
     lastDisplayMs = now;
