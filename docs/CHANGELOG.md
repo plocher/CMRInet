@@ -14,6 +14,14 @@ High-level changes, newest first.
   MIT licensed (`LICENSE`).
 
 ### Added
+- AVR mini-profile geometry defaults (`src/CMRIProfile.h`): AVR parts
+  with less than 4 KB SRAM (328P, 168, 32U4) compile with
+  `CMRINET_MAX_BODY` 24, `CMRINET_IO_BUFFER_MAX_BYTES` 20, node image
+  ceilings 20, and the stock serial queue depth 4. The values derive
+  from the cpNode-family ceilings, and the body ceiling keeps every
+  escaped wire frame inside the 64-byte AVR TX buffer (one gapless
+  write). Stock defaults need about 2.7 KB of static RAM and do not
+  fit the 2 KB SRAM of an ATmega328P (DESIGN.md D8).
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
   Pure I-body builders with golden tests; evidence pack in
