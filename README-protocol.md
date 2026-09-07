@@ -1,10 +1,10 @@
+# [CMRInet](README.md)
+| [Installation](README-install.md) | [Hardware Details](README-hardware.md)  | [Tutorials](README-tutorials.md)  | [API Documentation](README-api.md) | **CMRInet Protocol Details**  | [References](README-references.md) |
+
 # The CMRInet protocol in brief
 
-Part of the [CMRInet](README.md) guide set. This page is a digest. The
-normative wire rules live in the interop profile
-([docs/cmrinet-interop-profile-and-errata.md](docs/cmrinet-interop-profile-and-errata.md));
-the library architecture lives in
-[docs/DESIGN.md](docs/DESIGN.md).
+The protocol rules are detailed in the [interoperability profile](docs/cmrinet-interop-profile-and-errata.md).
+The library architecture is found in the [DESIGN](docs/DESIGN.md) document.
 
 CMRInet (NMRA LCS-9.10.1) moves I/O over a serial bus. A Host
 transmits outputs to Nodes and polls them for inputs; each Node

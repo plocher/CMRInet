@@ -20,7 +20,7 @@ Code links to design and spec clauses with greppable `// VALIDATION:` comments t
 
 ## Project orientation
 
-- User guides: `README.md` is the front door; the `README-*` guides beside it (install, hardware, tutorials, api, protocol, references) are the new-user task tier.
+- User guides: `README.md` is the introduction to the project; the `README-*` guides beside it (install, hardware, tutorials, api, protocol, references) give more in depth detail.
 - Architecture and decisions: `docs/DESIGN.md` (D1-D17; read before any implementation work).
 - Wire behavior: `docs/cmrinet-interop-profile-and-errata.md` (normative for this library).
 - Evidence base: `docs/research/` (seven adversarial reviews + `comparison.md` synthesis).

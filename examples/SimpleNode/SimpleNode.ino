@@ -88,12 +88,10 @@ void setup() {
   digitalWrite(LED_BUILTIN, LOW);
   pinMode(D2, INPUT_PULLUP);
 
-  CMRInet::CMRINodeConfig cfg;
-  cfg.ua          = 30;
-  cfg.nodeType    = 'C';
-  cfg.inputBytes  = 2; // JMRI's 'C type' node uses 2 bytes for onboard I/O
-  cfg.outputBytes = 2; 
-  node.config(cfg);
+  node.config({.ua          = 30,   // must match the Host's polled address
+               .nodeType    = 'C',  // JMRI's 'C type' node
+               .inputBytes  = 2,    // 2 bytes for onboard I/O
+               .outputBytes = 2});
   node.onPack(packInputs);
   node.onUnpack(unpackOutputs);
   node.begin();  // → transport.begin() → port.begin() → Serial1.begin()
