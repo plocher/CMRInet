@@ -1,6 +1,7 @@
-# Installing CMRInet
+# [CMRInet](README.md)
+| **Installation** | [Hardware Details](README-hardware.md)  | [Tutorials](README-tutorials.md)  | [API Documentation](README-api.md) |  [CMRInet Protocol Details](README-protocol.md)  | [References](README-references.md) |
 
-Part of the [CMRInet](README.md) guide set.
+# Installing CMRInet
 
 ## You will need
 

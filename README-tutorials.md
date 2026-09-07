@@ -1,20 +1,32 @@
-# Running the examples
+# [CMRInet](README.md)
+| [Installation](README-install.md) | [Hardware Details](README-hardware.md)  | **Tutorials**  | [API Documentation](README-api.md) |  [CMRInet Protocol Details](README-protocol.md)  | [References](README-references.md) |
 
-Part of the [CMRInet](README.md) guide set. Install first:
-[README-install.md](README-install.md). The full sketch inventory
-lives at the [front door](README.md#examples); this guide walks three
-of the six.
+# Tutorials
 
-Start with the Node. One cpNode-Xiao board plus a JMRI Host on your
-computer is enough.
+The `examples/` folder holds useful sketches; they appear under Arduino IDE's **File > Examples > CMRInet** menu:
+
+- `SimpleNode` — the front-door tutorial: the onboard LED and pushbutton, with JMRI as the Host.
+- `SimpleHost` — polls a table of remote Nodes, shows each Node's health on an OLED, and runs demo behavior services.
+- `XiaoNode` — the production Node: up to 8 MCP23017 I2C expanders, OLED I/O grid, WiFi OTA firmware updates.
+- `TracerHost` and `TracerNode` — the instrumented bench pair used by this repo's validation tooling.
+- `XiaoSniffer` — RS-422/RS-485 bus sniffer / data logger.
+
+## Installation
+
+Clone the CMRInet library into your Arduino libraries folder, install the Arduino IDE, the ESP32/Xiao platform files and the Adafruit SSD1306 and GFX libraries.  Full details are in the [Installation Guide](README-install.md).
 
 ## Run SimpleNode
+Requirements: One cpNode-Xiao board plus a JMRI Host on your
+computer is enough.
 
 1. Open `examples/SimpleNode/SimpleNode.ino`.
 2. Set the Unit Address. It must match the address that the Host
    polls.
 ```
-  cfg.ua          = 30;
+  node.config({.ua          = 30,   // must match the Host's polled address
+               .nodeType    = 'C',  // JMRI's 'C type' node
+               .inputBytes  = 2,    // 2 bytes for onboard I/O
+               .outputBytes = 2});
 ```
 3. Edit the two callbacks. `packInputs()` runs when the Host polls
    this Node. `unpackOutputs()` runs when the Node receives a

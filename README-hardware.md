@@ -1,6 +1,16 @@
-# CMRInet hardware
+# [CMRInet](README.md)
+| [Installation](README-install.md) | **Hardware Details** | [Tutorials](README-tutorials.md)  | [API Documentation](README-api.md) |  [CMRInet Protocol Details](README-protocol.md)  | [References](README-references.md) |
 
-Part of the [CMRInet](README.md) guide set.
+# Hardware Details
+
+## Dependencies
+
+- Boards: the Espressif `esp32` board package. While these examples were tested on the
+  Seeed Studio XIAO ESP32C6, the cpNode-Xiao board can be used with any of the Seeed Xiao line of processors. The engines and codec are architecture- and even Arduino-independent: the desktop unit tests compile and run them natively.
+- Optional, for the OLED examples: the `Adafruit SSD1306` and
+  `Adafruit GFX` libraries.
+- `ArduinoOTA` ships with the ESP32 core; you do not install it.
+- For Nodes: MCP23017-based 16-bit I2C expanders (cpNode-IOX, MRCS IOX-16/-32, or generic breakout boards), up to 8 per Node.
 
 ## cpNode-Xiao
 
