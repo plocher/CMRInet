@@ -49,6 +49,10 @@
 
 // Received packets waiting for receivePacket(). The polled strategy
 // consumes replies one exchange at a time, so a small queue suffices.
+// The AVR mini profile (CMRIProfile.h, reached via CMRIPacket.h)
+// keeps this depth: queue slots are CMRIPackets, and the mini
+// CMRINET_MAX_BODY shrinks each slot, so queue depth costs less
+// than buffer size.
 #ifndef CMRINET_SERIAL_RX_QUEUE
 #define CMRINET_SERIAL_RX_QUEUE 4
 #endif

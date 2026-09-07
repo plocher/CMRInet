@@ -365,6 +365,23 @@ ceilings (max nodes, max body bytes) are compile-time knobs, so a
 within its limits. AVR-as-Host is supported within limits, not a
 design driver.
 
+The mini profile ships as a default, not a build flag. `CMRIProfile.h`
+selects it on AVR parts with less than 4 KB of SRAM (`RAMEND <
+0x1000`: 328P, 168, 32U4). Platform macros are identical in every
+translation unit of one build, so profile-conditional defaults stay
+layout-consistent between the library sources and a sketch with no
+build-flag ceremony. Mini values derive from the cpNode-family
+ceilings: `CMRINET_MAX_BODY` 24 (IO image 18 bytes max, largest init
+body 20 for USIC), `CMRINET_IO_BUFFER_MAX_BYTES` and both node image
+ceilings 20, `CMRINET_SERIAL_RX_QUEUE` at the stock 4 because slots
+shrink with the packet. The body ceiling 24 keeps every escaped wire
+frame (54 bytes max) inside the 64-byte AVR TX buffer, so every send
+is one gapless write (rule 2.1.5). Knobs remain overridable, and an
+override must be build-global (for example `--build-property
+"compiler.cpp.extra_flags=-DCMRINET_MAX_BODY=32"`). A sketch-local
+define changes only the sketch translation unit and breaks layout
+consistency.
+
 ### D9. Policy defaults come from the research
 Defaults match what JMRI-tuned Nodes expect, per-node overridable:
 250 ms reply-gate timeout; more than 5 consecutive misses triggers
