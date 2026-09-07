@@ -6,7 +6,6 @@
 // buildInitPacket_().
 //
 // NDP map (fielded SPS/JMRI): C=CPNODE, M=SMINI, N=USIC, X=SUSIC.
-// VALIDATION: docs/research/node-type-init-bodies.md
 // VALIDATION: Interop v1.1 E3 (CPNODE body), E4 (dH/dL units)
 
 #pragma once

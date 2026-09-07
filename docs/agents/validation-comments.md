@@ -35,9 +35,17 @@ obligation.
   (`v1.1`), or the `Version:` line of the project document, at the time
   the tag was written or last verified.
 - `<clause>` — a spec page or section (`p.5 §D.a`), an erratum or rule
-  id (`E1`, `2.2.6`), a decision id (`D4`), or a quoted section name.
+  id (`E1`, `2.2.6`), a decision id (`D4`), an ADR id (`ADR-0005`), or a
+  quoted section name.
 - `<fact>` — one or two sentences that state the behavior. The comment
   must stand alone if the document moves or the clause is renumbered.
+
+A tag cites an identifier, never a file path. A path rots: a document
+that moves or is renamed silently breaks every tag that named it, and
+nothing reports the break. The identifier-to-file mapping lives here
+and nowhere else. `Spec` is `docs/lcs-9.10.1_cmrinet_v1.1.pdf`.
+`Interop` is `docs/cmrinet-interop-profile-and-errata.md`. `Design` is
+`docs/DESIGN.md`. `ADR-nnnn` is `docs/adr/nnnn-*.md`.
 
 Example:
 

@@ -508,7 +508,8 @@ class RemoteNodeHandle {
   // Typed INIT storage (Host-written). nodeType_ selects the I-body
   // builder; classic CT/NS live here; CPNODE opts live here. Geometry
   // image sizes remain in config_.
-  // VALIDATION: docs/research/node-type-init-bodies.md
+  // VALIDATION: Interop v1.2 E3: the CPNODE I body carries two option
+  // bytes and the NI/NO geometry, so the handle stores them per node.
   NodeType nodeType_ = NodeType::kCpnode;
   uint8_t initOpts1_ = 0;
   uint8_t initOpts2_ = 0;

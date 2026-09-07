@@ -21,8 +21,8 @@
 // CMRInet::testbed so the product namespace stays unambiguous and the
 // D1 naming-grammar guarantees keep applying to the product surface.
 //
-// Stream shape per docs/testbed-software-notes.md: cumulative counters
-// only, a monotonic seq on every line, and an explicit epoch marker.
+// Stream shape: cumulative counters only, a monotonic seq on every
+// line, and an explicit epoch marker.
 // `ts` is integer milliseconds since this stream's epoch line, in
 // every image alike, so scenario diffs never special-case the clock;
 // the epoch line itself carries the absolute anchor where one exists

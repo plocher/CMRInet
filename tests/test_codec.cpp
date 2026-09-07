@@ -1,10 +1,8 @@
 // test_codec.cpp — byte-vector tests for the CMRInet serial codec.
 //
-// The test plan is the anti-checklist in docs/research/comparison.md §3
-// plus the golden framing rules of the interop profile Part 2. Each test
-// that pins a profile rule carries a VALIDATION tag (see
-// docs/agents/validation-comments.md). The rest pin fielded defects from
-// the research.
+// The test plan is the cross-review anti-checklist plus the golden
+// framing rules of the interop profile Part 2. Each test that pins a
+// profile rule carries a VALIDATION tag. The rest pin fielded defects.
 //
 // Desktop-native: the codec has no Arduino dependencies, so these tests
 // compile the exact library sources with the host compiler.

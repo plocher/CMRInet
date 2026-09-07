@@ -8,9 +8,9 @@
 // silently freeze host TX on it.
 // VALIDATION: Interop v1.1 2.5.1: 8N2 default framing;
 // byteDurationMicros() reflects the configured stop bits.
-// (Also: docs/research/review-CMRI-Controller-host.md Finding 7 — the
-// classic Unix Host shipped with IXON enabled and could be frozen by
-// one input byte pattern. termios must be fully raw.)
+// VALIDATION: Interop v1.2 2.5.3: a POSIX desktop tool configures a
+// fully raw terminal, because a cooked port freezes Host transmit on a
+// single XOFF/0x13 data byte carried in an R body.
 
 #pragma once
 

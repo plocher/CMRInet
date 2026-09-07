@@ -4,7 +4,8 @@
 // Same include layout as SimpleHostMetrics.h.
 // Protocol engines do not include this file.
 //
-// VALIDATION: docs/adr/0005-orchestration-and-services.md
+// VALIDATION: ADR-0005: orchestration and services are a Host sketch
+// overlay, so the protocol engines never depend on them.
 
 #pragma once
 

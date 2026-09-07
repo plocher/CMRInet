@@ -39,8 +39,7 @@
 //   D4 - SDA I2C Data
 //   D5 - SCL I2C Clock
 //
-// Wiring per docs/testbed-physical-notes.md. On 2-wire, tie
-// R+ to T+ and R- to T- at the terminal block.
+// On 2-wire, tie R+ to T+ and R- to T- at the terminal block.
 
 #include <Arduino.h>
 
