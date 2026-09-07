@@ -1,7 +1,8 @@
 // test_serial_transport.cpp — tests for SerialCMRITransport: TXEN
-// discipline (assert, write, flush to full drain, deassert),
-// sendComplete semantics, codec integration on receive, inter-byte
-// timeout, and error accounting through transport stats.
+// discipline (assert, write, flush to full drain, deassert), the
+// TXEN-less auto-direction port variant, sendComplete semantics,
+// codec integration on receive, inter-byte timeout, and error
+// accounting through transport stats.
 //
 // The transport is driven against FakeSerialPort, a scriptable
 // byte-port double that records the exact order of TXEN transitions
@@ -123,6 +124,32 @@ class FakeSerialPort : public SerialPort {
   uint32_t byteMicros_ = 500;  // 2000 chars/s: easy math (6 bytes = 3 ms)
   uint32_t hardwareErrors_ = 0;
   int beganCount_ = 0;
+};
+
+/// FakeSerialPort variant with a no-op setTransmitEnable: models
+/// StreamSerialPort wired with kNoTxenPin — auto-direction hardware
+/// (the ProMini's 555 AutoRTS circuit) or a medium that is not
+/// RS-485. The line never moves; the transport's assert/deassert
+/// calls are counted so tests can assert its discipline is identical
+/// to a pinned-TXEN port.
+class NoTxenFakeSerialPort : public FakeSerialPort {
+ public:
+  void setTransmitEnable(bool enabled) override {
+    // Actuator no-op, mirroring the kNoTxenPin gate in
+    // serialStream.h: record the call, drive nothing.
+    if (enabled) {
+      ++assertCalls_;
+    } else {
+      ++deassertCalls_;
+    }
+  }
+
+  uint32_t assertCalls() const { return assertCalls_; }
+  uint32_t deassertCalls() const { return deassertCalls_; }
+
+ private:
+  uint32_t assertCalls_ = 0;
+  uint32_t deassertCalls_ = 0;
 };
 
 // ---------------------------------------------------------------- helpers
@@ -724,6 +751,124 @@ static void test_echo_cancel_feeds_early_reply_after_own_frame_budget(void) {
   TEST_ASSERT_EQUAL_HEX8('R', got.mt);
 }
 
+// ------------------------------------------------ TXEN-less (kNoTxenPin)
+
+// The ProMini branch runs StreamSerialPort with kNoTxenPin: a 555
+// AutoRTS circuit owns driver enable, so setTransmitEnable is a
+// no-op. The discipline lives in the transport, not in the pin:
+// call order, drain gating, and sendComplete() timing must match the
+// pinned-TXEN cases exactly; only the actuator differs.
+
+static void test_no_txen_send_and_drain_match_pinned_discipline(void) {
+  NoTxenFakeSerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();
+  TEST_ASSERT_EQUAL_UINT32(1, port.deassertCalls());  // begin releases
+  TEST_ASSERT_FALSE(port.txenAsserted());
+  t.tick(0);
+
+  const CMRIPacket poll = makePacket(5, 'P');
+  uint8_t expected[16];
+  const size_t n = encodeInto(poll, expected, sizeof(expected));
+  TEST_ASSERT_EQUAL_size_t(kPollFrameBytes, n);
+
+  TEST_ASSERT_TRUE(t.sendPacket(poll));
+  // Assert before the first byte; whole frame in one gapless write.
+  TEST_ASSERT_EQUAL_UINT32(1, port.assertCalls());
+  TEST_ASSERT_EQUAL_size_t(n, port.txCount());
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, port.txData(), n);
+  TEST_ASSERT_FALSE(t.sendComplete());  // accepted != on the wire
+  TEST_ASSERT_FALSE(port.txenAsserted());  // actuator moved nothing
+
+  // Drain gating identical to the pinned case: the estimate governs.
+  t.tick(kPollWireMs - 1);
+  TEST_ASSERT_FALSE(t.sendComplete());
+  t.tick(kPollWireMs);
+  TEST_ASSERT_TRUE(t.sendComplete());
+  // Deassert at once on drain: begin release + drain drop, nothing else.
+  TEST_ASSERT_EQUAL_UINT32(2, port.deassertCalls());
+  TEST_ASSERT_EQUAL_UINT32(1, t.stats().packetsSent);
+}
+
+static void test_no_txen_backpressure_holds_through_drain(void) {
+  NoTxenFakeSerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();
+  t.tick(0);
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+  TEST_ASSERT_FALSE(t.sendPacket(makePacket(6, 'P')));  // still draining
+  TEST_ASSERT_EQUAL_UINT32(1, t.stats().sendRejects);
+  t.tick(kPollWireMs);
+  TEST_ASSERT_TRUE(t.sendComplete());
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(6, 'P')));
+}
+
+// RX inside the drain window feeds the decoder: the window is
+// state-based (txState_), not pin-based, so a no-op TXEN changes
+// nothing. The bytes count as rxDuringTx and arm Auto exactly as on
+// a pinned port — the defect signal stays intact for a 2-wire
+// medium whose receive side re-enables early.
+static void test_no_txen_rx_in_drain_window_feeds_decoder(void) {
+  NoTxenFakeSerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();
+  t.tick(0);
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));  // now kDraining
+
+  const CMRIPacket reply = makePacket(6, 'R');
+  uint8_t wire[16];
+  const size_t n = encodeInto(reply, wire, sizeof(wire));
+  port.queueRx(wire, n);
+  t.tick(1);  // inside the drain window (estimate expires at kPollWireMs)
+
+  CMRIPacket got;
+  TEST_ASSERT_TRUE_MESSAGE(t.receivePacket(got),
+                           "drain-window RX must reach the decoder");
+  TEST_ASSERT_EQUAL_HEX8(reply.wireUA, got.wireUA);
+  TEST_ASSERT_EQUAL_HEX8('R', got.mt);
+  TEST_ASSERT_EQUAL_UINT32(n, t.rxDuringTx());
+
+  // The mid-window RX did not disturb drain timing.
+  t.tick(kPollWireMs);
+  TEST_ASSERT_TRUE(t.sendComplete());
+}
+
+// Quiet-bus physics (4-wire pairs, or auto-direction that deafens
+// the receiver while transmitting): no RX arrives during the TX
+// window, so Auto never arms and no discard budget exists to eat
+// the reply. The reply follows the drain (interop 2.3.15 / E10)
+// and decodes clean.
+static void test_no_txen_quiet_bus_never_arms_echo_auto(void) {
+  NoTxenFakeSerialPort port;
+  SerialCMRITransport t(port);
+  t.begin();  // default Auto
+  t.tick(0);
+  TEST_ASSERT_TRUE(t.sendPacket(makePacket(5, 'P')));
+
+  // Quiet bus through the whole TX window: nothing to arm on.
+  t.tick(1);
+  t.tick(2);
+  TEST_ASSERT_EQUAL_UINT32(0, t.rxDuringTx());
+
+  t.tick(kPollWireMs);  // drain completes, TXEN call dropped
+  TEST_ASSERT_TRUE(t.sendComplete());
+  TEST_ASSERT_EQUAL_UINT32(2, port.deassertCalls());
+
+  // The reply arrives after deassert and must decode: a disarmed
+  // Auto discards nothing.
+  const CMRIPacket reply = makePacket(5, 'R');
+  uint8_t wire[16];
+  const size_t n = encodeInto(reply, wire, sizeof(wire));
+  port.queueRx(wire, n);
+  t.tick(kPollWireMs + 1);
+
+  CMRIPacket got;
+  TEST_ASSERT_TRUE(t.receivePacket(got));
+  TEST_ASSERT_EQUAL_HEX8(reply.wireUA, got.wireUA);
+  TEST_ASSERT_EQUAL_UINT32(0, t.rxDuringTx());  // never armed
+  TEST_ASSERT_EQUAL_UINT32(1, t.decoderStatistics().framesDecoded);
+}
+
 // ------------------------------------------------------------------- main
 
 int main(void) {
@@ -756,5 +901,10 @@ int main(void) {
   RUN_TEST(test_echo_cancel_off_feeds_rx_while_writing);
   RUN_TEST(test_echo_cancel_auto_arms_on_first_rx_during_tx);
   RUN_TEST(test_echo_cancel_feeds_early_reply_after_own_frame_budget);
+  // TXEN-less port (kNoTxenPin, auto-direction hardware)
+  RUN_TEST(test_no_txen_send_and_drain_match_pinned_discipline);
+  RUN_TEST(test_no_txen_backpressure_holds_through_drain);
+  RUN_TEST(test_no_txen_rx_in_drain_window_feeds_decoder);
+  RUN_TEST(test_no_txen_quiet_bus_never_arms_echo_auto);
   return UNITY_END();
 }
