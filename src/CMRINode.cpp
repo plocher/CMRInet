@@ -93,13 +93,13 @@ void CMRINode::handlePoll_() {
       packHandlerNoCtx_(input_);
     }
   }
-  // ensure that the reply body is the smaller of the 
-  // handler-provided input and the configured output image
-  // max size.  This is a safety check to avoid sending
-  // more data than the host expects.
-  const size_t n = (input_.length() <= config_.outputBytes)
-                      ? input_.length()
-                      : config_.outputBytes;
+  // Reply-body cap (issue #118): the configured input geometry.
+  // input_.length() is already bounded by CMRINET_NODE_MAX_INPUT_BYTES,
+  // and setBody validates against kMaxBody. The former cap at
+  // config_.outputBytes silently truncated replies on nodes with
+  // NI > NO. SMINI escaped the bug by accident (its NI is smaller
+  // than its NO).
+  const size_t n = input_.length();
   reply_.clear();
   reply_.wireUA = wireUA();
   reply_.mt = MessageType::kReceiveData;

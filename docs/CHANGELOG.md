@@ -13,6 +13,12 @@ High-level changes, newest first.
   (mapping lives in `docs/agents/validation-comments.md`); library is
   MIT licensed (`LICENSE`).
 
+### Fixed
+- `CMRINode` no longer truncates the R reply body on nodes whose input
+  image exceeds their output image (NI > NO). The reply cap derives
+  from the input geometry, not from `outputBytes` (issue #118). SMINI
+  and other NI <= NO shapes are unaffected.
+
 ### Added
 - AVR mini-profile geometry defaults (`src/CMRIProfile.h`): AVR parts
   with less than 4 KB SRAM (328P, 168, 32U4) compile with
