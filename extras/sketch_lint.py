@@ -16,16 +16,19 @@ rotted to "??" unnoticed for exactly this reason.
 
 What it does
 ------------
-For each sketch it harvests the real cross-compiler command -- compiler,
-board defines, include paths -- via `arduino-cli compile
---only-compilation-database`, then recompiles the sketch's translation unit
-compile-only with warnings rebound to *our* code:
+For each sketch, under each of its FQBNs, it harvests the real
+cross-compiler commands -- compiler, board defines, include paths -- via
+`arduino-cli compile --only-compilation-database`, then recompiles every
+sketch-folder translation unit (the concatenated `.ino.cpp` plus each
+support `.cpp` such as `iox.cpp` / `display.cpp`) compile-only with
+warnings rebound to *our* code:
 
   * drop `-w` (the suppression) and the core's `-Werror=return-type`;
   * add `-Wall -Wextra -Werror -Wswitch`;
   * demote every third-party include dir to `-isystem` (esp32 core, tools
     libs, Wire/SPI, Adafruit_GFX/BusIO/SSD1306) so their header noise is
-    suppressed;
+    suppressed -- except under `arduino:avr` FQBNs, where the demotion
+    itself breaks the core (see fqbn_demotes_includes);
   * keep the two CMRInet include dirs on `-I` (`examples/<sketch>` and
     `src`) so our code stays gated;
   * keep all board `-D` defines verbatim -- notably
@@ -40,6 +43,11 @@ gate's real destination. The sketch TU is the preprocessed `.ino.cpp`, so
 the sketch's own code is the main translation unit -- not a system header --
 and its switches are checked.
 
+Per-sketch FQBNs live in SKETCH_FQBNS: ProMiniSMININode is dual-target
+(one sketch, two boards) and lints under both `esp32:esp32:XIAO_ESP32C6`
+and `arduino:avr:pro:cpu=16MHzatmega328`, so both arch branches are gated.
+Sketches not in the map lint under the default ESP32 FQBN.
+
 Usage
 -----
   extras/sketch_lint.py                # lint all sketches
@@ -49,7 +57,9 @@ Environment
 -----------
   ARDUINO_CLI   default `arduino-cli` (resolved on PATH)
   LIBS_DIR      default `~/Dropbox/Arduino/libraries`
-  FQBN          default `esp32:esp32:XIAO_ESP32C6`
+  FQBN          when set, overrides every FQBN including the per-sketch
+                map. Unset: each sketch uses its SKETCH_FQBNS entry or
+                the default `esp32:esp32:XIAO_ESP32C6`.
 
 Exit code is non-zero if any sketch fails the lint. Pure stdlib; no deps.
 """
@@ -77,10 +87,23 @@ DEFAULT_SKETCHES = (
     "XiaoSniffer",
     "TracerNode",
     "XiaoNode",
+    "ProMiniSMININode",
     "extras/bench/XiaoBenchCal",
     "extras/bench/XiaoBenchEcho",
     "extras/bench/XiaoBenchEchoCancel",
 )
+
+# Per-sketch FQBN map. A sketch listed here lints once under each of its
+# FQBNs; every other sketch lints under the default. ProMiniSMININode is
+# dual-target: one sketch, two boards (cpNode-Xiao ESP32-C6 and
+# cpNode-ProMini ATmega328P), so both arch branches are gated.
+DEFAULT_FQBN = "esp32:esp32:XIAO_ESP32C6"
+SKETCH_FQBNS = {
+    "ProMiniSMININode": (
+        "esp32:esp32:XIAO_ESP32C6",
+        "arduino:avr:pro:cpu=16MHzatmega328",
+    ),
+}
 
 # Third-party libraries the OLED sketches pull in. Passing them
 # unconditionally is harmless: arduino-cli only makes them available, and an
@@ -145,11 +168,27 @@ def is_ours(path: Path) -> bool:
         return False
 
 
-def rewrite_args(args: list[str]) -> list[str]:
+def is_under(path: Path, parent: Path) -> bool:
+    """True when `path` resolves to a location inside `parent`.
+
+    Used on the harvested TU paths, which live under the temporary build
+    dir (arduino-cli compiles the sketch from prepared copies, and on
+    macOS the tempdir `/var` prefix resolves to `/private/var`).
+    """
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def rewrite_args(args: list[str], demote: bool = True) -> list[str]:
     """Rewrite a harvested compile command into the lint command.
 
     The compiler (args[0]) is kept. Each `-I<path>` is kept on `-I` if it
-    is ours, else demoted to `-isystem <path>`. Warning flags are dropped
+    is ours, else -- when `demote` -- demoted to `-isystem <path>`. With
+    `demote` false every `-I` passes through verbatim (the AVR
+    exception; see fqbn_demotes_includes). Warning flags are dropped
     and replaced with LINT_WARNINGS. The `-o <file>` target becomes
     `/dev/null`. Everything else (defines, `-std=`, `-c`, `-Os`, `-f*`,
     `-m*`, ...) passes through verbatim.
@@ -182,7 +221,7 @@ def rewrite_args(args: list[str]) -> list[str]:
         if tok.startswith("-I") and len(tok) > 2:
             # `-Ipath` form.
             inc = Path(tok[2:])
-            if is_ours(inc):
+            if is_ours(inc) or not demote:
                 out.append(tok)
             else:
                 out.append("-isystem")
@@ -192,7 +231,7 @@ def rewrite_args(args: list[str]) -> list[str]:
         if tok == "-I":
             # `-I path` form (two tokens).
             inc = Path(rest[i + 1])
-            if is_ours(inc):
+            if is_ours(inc) or not demote:
                 out.append(tok)
                 out.append(rest[i + 1])
             else:
@@ -232,107 +271,172 @@ def resolve_sketch_ino(sketch: str) -> Path | None:
     return None
 
 
-def lint_sketch(sketch: str, cli: str, libs_dir: Path, fqbn: str) -> tuple[bool, str]:
-    """Lint one sketch. Returns (passed, detail)."""
+def fqbns_for(sketch_name: str, env_fqbn: str | None) -> tuple[str, ...]:
+    """The FQBNs to lint one sketch under.
+
+    `FQBN` in the environment overrides everything (all sketches, one
+    FQBN). Otherwise the per-sketch map decides, with the default ESP32
+    FQBN as the fallback.
+    """
+    if env_fqbn:
+        return (env_fqbn,)
+    return SKETCH_FQBNS.get(sketch_name, (DEFAULT_FQBN,))
+
+
+def fqbn_demotes_includes(fqbn: str) -> bool:
+    """True when the lint may demote third-party include dirs to -isystem.
+
+    The AVR core must stay on -I. avr-g++ 7.3.0-atmel3.6.1-arduino7
+    misparses the AVR core's C++ headers (Arduino.h, WString.h) when
+    they arrive via -isystem: every declaration takes C linkage, and
+    the core fails its own compile with "conflicting declaration of C
+    function" for atexit, random, makeWord, and the StringSumHelper
+    operator+ overloads (ArduinoCore-avr issue #475; any build system
+    passing the core on -isystem reproduces it). The demotion also
+    buys nothing on AVR: the core and its bundled library headers
+    compile warning-free under the gate's flags, so keeping them on
+    -I costs no third-party noise.
+    """
+    return not fqbn.startswith("arduino:avr")
+
+
+def lint_tu(entry: dict, demote: bool = True) -> tuple[bool, str]:
+    """Recompile one harvested TU under the gate's warning policy.
+
+    `demote` controls the third-party -isystem demotion (false for
+    AVR FQBNs; see fqbn_demotes_includes).
+    """
+    args = entry.get("arguments")
+    if not args:
+        # 'command' (string) form -- not produced by arduino-cli 1.5.1,
+        # but handle it defensively by shlex-splitting.
+        import shlex
+
+        cmd_str = entry.get("command", "")
+        args = shlex.split(cmd_str)
+    if not args:
+        return False, "TU entry has no arguments"
+
+    lint_args = rewrite_args(args, demote)
+    workdir = entry.get("directory", str(REPO))
+    try:
+        lint_proc = subprocess.run(
+            lint_args, capture_output=True, text=True, check=False, cwd=workdir
+        )
+    except FileNotFoundError:
+        return False, f"cross-compiler not found: {lint_args[0]}"
+
+    if lint_proc.returncode == 0:
+        return True, "ok"
+    # Surface the compiler's own diagnostics; strip trailing whitespace.
+    diag = (lint_proc.stderr + lint_proc.stdout).strip()
+    return False, diag
+
+
+def lint_sketch(
+    sketch: str, cli: str, libs_dir: Path, env_fqbn: str | None
+) -> list[tuple[str, str, bool, str]]:
+    """Lint one sketch under each of its FQBNs.
+
+    Returns one (fqbn, tu_name, passed, detail) per sketch-folder
+    translation unit per FQBN.
+    """
     ino = resolve_sketch_ino(sketch)
     if ino is None:
-        return False, f"sketch not found: {sketch}"
+        return [("-", sketch, False, f"sketch not found: {sketch}")]
     sketch_name = ino.stem
 
-    with tempfile.TemporaryDirectory(prefix=f"sketchlint_{sketch_name}_") as tmp:
-        build_dir = Path(tmp)
-        cmd = [
-            cli,
-            "compile",
-            "--only-compilation-database",
-            "--fqbn",
-            fqbn,
-            *library_args(REPO, libs_dir),
-            "--build-path",
-            str(build_dir),
-            str(ino),
-        ]
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
-        except FileNotFoundError:
-            return False, f"arduino-cli not found: {cli}"
-        if proc.returncode != 0:
-            return (
-                False,
-                f"compile-DB harvest failed:\n{proc.stderr.strip() or proc.stdout.strip()}",
-            )
+    results: list[tuple[str, str, bool, str]] = []
+    for fqbn in fqbns_for(sketch_name, env_fqbn):
+        with tempfile.TemporaryDirectory(prefix=f"sketchlint_{sketch_name}_") as tmp:
+            build_dir = Path(tmp)
+            cmd = [
+                cli,
+                "compile",
+                "--only-compilation-database",
+                "--fqbn",
+                fqbn,
+                *library_args(REPO, libs_dir),
+                "--build-path",
+                str(build_dir),
+                str(ino),
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, check=False
+                )
+            except FileNotFoundError:
+                results.append((fqbn, sketch_name, False, f"arduino-cli not found: {cli}"))
+                continue
+            if proc.returncode != 0:
+                results.append((
+                    fqbn,
+                    sketch_name,
+                    False,
+                    f"compile-DB harvest failed:\n{proc.stderr.strip() or proc.stdout.strip()}",
+                ))
+                continue
 
-        cdb = build_dir / "compile_commands.json"
-        if not cdb.is_file():
-            return False, f"no compile_commands.json in {build_dir}"
+            cdb = build_dir / "compile_commands.json"
+            if not cdb.is_file():
+                results.append((fqbn, sketch_name, False, f"no compile_commands.json in {build_dir}"))
+                continue
+            try:
+                db = json.loads(cdb.read_text())
+            except json.JSONDecodeError as exc:
+                results.append((fqbn, sketch_name, False, f"could not parse compile_commands.json: {exc}"))
+                continue
 
-        try:
-            db = json.loads(cdb.read_text())
-        except json.JSONDecodeError as exc:
-            return False, f"could not parse compile_commands.json: {exc}"
-
-        # Select the sketch's own translation unit: the preprocessed .ino.cpp.
-        needle = f"{sketch_name}.ino.cpp"
-        entries = [e for e in db if needle in os.path.basename(e.get("file", ""))]
-        if len(entries) != 1:
-            names = [e.get("file", "?") for e in db]
-            return (
-                False,
-                f"expected one '{needle}' TU, found {len(entries)}; "
-                f"db has {len(db)} entries: {names[:5]}...",
-            )
-        entry = entries[0]
-        args = entry.get("arguments")
-        if not args:
-            # 'command' (string) form -- not produced by arduino-cli 1.5.1,
-            # but handle it defensively by shlex-splitting.
-            import shlex
-
-            cmd_str = entry.get("command", "")
-            args = shlex.split(cmd_str)
-        if not args:
-            return False, "TU entry has no arguments"
-
-        lint_args = rewrite_args(args)
-        workdir = entry.get("directory", str(REPO))
-        try:
-            lint_proc = subprocess.run(
-                lint_args, capture_output=True, text=True, check=False, cwd=workdir
-            )
-        except FileNotFoundError:
-            return False, f"cross-compiler not found: {lint_args[0]}"
-
-        if lint_proc.returncode == 0:
-            return True, "ok"
-        # Surface the compiler's own diagnostics; strip trailing whitespace.
-        diag = (lint_proc.stderr + lint_proc.stdout).strip()
-        return False, diag
+            # Every TU the builder prepared from the sketch folder: the
+            # concatenated .ino.cpp plus each support .cpp (iox.cpp,
+            # display.cpp, ...). Support files are example code too, so
+            # the gate binds them the same way (they were ungated before
+            # the ProMiniSMININode dual-target work).
+            sketch_src = build_dir / "sketch"
+            entries = [
+                e for e in db if is_under(Path(e.get("file", "")), sketch_src)
+            ]
+            if not entries:
+                results.append((
+                    fqbn,
+                    sketch_name,
+                    False,
+                    f"no sketch TUs under {sketch_src}; db has {len(db)} entries",
+                ))
+                continue
+            demote = fqbn_demotes_includes(fqbn)
+            for entry in entries:
+                tu = os.path.basename(entry.get("file", "?"))
+                passed, detail = lint_tu(entry, demote)
+                results.append((fqbn, tu, passed, detail))
+    return results
 
 
 def main(argv: list[str]) -> int:
     cli = find_arduino_cli()
     libs_dir = Path(env_str("LIBS_DIR", str(Path.home() / "Dropbox/Arduino/libraries")))
-    fqbn = env_str("FQBN", "esp32:esp32:XIAO_ESP32C6")
+    env_fqbn = os.environ.get("FQBN") or None
 
     sketches = argv if argv else list(DEFAULT_SKETCHES)
 
     print(f"arduino-cli: {cli}")
     print(f"libs dir:    {libs_dir}")
-    print(f"fqbn:        {fqbn}")
+    if env_fqbn:
+        print(f"fqbn:        {env_fqbn} (env override)")
+    else:
+        print(f"fqbn:        {DEFAULT_FQBN} (default; per-sketch overrides in SKETCH_FQBNS)")
     print()
 
     any_fail = False
     for sketch in sketches:
-        passed, detail = lint_sketch(sketch, cli, libs_dir, fqbn)
-        if passed:
-            print(f"PASS  {sketch}")
-        else:
-            any_fail = True
-            print(f"FAIL  {sketch}")
-            for line in detail.splitlines():
-                print(f"      | {line}")
+        for fqbn, tu, passed, detail in lint_sketch(sketch, cli, libs_dir, env_fqbn):
+            if passed:
+                print(f"PASS  {sketch} [{fqbn}] {tu}")
+            else:
+                any_fail = True
+                print(f"FAIL  {sketch} [{fqbn}] {tu}")
+                for line in detail.splitlines():
+                    print(f"      | {line}")
     print()
     if any_fail:
         print("sketch-lint: FAIL (one or more sketches produced warnings)")
