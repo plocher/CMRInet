@@ -18,26 +18,13 @@
 #include "CMRITransport.h"
 #include "IOBuffer.h"
 
-// Geometry knobs: input and output image capacities,
-// in data bytes. Shrink for memory-limited targets.
+// Geometry knobs: input and output image capacities, in data bytes.
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-// Stock 118: JMRI's reply-image ceiling for fielded nodes. Mini 20:
-// the cpNode-family IO image reaches at most 18 bytes.
-#ifndef CMRINET_NODE_MAX_INPUT_BYTES
-#ifdef CMRINET_PROFILE_AVR_MINI
-#define CMRINET_NODE_MAX_INPUT_BYTES 20
-#else
-#define CMRINET_NODE_MAX_INPUT_BYTES 118
-#endif
-#endif
-
-#ifndef CMRINET_NODE_MAX_OUTPUT_BYTES
-#ifdef CMRINET_PROFILE_AVR_MINI
-#define CMRINET_NODE_MAX_OUTPUT_BYTES 20
-#else
-#define CMRINET_NODE_MAX_OUTPUT_BYTES 118
-#endif
-#endif
+// CMRINET_NODE_MAX_INPUT_BYTES and CMRINET_NODE_MAX_OUTPUT_BYTES are
+// defined unconditionally by CMRIProfile.h — the single source for
+// the values and their rationale. Do not pre-define them: the
+// profile definition wins in every TU and a conflicting definition
+// is a redefinition warning (an error under the sketch-lint gate).
 
 namespace CMRInet {
 

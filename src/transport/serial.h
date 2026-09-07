@@ -41,21 +41,18 @@
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
+#include "CMRIProfile.h"
 #include "serialPort.h"
 #include "CMRITransport.h"
 
-// ---- Geometry knob: shrink for small targets. ----
+// ---- Geometry knob ----
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-
-// Received packets waiting for receivePacket(). The polled strategy
-// consumes replies one exchange at a time, so a small queue suffices.
-// The AVR mini profile (CMRIProfile.h, reached via CMRIPacket.h)
-// keeps this depth: queue slots are CMRIPackets, and the mini
-// CMRINET_MAX_BODY shrinks each slot, so queue depth costs less
-// than buffer size.
-#ifndef CMRINET_SERIAL_RX_QUEUE
-#define CMRINET_SERIAL_RX_QUEUE 4
-#endif
+// CMRINET_SERIAL_RX_QUEUE (received packets waiting for
+// receivePacket()) is defined unconditionally by CMRIProfile.h —
+// the single source for the value and its rationale. Do not
+// pre-define it: the profile definition wins in every TU and a
+// conflicting definition is a redefinition warning (an error under
+// the sketch-lint gate).
 
 namespace CMRInet {
 
