@@ -87,7 +87,7 @@ Change log:
 Companion documents:
 - `docs/cmrinet-interop-profile-and-errata.md` — the wire rules this
   library implements, with evidence citations.
-- `docs/research/` — eight adversarial implementation reviews and the
+- `docs/research/` — seven adversarial implementation reviews and the
   cross-review synthesis (`comparison.md`).
 
 ## Terms

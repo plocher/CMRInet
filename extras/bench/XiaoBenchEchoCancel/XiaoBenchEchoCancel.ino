@@ -17,9 +17,8 @@
 //
 // Reuses the TracerHost C&C substrate (readVerb, run/dump/ring,
 // lazyBegin, XiaoCdcConsole) — no generators, one phantom UA, plus the
-// sketch-local echocancel verb. See docs/two-wire-echo-bench-findings.md
-// and docs/adr/0003-*.md for the observed-facts baseline and the
-// semantic boundary this probe validates.
+// sketch-local echocancel verb. ADR-0003 draws the semantic boundary
+// this probe validates: self-echo is misconfiguration, not traffic.
 //
 // Board: cpNode-Xiao (Seeed XIAO ESP32-C6 + MAX3491):
 //   D7 - RX   CMRI RS485 receive

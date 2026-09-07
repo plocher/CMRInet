@@ -1,5 +1,5 @@
 // test_node_init.cpp — golden vectors for per-NDP I-body builders.
-// Evidence: docs/research/node-type-init-bodies.md
+// VALIDATION: Interop v1.2 E3 (CPNODE body), E4 (dH/dL units).
 
 #include <string.h>
 

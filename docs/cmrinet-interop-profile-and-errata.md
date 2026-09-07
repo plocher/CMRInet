@@ -6,9 +6,16 @@ tags in code cite this version — see
 `docs/agents/validation-comments.md`).
 Audience: LCS-9.10.1 authors, JMRI maintainers, and implementers of
 CMRInet Hosts and Nodes.
-Date: 2026-08-15.
+Date: 2026-08-28.
 
 Change log:
+- v1.2 (2026-08-28): erratum E10 added; it corrects rule 2.3.15
+  (issue #104). A Node cannot begin its reply until it has received
+  the poll's ETX, so the reply arrives after the Host's TXEN
+  deasserts, not while ETX drains; the Host receive path may discard
+  RX bytes for the whole TXEN-asserted window without losing a
+  legitimate reply. Only rule 2.3.15 changed, so tags on untouched
+  clauses keep their existing version.
 - v1.1 (2026-08-15): rule 2.2.6 extended with the nominal-observation /
   max-gap-watermark receive clause (issue #26). The abort obligation is
   unchanged; the addition is a MAY for implementers. v1.0 tags in code

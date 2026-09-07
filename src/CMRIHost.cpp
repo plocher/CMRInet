@@ -1326,7 +1326,6 @@ void CMRIHost::closeBreaker_(RemoteNodeHandle& node, uint32_t nowMs) {
 }
 
 /// Build the typed initialization packet for a node.
-/// VALIDATION: docs/research/node-type-init-bodies.md
 /// VALIDATION: Interop v1.1 E3 (CPNODE), E4 (dH/dL).
 void CMRIHost::buildInitPacket_(size_t nodeIndex) {
   RemoteNodeHandle& node = nodes_[nodeIndex];
