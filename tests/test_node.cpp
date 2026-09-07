@@ -215,6 +215,31 @@ static void test_set_input_bit(void) {
   TEST_ASSERT_FALSE(rig.node.inputBit(1, 0));    // byte 1, bit 0
 }
 
+// Issue #118: the R reply-body cap must come from the input geometry,
+// not the output geometry. A node with NI > NO (an input-heavy
+// USIC-family shape) keeps its full input image in the reply.
+static void test_reply_keeps_full_input_image_when_ni_exceeds_no(void) {
+  MockCMRITransport nodeTransport;
+  CMRINodeConfig cfg;
+  cfg.ua = 7;
+  cfg.nodeType = 'N';
+  cfg.inputBytes = 6;
+  cfg.outputBytes = 2;
+  CMRINode node(nodeTransport, cfg);
+  node.begin();
+  for (uint8_t i = 0; i < 6; ++i) {
+    node.setInputByte(i, static_cast<uint8_t>(0x10 + i));
+  }
+  nodeTransport.injectPacket(makePacket(7, 'P'));
+  node.tick(1);
+  CMRIPacket r;
+  TEST_ASSERT_TRUE(nodeTransport.takeSent(r));
+  TEST_ASSERT_EQUAL_HEX8('R', r.mt);
+  TEST_ASSERT_EQUAL_size_t(6, r.length);
+  TEST_ASSERT_EQUAL_HEX8(0x10, r.body[0]);
+  TEST_ASSERT_EQUAL_HEX8(0x15, r.body[5]);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_init_reaches_node);
@@ -224,5 +249,6 @@ int main(void) {
   RUN_TEST(test_ua_mismatch_discarded);
   RUN_TEST(test_ndp_mismatch_discarded);
   RUN_TEST(test_set_input_bit);
+  RUN_TEST(test_reply_keeps_full_input_image_when_ni_exceeds_no);
   return UNITY_END();
 }
