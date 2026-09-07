@@ -4,6 +4,15 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Changed
+- Docs restructured for new users: `README.md` is now a TL;DR front
+  door with six breakout guides (`README-install` / `-hardware` /
+  `-tutorials` / `-api` / `-protocol` / `-references`); PLAN.md
+  archived into DESIGN.md and removed; CLAUDE.md merged into AGENTS.md;
+  `// VALIDATION:` tags cite design identifiers instead of file paths
+  (mapping lives in `docs/agents/validation-comments.md`); library is
+  MIT licensed (`LICENSE`).
+
 ### Added
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
