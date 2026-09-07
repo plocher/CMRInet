@@ -14,8 +14,8 @@ This gate makes that fail a documented, single command.
 make sketch-lint
 ```
 
-That runs `extras/sketch_lint.py`, which lints all three example sketches
-(`SimpleHost`, `TracerHost`, `XiaoSniffer`). Lint one:
+That runs `extras/sketch_lint.py`, which lints every example and bench
+sketch (`examples/` and `extras/bench/`). Lint one:
 
 ```
 python3 extras/sketch_lint.py SimpleHost
@@ -68,7 +68,8 @@ The gate recompiles the sketch under our own warning policy instead.
    - **demote every third-party include dir to `-isystem`** — the esp32
      core, tools, Wire/SPI, and the Adafruit GFX/BusIO/SSD1306 libraries —
      so their header noise is suppressed (third-party code is not ours to
-     gate);
+     gate). Exception: under `arduino:avr` FQBNs nothing is demoted
+     (see "The AVR -isystem exception" below);
    - keep the two CMRInet include dirs on `-I` (`examples/<sketch>` and
      `src`) so our code stays gated;
    - keep all board `-D` defines verbatim, notably
@@ -84,6 +85,33 @@ if it lives inside this repository tree (`src`, `examples/<sketch>`); every
 other include dir is third-party and becomes `-isystem`. No toolchain paths
 are hardcoded.
 
+## Dual-target sketches
+
+`ProMiniSMININode` serves two boards from one sketch folder (cpNode-Xiao
+ESP32-C6 and cpNode-ProMini ATmega328P), so it lints once under each of
+its FQBNs — `esp32:esp32:XIAO_ESP32C6` and
+`arduino:avr:pro:cpu=16MHzatmega328` — via the `SKETCH_FQBNS` map in the
+script. Both arch branches (`ARDUINO_ARCH_ESP32` / `ARDUINO_ARCH_AVR`)
+are therefore gated. Sketches not in the map lint under the default
+ESP32 FQBN. Support files (`iox.cpp`, `display.cpp`, ...) are example
+code too, and lint alongside the `.ino.cpp` under every FQBN.
+
+## The AVR -isystem exception
+
+Under `arduino:avr` FQBNs the gate keeps every harvested include dir on
+`-I` instead of demoting third-party dirs to `-isystem`.
+avr-g++ 7.3.0-atmel3.6.1-arduino7 misparses the AVR core's C++ headers
+(`Arduino.h`, `WString.h`) when they arrive via `-isystem`: every
+declaration takes C linkage, and the core fails its own compile with
+"conflicting declaration of C function" for `atexit`, `random`,
+`makeWord`, and the `StringSumHelper operator+` overloads
+(ArduinoCore-avr issue #475 — any build system that passes the core on
+`-isystem` reproduces it). The demotion also buys nothing on AVR: the
+core and its bundled library headers compile warning-free under the
+gate's flags, so keeping them on `-I` costs no third-party noise. If an
+AVR sketch ever pulls in a genuinely noisy third-party library, that
+library's dir is the one to demote — never the core's.
+
 ## No hardware required
 
 The gate compiles but never flashes. `--only-compilation-database` skips
@@ -96,7 +124,7 @@ object, no link, no upload. No testbench or board needs to be present.
 |--------------|--------------------------------------|----------------------------------|
 | `ARDUINO_CLI`| `arduino-cli` (resolved on `PATH`)   | The `arduino-cli` to drive the harvest |
 | `LIBS_DIR`   | `~/Dropbox/Arduino/libraries`        | Where the Adafruit libraries live |
-| `FQBN`       | `esp32:esp32:XIAO_ESP32C6`           | The board/FQBN to compile for    |
+| `FQBN`       | unset                                | Forces every sketch onto one FQBN, overriding `SKETCH_FQBNS` and the default |
 
 `PYTHON` (default `python3`) selects the interpreter for the `make` target.
 

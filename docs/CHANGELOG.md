@@ -38,6 +38,15 @@ High-level changes, newest first.
   shadow the profile in a single translation unit, and a conflicting
   define is a macro-redefinition warning (a hard error under the
   sketch-lint gate).
+- `sketch_lint.py` dual-FQBN linting: `ProMiniSMININode` (one sketch,
+  two boards) lints under both `esp32:esp32:XIAO_ESP32C6` and
+  `arduino:avr:pro:cpu=16MHzatmega328` via a per-sketch FQBN map, so
+  both arch branches are gated; support `.cpp` files lint alongside
+  the `.ino.cpp` under every FQBN. Under `arduino:avr` FQBNs the gate
+  keeps third-party include dirs on `-I`: avr-g++ 7.3.0 misparses the
+  AVR core headers under `-isystem` ("conflicting declaration of C
+  function", ArduinoCore-avr #475), and they are warning-free under
+  the gate's flags anyway (`docs/sketch-warning-gate.md`).
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
   Pure I-body builders with golden tests; evidence pack in
