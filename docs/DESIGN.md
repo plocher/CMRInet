@@ -1,5 +1,15 @@
 # CMRInet — Architecture and Design Decisions
 
+## Goal
+A bench "JMRI Master" instrument: a Xiao-based board (no IOX expanders;
+SSD1306 OLED + RS485 CMRINet + WiFi OTA) that emulates the JMRI side of
+CMRInet against **one hardcoded slave node**. It sends Init / Transmit /
+Poll messages, parses the Read responses coming back, walks the slave's
+outputs through wrap-around / cylon patterns, and reports link health on
+the OLED. Together with the `CMRINet-examples/Xiao_I2C` node sketch it
+forms a complete two-board test bench: master drives, node responds,
+jumpers loop outputs back to inputs.
+
 Status: agreed baseline from design review, 2026-08-12.
 Version: 1.7 (bump when any decision or contract in this document
 changes). A `// VALIDATION:` tag cites the version in which *that
@@ -73,10 +83,6 @@ Change log:
   contract estimated-drain footnote, and D13 inter-byte abort doctrine
   (issue #27). Existing `Design v1.0` tags re-stamped to v1.1.
 - v1.0 (2026-08-12): initial baseline from design review.
-This document supersedes the architecture portions of `PLAN.md`
-("Why a separate library", "Protocol notes", "Core state machine").
-The bench-instrument goal, display semantics, and phasing in `PLAN.md`
-still stand, reinterpreted through the layer model below.
 
 Companion documents:
 - `docs/cmrinet-interop-profile-and-errata.md` — the wire rules this
@@ -983,30 +989,6 @@ callbacks with the sketch never touching bytes (ADR-0004). Pack and
 unpack handlers receive `IOBuffer&` and may assume a non-empty image
 when called (the engine skips zero-length pack/unpack).
 
-Open items to settle during tracer-bullet implementation:
-1. Default output semantics: T-on-change (JMRI) per D9. Confirm on
-   the bench. `forceTransmit()` exists either way. Bench note (Node
-   M1–M5 lock-in): dense full-T (e.g. sub-second dirty bitwalk) is a
-   known trigger for elevated Host `noReplies` while steady P/R
-   turnaround stays ~6–7 ms and wire-level R usually still exists.
-   Mechanism open — Host post-T / RX / reply-gate path, not Node pack
-   I2C cost. Tracked as a follow-up issue; do not treat SimpleHost's
-   30 s demo bitwalk as the product T policy.
-2. Per-node input-change callback, or polled-only handle. Start
-   polled-only. Add the callback only if diff-scanning hurts.
-3. Counter granularity for conformance faults (D14). Deferred
-   deliberately: events carry layer, attribution, and expected/actual,
-   so the bench analyzer aggregates externally and real failure
-   distributions decide which cuts earn a durable counter. Until then
-   the residue is one total plus last-fault detail.
-4. Warty-Node trait vocabulary (D3 fidelity 3). Traits are
-   individually toggleable rather than a mode enum, because isolating
-   one defect at a time is the point, and because the verb-based C&C
-   regime drives them — so trait identifiers are part of the C&C
-   vocabulary, mapped in one place rather than scattered comparisons.
-   `ignore-init` and `tolerant-geometry` join the traits drawn from the
-   research reviews. The strict Node (fidelity 2) is the default: a
-   forgiving counterparty absorbs Host bugs and defeats the test rig.
 
 ## Test strategy
 
@@ -1018,15 +1000,6 @@ Open items to settle during tracer-bullet implementation:
 - Conformance/bench: warty CMRINode (fidelity 3), fault injection,
   slow byte-spaced TX (classic Hosts sent gapped bytes; see profile
   2.2.6), oversized frames, truncations.
-- Hardware: the PLAN.md two-board bench (Xiao Host plus Xiao_I2C
+- Hardware: a two-board bench (Xiao Host plus Xiao_I2C
   node) validates TXEN timing and real-wire behavior mocks cannot.
 
-## Scope for the tracer bullet (Phase 1, revised)
-
-In: codec, `SerialCMRITransport`, `MockCMRITransport`, CMRIHost
-(I/T/P), `RemoteNodeHandle` (inputs, outputs, freshness, state, re-init
-ladder), scripted-replay tests, OLED hit/miss display per PLAN.md.
-Out (sequenced, not abandoned): TCP carrier transport (JMRI
-`networkdriver` interop), warty CMRINode profiles (fidelity 3),
-SUSIC/SMINI node types (bench roadmap). MQTT carrier and semantic
-gateway belong to a sibling library (ADR-0004).

@@ -12,7 +12,7 @@ Minimum bench (stage 1, desktop Host):
 - loopback jumpers on the node (outputs wired back to inputs) for self-test scenarios
 
 A second cpNode-Xiao board unlocks:
-- stage 2 (Xiao Host R&D image) — the two-board bench from PLAN.md
+- stage 2 (Xiao Host R&D image) — a two-board bench
 - scenarios that need a known-good reference node on the same bus as the device under test
 
 A second adapter unlocks:

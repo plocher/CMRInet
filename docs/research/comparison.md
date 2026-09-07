@@ -179,7 +179,7 @@ drive garbage between I and the first T.
 (assert/write/flush/deassert), correct 0xFF decisions both directions,
 honest self-documenting comments. Worst: blocking reads, inCnt bug,
 unvalidated lengths with a possible infinite TX loop, address clamp.
-Its `getPacket()` is the PLAN.md reference — carry over its DLE
+Its `getPacket()` is the reference — carry over its DLE
 ordering, not its blocking core.
 
 **cpCMRI (Enhanced)** — Best *architecture* of the four: resumable
@@ -214,7 +214,7 @@ What the research settles (proposed as decisions, open to challenge):
   TXEN assert → write → flush → deassert; default 8N2 TX (configurable
   8N1), tolerate both on RX; dH/dL = 0.
 - **Poll engine policy**: per-node timeout (default ~100 ms, tunable
-  down), miss counter with re-INIT backoff (already in PLAN.md — the
+  down), miss counter with re-INIT backoff (the
   research confirms and quantifies it), treat pre-init R replies and
   post-INIT swallowed frames as normal, budget for 50 ms-delay nodes.
 - **Test-first**: a mock-Stream harness that can replay byte sequences
@@ -235,8 +235,7 @@ Open questions to brainstorm (not settled by the research):
    demonstrably shared (all four node implementations AND the master
    need it); the *engines* differ (node reacts, master owns schedule +
    timeouts). Options: (a) single lib with `CMRI_Master`/`CMRI_Node`
-   classes over a shared framing core; (b) master-only lib now
-   (PLAN.md's current stance), merge later; (c) three-layer split:
+   classes over a shared framing core; (b) master-only lib now, merge later; (c) three-layer split:
    framing core lib + node lib + master lib. The research strengthens
    the case that the shared core is real and small (~150–250 lines)
    — but also shows the risk of refactoring deployed node code
@@ -247,7 +246,7 @@ Open questions to brainstorm (not settled by the research):
    `.state()`, `.stats()`)? How much of JMRI's node-table concept
    (NDP types, geometry per node) belongs in the library vs the
    sketch?
-3. **Multi-node now or later?** PLAN.md says one hardcoded slave.
+3. **Multi-node now or later?** start simple with one hardcoded slave.
    The poll-list/timeout machinery is identical for N nodes; the
    research suggests designing the state machine per-node from the
    start costs little and avoids a second refactor.
