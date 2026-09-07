@@ -14,20 +14,13 @@
 
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs,
 // so a '328-class build can shrink packet buffers.
-// VALIDATION: Interop v1.1 E7: the default is 256 logical body bytes,
-// counted after DLE removal.
-// Mini-profile default 24: covers the cpNode-family IO image (18
-// bytes max) and the largest init body (20 bytes, USIC), and keeps
-// every escaped wire frame (6 + 2 * 24 = 54) inside the 64-byte AVR
-// TX buffer, so every send is one gapless write (rule 2.1.5). A
-// value above 29 breaks that invariant on small-RAM AVR parts.
-#ifndef CMRINET_MAX_BODY
-#ifdef CMRINET_PROFILE_AVR_MINI
-#define CMRINET_MAX_BODY 24
-#else
-#define CMRINET_MAX_BODY 256
-#endif
-#endif
+// CMRINET_MAX_BODY is defined unconditionally by CMRIProfile.h — the
+// single source for the value and its rationale (stock is Interop
+// v1.1 E7's 256 logical body bytes, counted after DLE removal; the
+// mini profile shrinks it for small-RAM AVR parts). Do not
+// pre-define it: the profile definition wins in every TU and a
+// conflicting definition is a redefinition warning (an error under
+// the sketch-lint gate).
 
 namespace CMRInet {
 

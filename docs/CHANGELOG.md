@@ -28,6 +28,16 @@ High-level changes, newest first.
   escaped wire frame inside the 64-byte AVR TX buffer (one gapless
   write). Stock defaults need about 2.7 KB of static RAM and do not
   fit the 2 KB SRAM of an ATmega328P (DESIGN.md D8).
+- `CMRIProfile.h` is the single source of truth for profile selection
+  and knob values: a closed profile set (`AVR_MINI` / `STOCK`,
+  auto-detected or forced with `-DCMRINET_PROFILE_*`, terminal
+  `#error` on an unknown platform or on forcing both) and
+  unconditional knob defines. The knob headers (`CMRIPacket.h`,
+  `transport/serial.h`, `IOBuffer.h`, `CMRINode.h`) consume only.
+  Per-knob `-D` overrides are removed: a pre-definition can no longer
+  shadow the profile in a single translation unit, and a conflicting
+  define is a macro-redefinition warning (a hard error under the
+  sketch-lint gate).
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
   Pure I-body builders with golden tests; evidence pack in

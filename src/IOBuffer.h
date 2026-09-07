@@ -25,16 +25,12 @@
 #include "CMRIProfile.h"
 
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-// Stock 118: JMRI's reply-image ceiling for fielded nodes. Mini 20:
-// the cpNode-family IO image reaches at most 18 bytes (8 expanders
-// x 2 ports + 2 onboard).
-#ifndef CMRINET_IO_BUFFER_MAX_BYTES
-#ifdef CMRINET_PROFILE_AVR_MINI
-#define CMRINET_IO_BUFFER_MAX_BYTES 20
-#else
-#define CMRINET_IO_BUFFER_MAX_BYTES 118
-#endif
-#endif
+// CMRINET_IO_BUFFER_MAX_BYTES is defined unconditionally by
+// CMRIProfile.h — the single source for the value and its rationale
+// (stock 118 is JMRI's reply-image ceiling for fielded nodes; mini
+// 20 covers the cpNode-family IO image). Do not pre-define it: the
+// profile definition wins in every TU and a conflicting definition
+// is a redefinition warning (an error under the sketch-lint gate).
 
 namespace CMRInet {
 
