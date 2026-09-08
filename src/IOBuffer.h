@@ -25,18 +25,20 @@
 #include "CMRIProfile.h"
 
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-// CMRINET_IO_BUFFER_MAX_BYTES is defined unconditionally by
-// CMRIProfile.h — the single source for the value and its rationale
-// (stock 118 is JMRI's reply-image ceiling for fielded nodes; mini
-// 20 covers the cpNode-family IO image). Do not pre-define it: the
-// profile definition wins in every TU and a conflicting definition
-// is a redefinition warning (an error under the sketch-lint gate).
+// CMRINET_MAX_PAYLOAD_BYTES — the IO-image ceiling — is defined
+// unconditionally by CMRIProfile.h, the single source for the value
+// and its rationale (the 256 protocol ceiling on the desktop test
+// hosts; JMRI's reply-image ceiling for fielded nodes; the
+// cpNode-family IO image on small-RAM AVR). Do not pre-define it:
+// the profile definition wins in every TU and a
+// conflicting definition is a redefinition warning (an error under
+// the sketch-lint gate).
 
 namespace CMRInet {
 
 class IOBuffer {
  public:
-  static constexpr size_t kMaxBytes = CMRINET_IO_BUFFER_MAX_BYTES;
+  static constexpr size_t kMaxBytes = CMRINET_MAX_PAYLOAD_BYTES;
 
   IOBuffer() = default;
 

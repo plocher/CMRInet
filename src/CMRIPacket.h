@@ -14,10 +14,11 @@
 
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs,
 // so a '328-class build can shrink packet buffers.
-// CMRINET_MAX_BODY is defined unconditionally by CMRIProfile.h — the
-// single source for the value and its rationale (stock is Interop
-// v1.1 E7's 256 logical body bytes, counted after DLE removal; the
-// mini profile shrinks it for small-RAM AVR parts). Do not
+// The body ceiling equals the one geometry knob,
+// CMRINET_MAX_PAYLOAD_BYTES, defined unconditionally by
+// CMRIProfile.h: the IO image is the largest body any message type
+// carries (T the NO bytes, R the NI bytes; the largest I body is
+// USIC's 20), so one ceiling serves packet and image alike. Do not
 // pre-define it: the profile definition wins in every TU and a
 // conflicting definition is a redefinition warning (an error under
 // the sketch-lint gate).
@@ -68,8 +69,10 @@ constexpr uint8_t kReceiveData = 'R';   // Node -> Host inputs
 constexpr uint8_t kTransmitData = 'T';  // Host -> Node outputs
 }  // namespace MessageType
 
-// Logical body ceiling, counted after DLE removal (E7).
-constexpr size_t kMaxBody = CMRINET_MAX_BODY;
+// Logical body ceiling, counted after DLE removal (E7) — equal to
+// the one geometry knob (CMRIProfile.h): the IO image is the
+// largest body any MT carries.
+constexpr size_t kMaxBody = CMRINET_MAX_PAYLOAD_BYTES;
 
 // VALIDATION: Interop v1.1 2.1.6: size the TX staging buffer for full
 // escaping — the worst case is 2 SYN + STX + UA + MT + ETX plus two

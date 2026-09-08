@@ -32,7 +32,8 @@
 // tick, including mid-drain.
 //
 // This class never allocates memory, not even in begin(). All storage
-// is fixed-capacity, sized by CMRINET_MAX_BODY and the knob below.
+// is fixed-capacity, sized by the body ceiling (CMRIPacket.h) and the
+// queue depth below.
 
 #pragma once
 
@@ -41,18 +42,21 @@
 
 #include "CMRIFrameCodec.h"
 #include "CMRIPacket.h"
-#include "CMRIProfile.h"
 #include "serialPort.h"
 #include "CMRITransport.h"
 
-// ---- Geometry knob ----
-// VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-// CMRINET_SERIAL_RX_QUEUE (received packets waiting for
-// receivePacket()) is defined unconditionally by CMRIProfile.h —
-// the single source for the value and its rationale. Do not
-// pre-define it: the profile definition wins in every TU and a
-// conflicting definition is a redefinition warning (an error under
-// the sketch-lint gate).
+// ---- Receive queue depth ----
+// Received packets waiting for receivePacket(). The depth is the
+// same on every platform, so it is not a CMRIProfile.h knob: it
+// is a property of the polled strategy (one exchange at a time),
+// not of the target's memory. Its RAM cost still scales with the
+// geometry knob by itself — slots are CMRIPackets, sized by the
+// body ceiling — and depth is the first growth target when
+// bring-up measurements show headroom. Defined unconditionally
+// here, its only consumer: a conflicting pre-definition is a
+// macro-redefinition warning (an error under the sketch-lint
+// gate).
+#define CMRINET_SERIAL_RX_QUEUE 4
 
 namespace CMRInet {
 

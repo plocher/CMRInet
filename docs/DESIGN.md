@@ -358,45 +358,72 @@ mechanism the Arduino build model offers for a port that calls into a
 core-specific driver, and a non-matching build sees an empty file
 (the shipped guard is `#if defined(ARDUINO) && defined(ARDUINO_ARCH_ESP32)`).
 
-### D8. Floor: ESP32-class drives the design; AVR gets a mini profile
+### D8. Floor: ESP32-class drives the design; geometry is one compile-time knob
 The full bench instrument targets ESP32-class parts. Geometry
 ceilings (max nodes, max body bytes) are compile-time knobs, so a
 '328-class build supports a single-node cpNode+IOX diagnostic tester
 within its limits. AVR-as-Host is supported within limits, not a
 design driver.
 
-The mini profile ships as a default, not a build flag.
-`CMRIProfile.h` is the single source of truth: it selects exactly one
-platform profile per build and defines every geometry-knob value for
-that profile. The profile set is closed — `AVR_MINI` (AVR parts with
-less than 4 KB of SRAM, `RAMEND < 0x1000`: 328P, 168, 32U4) and
-`STOCK` (every other positively enumerated platform: larger AVR
-parts, every other Arduino core, ESP-IDF, and the desktop hosts). An
-unrecognized platform is a terminal `#error`, not a silent fallback;
-forcing both profiles at once is also an error. A build may force one
-profile with `-DCMRINET_PROFILE_AVR_MINI` or
-`-DCMRINET_PROFILE_STOCK`. Platform macros are identical in every
-translation unit of one build, so profile-conditional defaults stay
-layout-consistent between the library sources and a sketch with no
-build-flag ceremony.
+The geometry ships as a default, not a build flag. `CMRIProfile.h`
+is the single source of truth, and it configures exactly one knob:
+`CMRINET_MAX_PAYLOAD_BYTES`, the IO-image ceiling — what NI/NO may
+reach, what an IOBuffer stores, what R/T bodies carry. Everything
+else is derived, not configured: the packet body ceiling equals
+the knob (`CMRIPacket.h` `kMaxBody` — the IO image is the largest
+body any MT carries, since T carries NO, R carries NI, and the
+largest I body is USIC's 20), and the codec derives wire staging
+from that: max frame = max payload + framing overhead
+(`kMaxWireFrame` = 6 + 2 × body, rules 2.1.1/2.1.6). The former
+per-header knobs (`CMRINET_MAX_BODY`,
+`CMRINET_IO_BUFFER_MAX_BYTES`, `CMRINET_NODE_MAX_INPUT_BYTES`,
+`CMRINET_NODE_MAX_OUTPUT_BYTES`) were one concept under four
+names and collapsed into the one define. The serial receive queue
+depth is not a profile knob at all: it is 4 everywhere — a
+property of the polled strategy, not of memory — and lives as a
+constant in `transport/serial.h` (its RAM cost scales with the
+knob anyway, since slots are packets).
 
-The knob headers (`CMRIPacket.h`, `transport/serial.h`, `IOBuffer.h`,
-`CMRINode.h`) include `CMRIProfile.h` and consume the macros; they
-define no defaults of their own. The profile defines each knob
-unconditionally, and per-knob `-D` overrides are gone: an `#ifndef`
-gate let a sketch-local pre-definition shadow the profile in one
-translation unit and split the layout across the API. A conflicting
-pre-definition now surfaces as a macro-redefinition warning (a hard
-error under the sketch-lint gate), so customization happens on
-exactly one axis: profile selection.
+Selection is a closed chain of platform forks, one fork per
+platform family, each assigning the knob: small-SRAM AVR
+(`RAMEND < 0x1000`: 328P, 168, 32U4) gets 20 — the cpNode-family
+ceiling; the fielded instrument platforms (larger AVR parts,
+ESP32 with an Arduino core or bare ESP-IDF, every other Arduino
+core) get 118 — JMRI's reply-image ceiling (E7, rule 2.3.6), so
+accepted geometries never silently fail under the dominant
+fielded Host; the desktop test hosts get 256 — the E7 protocol
+ceiling, counted after DLE removal (the framing rides outside
+that budget, so a full body is a legal 518-byte wire frame). The
+desktop is the conformance instrument: the codec tests are
+symbolic in `kMaxBody`, so the desktop fork is what exercises the
+protocol maximum — boundaries at 255/256, overflow at 257,
+worst-case 518-byte staging — at all. Not 255: the boundary tests
+must pin the exact ceiling. An unrecognized platform is a
+terminal `#error`, not a silent fallback; a new board adds its
+own fork. There is no `-D` override axis: the knob is defined
+unconditionally, so a stray or sketch-local pre-definition cannot
+shadow the profile in one translation unit and split the layout —
+it surfaces as a macro-redefinition warning (a hard error under
+the sketch-lint gate). Raising a fielded fork for bench work
+(128, the largest Node ever fielded — a full SUSIC backplane, 32
+cards of 32-bit IO) is a deliberate edit of the fork value,
+build-global by construction. Platform macros are identical in
+every translation unit of one build, so fork-conditional values
+stay layout-consistent between the library sources and a sketch
+with no build-flag ceremony.
 
-Mini values derive from the cpNode-family ceilings: `CMRINET_MAX_BODY`
-24 (IO image 18 bytes max, largest init body 20 for USIC),
-`CMRINET_IO_BUFFER_MAX_BYTES` and both node image ceilings 20,
-`CMRINET_SERIAL_RX_QUEUE` at the stock 4 because slots shrink with
-the packet. The body ceiling 24 keeps every escaped wire frame (54
-bytes max) inside the 64-byte AVR TX buffer, so every send is one
-gapless write (rule 2.1.5).
+Consequence of the collapse: fielded builds size frame decode at
+the knob (118 or 20), not at the 256-byte protocol ceiling — a
+conforming 128-byte SUSIC reply aborts at the decoder
+(overflowAborts) unless the fork value is raised. Nothing fielded
+is affected: JMRI caps replies at 118, and no fielded frame
+approaches 256 (E7). Ceiling conformance lives on the desktop
+fork, which decodes at 256 (D10); its image-acceptance ceiling
+is 256 too, so "any accepted geometry works under JMRI" is a
+property of the fielded forks, not of the test host. The
+small-AVR 20 keeps every escaped wire frame (46 bytes max)
+inside the 64-byte AVR TX buffer, so every send is one gapless
+write (rule 2.1.5).
 
 ### D9. Policy defaults come from the research
 Defaults match what JMRI-tuned Nodes expect, per-node overridable:
@@ -412,11 +439,13 @@ emulation option for A/B work.
 
 ### D10. Wire behavior follows the interop profile
 Framing, escaping (all bodies including I), SYN policy, stop bits,
-UA verification, buffer sizing (frame decode at the 256-byte protocol
-ceiling; per-node reply images default to JMRI's 118-data-byte
-ceiling so accepted geometries never silently fail under the dominant
-fielded Host, knob-raisable to 128 — the fielded maximum — or 256 for
-conformance builds; 2x TX staging), and
+UA verification, buffer sizing (packets and frame decode sized from
+the one geometry knob, D8 — the desktop test hosts decode at the
+256-byte protocol ceiling; fielded platforms default to JMRI's
+118-data-byte reply ceiling, so accepted geometries never silently
+fail under the dominant fielded Host, and a fielded fork is raised
+to 128 — the fielded maximum — by deliberate edit for bench work;
+2x TX staging), and
 recovery rules implement `docs/cmrinet-interop-profile-and-errata.md`
 Part 2. Where the profile and the spec text disagree, the profile
 wins, and the erratum (Part 1) records why.

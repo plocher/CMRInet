@@ -18,13 +18,14 @@
 #include "CMRITransport.h"
 #include "IOBuffer.h"
 
-// Geometry knobs: input and output image capacities, in data bytes.
+// Geometry knob: input and output image capacities, in data bytes.
 // VALIDATION: Design v1.1 D8: geometry ceilings are compile-time knobs.
-// CMRINET_NODE_MAX_INPUT_BYTES and CMRINET_NODE_MAX_OUTPUT_BYTES are
-// defined unconditionally by CMRIProfile.h — the single source for
-// the values and their rationale. Do not pre-define them: the
-// profile definition wins in every TU and a conflicting definition
-// is a redefinition warning (an error under the sketch-lint gate).
+// Both images are capped by the one IO-image ceiling,
+// CMRINET_MAX_PAYLOAD_BYTES, defined unconditionally by
+// CMRIProfile.h — the single source for the value and its rationale.
+// Do not pre-define it: the profile definition wins in every TU and
+// a conflicting definition is a redefinition warning (an error under
+// the sketch-lint gate).
 
 namespace CMRInet {
 
@@ -61,8 +62,8 @@ using TraceListener = void (*)(void* ctx, bool transmit,
 
 class CMRINode {
  public:
-  static constexpr size_t kMaxInputBytes = CMRINET_NODE_MAX_INPUT_BYTES;
-  static constexpr size_t kMaxOutputBytes = CMRINET_NODE_MAX_OUTPUT_BYTES;
+  static constexpr size_t kMaxInputBytes = CMRINET_MAX_PAYLOAD_BYTES;
+  static constexpr size_t kMaxOutputBytes = CMRINET_MAX_PAYLOAD_BYTES;
 
   explicit CMRINode(CMRITransport& transport,
                     const CMRINodeConfig& config = CMRINodeConfig());
