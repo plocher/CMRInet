@@ -353,10 +353,12 @@ Observability is listener registration (JMRI pattern): metrics,
 monitor, and trace hooks are optional listeners the linker drops when
 unused. No feature `#ifdef`s inside the library. Platform guards on
 platform-specific ports (e.g. `#if defined(ARDUINO_ARCH_ESP32)` on
-`Esp32SerialPort`) are not feature toggles — they are the only
-mechanism the Arduino build model offers for a port that calls into a
-core-specific driver, and a non-matching build sees an empty file
-(the shipped guard is `#if defined(ARDUINO) && defined(ARDUINO_ARCH_ESP32)`).
+`Esp32SerialPort`, `#if defined(ARDUINO_ARCH_AVR)` on `AvrSerialPort`)
+are not feature toggles — they are the only mechanism the Arduino
+build model offers for a port that calls into a core-specific driver,
+and a non-matching build sees an empty file (the shipped guards are
+`#if defined(ARDUINO) && defined(ARDUINO_ARCH_ESP32)` and
+`#if defined(ARDUINO) && defined(ARDUINO_ARCH_AVR)`).
 
 ### D8. Floor: ESP32-class drives the design; geometry is one compile-time knob
 The full bench instrument targets ESP32-class parts. Geometry
@@ -992,8 +994,9 @@ distinctive split is not aesthetic: Arduino PR #1853 made a library
 whose folder name matches the header win a collision, so `CMRInet.h`
 is protected by the folder-name match while a bare `transport.h` would
 not be. Transport implementations therefore live under `src/transport/`
-with prefix-dropped filenames (`mock.h`, `serial.h`, `serialESP32.h`),
-while the seam contract stays `CMRITransport.h` at top level.
+with prefix-dropped filenames (`mock.h`, `serial.h`, `serialESP32.h`,
+`serialAvr.h`), while the seam contract stays `CMRITransport.h` at top
+level.
 
 - Lifecycle and ownership: the sketch constructs and configures the
   transport; the engine calls `transport.begin()` exactly once, from
