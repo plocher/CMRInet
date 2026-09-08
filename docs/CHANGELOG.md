@@ -52,15 +52,16 @@ High-level changes, newest first.
   at 118 instead of the old 256; nothing fielded is affected
   (JMRI caps replies at 118), and raising a fielded fork (128
   fielded maximum) is a deliberate edit.
-- `sketch_lint.py` dual-FQBN linting: `ProMiniSMININode` (one sketch,
-  two boards) lints under both `esp32:esp32:XIAO_ESP32C6` and
-  `arduino:avr:pro:cpu=16MHzatmega328` via a per-sketch FQBN map, so
-  both arch branches are gated; support `.cpp` files lint alongside
-  the `.ino.cpp` under every FQBN. Under `arduino:avr` FQBNs the gate
-  keeps third-party include dirs on `-I`: avr-g++ 7.3.0 misparses the
-  AVR core headers under `-isystem` ("conflicting declaration of C
-  function", ArduinoCore-avr #475), and they are warning-free under
-  the gate's flags anyway (`docs/sketch-warning-gate.md`).
+- `sketch_lint.py` per-sketch FQBN map: a sketch can lint under a
+  non-default board — `ProMiniSMININode` lints under
+  `arduino:avr:pro:cpu=16MHzatmega328` while every other sketch uses
+  the default `esp32:esp32:XIAO_ESP32C6`, so the AVR core is gated
+  too; support `.cpp` files lint alongside the `.ino.cpp` under
+  every FQBN. Under `arduino:avr` FQBNs the gate keeps third-party
+  include dirs on `-I`: avr-g++ 7.3.0 misparses the AVR core headers
+  under `-isystem` ("conflicting declaration of C function",
+  ArduinoCore-avr #475), and they are warning-free under the gate's
+  flags anyway (`docs/sketch-warning-gate.md`).
 - `AvrSerialPort` (`src/transport/serialAvr.h`): the AVR sibling of
   `Esp32SerialPort` — a `StreamSerialPort` subclass binding the
   concrete `HardwareSerial&` whose `begin()` calls
@@ -72,7 +73,16 @@ High-level changes, newest first.
   cannot skew. Drain semantics deliberately unchanged (buffer-level
   answer plus wire-time estimate); the TXCn hardware-truth override
   stays the bench-gated contribution path in `serialStream.h`.
-  `ProMiniSMININode`'s AVR branch consumes it.
+  `ProMiniSMININode` consumes it.
+- SMINI work-alike node examples, one sketch per board:
+  `examples/ProMiniSMININode` (cpNode-ProMini, ATmega328P —
+  `AvrSerialPort`, MRCS AutoRTS 555 auto-direction, 16 onboard
+  inputs plus 4 IOX expanders, no OLED) and `examples/XiaoSMININode`
+  (cpNode-Xiao, XIAO ESP32-C6 — `Esp32SerialPort` with hardware
+  TXEN and drain truth, 5 IOX expanders, SSD1306 live view). Both
+  are CMRInet type 'M' (24 in / 48 out), UA 50, 28800 8N2: the
+  library runs the protocol; each sketch owns only its board
+  wiring and I/O byte map.
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
   Pure I-body builders with golden tests; evidence pack in

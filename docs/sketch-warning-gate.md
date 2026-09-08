@@ -85,16 +85,15 @@ if it lives inside this repository tree (`src`, `examples/<sketch>`); every
 other include dir is third-party and becomes `-isystem`. No toolchain paths
 are hardcoded.
 
-## Dual-target sketches
+## Per-sketch FQBNs
 
-`ProMiniSMININode` serves two boards from one sketch folder (cpNode-Xiao
-ESP32-C6 and cpNode-ProMini ATmega328P), so it lints once under each of
-its FQBNs — `esp32:esp32:XIAO_ESP32C6` and
-`arduino:avr:pro:cpu=16MHzatmega328` — via the `SKETCH_FQBNS` map in the
-script. Both arch branches (`ARDUINO_ARCH_ESP32` / `ARDUINO_ARCH_AVR`)
-are therefore gated. Sketches not in the map lint under the default
-ESP32 FQBN. Support files (`iox.cpp`, `display.cpp`, ...) are example
-code too, and lint alongside the `.ino.cpp` under every FQBN.
+A sketch can lint under a non-default board via the `SKETCH_FQBNS` map
+in the script: `ProMiniSMININode` (cpNode-ProMini ATmega328P) lints
+under `arduino:avr:pro:cpu=16MHzatmega328`. Everything else — including
+its sister sketch `XiaoSMININode` (cpNode-Xiao ESP32-C6) — uses the
+default ESP32 FQBN, so both arch cores are gated across the example
+set. Support files (`iox.cpp`, `display.cpp`, ...) are example code
+too, and lint alongside the `.ino.cpp` under every FQBN.
 
 ## The AVR -isystem exception
 
