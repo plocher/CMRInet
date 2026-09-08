@@ -43,10 +43,10 @@ gate's real destination. The sketch TU is the preprocessed `.ino.cpp`, so
 the sketch's own code is the main translation unit -- not a system header --
 and its switches are checked.
 
-Per-sketch FQBNs live in SKETCH_FQBNS: ProMiniSMININode is dual-target
-(one sketch, two boards) and lints under both `esp32:esp32:XIAO_ESP32C6`
-and `arduino:avr:pro:cpu=16MHzatmega328`, so both arch branches are gated.
-Sketches not in the map lint under the default ESP32 FQBN.
+Per-sketch FQBNs live in SKETCH_FQBNS: ProMiniSMININode lints under
+`arduino:avr:pro:cpu=16MHzatmega328`; its sister XiaoSMININode (the SMINI
+examples are one sketch per board) and everything else use the default
+ESP32 FQBN, so both arch cores are gated across the set.
 
 Usage
 -----
@@ -88,19 +88,20 @@ DEFAULT_SKETCHES = (
     "TracerNode",
     "XiaoNode",
     "ProMiniSMININode",
+    "XiaoSMININode",
     "extras/bench/XiaoBenchCal",
     "extras/bench/XiaoBenchEcho",
     "extras/bench/XiaoBenchEchoCancel",
 )
 
 # Per-sketch FQBN map. A sketch listed here lints once under each of its
-# FQBNs; every other sketch lints under the default. ProMiniSMININode is
-# dual-target: one sketch, two boards (cpNode-Xiao ESP32-C6 and
-# cpNode-ProMini ATmega328P), so both arch branches are gated.
+# FQBNs; every other sketch lints under the default. The SMINI node
+# examples are one sketch per board: XiaoSMININode (cpNode-Xiao
+# ESP32-C6) rides the default; ProMiniSMININode (cpNode-ProMini
+# ATmega328P) lints under the AVR core.
 DEFAULT_FQBN = "esp32:esp32:XIAO_ESP32C6"
 SKETCH_FQBNS = {
     "ProMiniSMININode": (
-        "esp32:esp32:XIAO_ESP32C6",
         "arduino:avr:pro:cpu=16MHzatmega328",
     ),
 }
@@ -391,7 +392,7 @@ def lint_sketch(
             # concatenated .ino.cpp plus each support .cpp (iox.cpp,
             # display.cpp, ...). Support files are example code too, so
             # the gate binds them the same way (they were ungated before
-            # the ProMiniSMININode dual-target work).
+            # the SMINI node example work).
             sketch_src = build_dir / "sketch"
             entries = [
                 e for e in db if is_under(Path(e.get("file", "")), sketch_src)
