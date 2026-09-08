@@ -7,9 +7,11 @@
 //
 // The sketch owns the UART configuration and calls, for example,
 //   Serial1.begin(19200, SERIAL_8N2);
-// before this port's begin(). Two stop bits is the transmit default
-// the fielded ecosystem expects; pass bitsPerChar 10 for an 8N1
-// network.
+// before this port's begin() — unless a configuration-owning
+// subclass is in use: Esp32SerialPort and AvrSerialPort call the
+// stream's begin() from their own begin(), and their sketches skip
+// the call. Two stop bits is the transmit default the fielded
+// ecosystem expects; pass bitsPerChar 10 for an 8N1 network.
 // VALIDATION: Interop v1.1 2.5.1: transmit 8N2 by default; accept 8N1
 // configuration where a network requires it (erratum E2). The
 // stop-bit hook is the sketch's Serial.begin() config plus this
@@ -53,7 +55,8 @@ class StreamSerialPort : public SerialPort {
   static constexpr int kNoTxenPin = -1;
 
   /// `stream`: the configured serial stream (sketch calls its begin()
-  /// first). `txenPin`: RS-485 driver-enable pin, or kNoTxenPin.
+  /// first; a configuration-owning subclass does it itself).
+  /// `txenPin`: RS-485 driver-enable pin, or kNoTxenPin.
   /// `baud`: the configured line rate. `bitsPerChar`: bit times per
   /// character on the wire — 11 for 8N2 (default), 10 for 8N1.
   StreamSerialPort(Stream& stream, int txenPin, uint32_t baud,

@@ -61,6 +61,18 @@ High-level changes, newest first.
   AVR core headers under `-isystem` ("conflicting declaration of C
   function", ArduinoCore-avr #475), and they are warning-free under
   the gate's flags anyway (`docs/sketch-warning-gate.md`).
+- `AvrSerialPort` (`src/transport/serialAvr.h`): the AVR sibling of
+  `Esp32SerialPort` — a `StreamSerialPort` subclass binding the
+  concrete `HardwareSerial&` whose `begin()` calls
+  `Serial.begin(baud, config)` itself. AVR sketches no longer carry
+  the duplicate `Serial.begin()` nor its ordering constraint
+  ("configure the UART before node.begin()"): the constructor's
+  baud — already the wire-time math's single source — is now also
+  the value that configures the wire, so initializer and timing copy
+  cannot skew. Drain semantics deliberately unchanged (buffer-level
+  answer plus wire-time estimate); the TXCn hardware-truth override
+  stays the bench-gated contribution path in `serialStream.h`.
+  `ProMiniSMININode`'s AVR branch consumes it.
 - First-class Host **node types** and typed INIT (`src/NodeInit.h`):
   NDP map C=CPNODE, M=SMINI, N=USIC, X=SUSIC (SPS/JMRI fielded letters).
   Pure I-body builders with golden tests; evidence pack in
