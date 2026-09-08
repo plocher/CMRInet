@@ -4,6 +4,43 @@ High-level changes, newest first.
 
 ## Unreleased
 
+### Added
+- `examples/IoxJig` — standalone cpNode-IOX manufacturing-validation
+  jig (issue #32): a XIAO ESP32-C6 image that validates jumpered
+  MCP23017 loopback assemblies with no Host and no bus —
+  boot-triggered auto-run, JSON-lines serial tier, SSD1306 verdict
+  screens, LED latch, serial-line re-trigger without reflash. The
+  plan core is `jigplan.h`, a header-only Arduino-free module (map
+  validation, pattern suite, port couplings, drive-step enumeration,
+  fault classification, bit health, verdict aggregation) under 40
+  desktop Unity tests (`tests/test_iox_jig.cpp`); the sketch is
+  registered in the sketch-lint gate.
+  - Pattern × rate-block matrix: 26 visually distinct patterns
+    (set/cleared walkers, 2-bit and 4-bit rolls, checkers, all-on/
+    all-off flash) × both port-role phases × six pacing/I2C-clock
+    blocks (100 kHz/50 ms → 400 kHz/10 ms → 800 kHz → 1 MHz →
+    400 kHz/10 ms → 100 kHz/50 ms), two repeats, strict verdict —
+    any miss at any block is RED.
+  - Safety-first: the declared jumper map is validated before ANY
+    direction write; a map pairing two OUTPUT bits (the loopback
+    safety rule) refuses the run.
+  - Fault attribution: `driver_self` / `loopback` / `setup` classes;
+    statistical retries classify rather than mask (`stuck_at` vs
+    `marginal`; `faults_slowest` separates hard faults from speed
+    margin); per-pair health and per-block fault counts.
+  - OLED boundary doctrine: display updates only at run boundaries,
+    never inside a rate block, so panel traffic can never influence
+    expander results. The RED verdict screen draws a donor-grid
+    **fault map** — one row per chip, Port B cell group left / Port A
+    right, bits 7..0 left-to-right, failed bits filled and halo-boxed
+    — with a bottom identification line: chip address(es) + worst
+    pair (`20 p6 A6-B6`) left, fault classes right.
+  - Bench-verified on UA31 (single `0x20`, full 8-bit A↔B): GREEN
+    624 steps with every rate block clean including 800 kHz and
+    1 MHz (~17-25 s/run); three blind single-conductor lifts each
+    identified exactly (bits 7, 6, 0) on both the serial and panel
+    tiers.
+
 ### Changed
 - Docs restructured for new users: `README.md` is now a TL;DR front
   door with six breakout guides (`README-install` / `-hardware` /
