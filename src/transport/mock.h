@@ -66,7 +66,7 @@
 // Raw-byte payload capacity per injection or script step. Default: one
 // worst-case fully escaped wire frame (kMaxWireFrame).
 #ifndef CMRINET_MOCK_EVENT_BYTES
-#define CMRINET_MOCK_EVENT_BYTES (6 + 2 * CMRINET_MAX_BODY)
+#define CMRINET_MOCK_EVENT_BYTES (6 + 2 * CMRINET_MAX_PAYLOAD_BYTES)
 #endif
 
 namespace CMRInet {

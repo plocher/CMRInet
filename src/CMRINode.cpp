@@ -94,7 +94,7 @@ void CMRINode::handlePoll_() {
     }
   }
   // Reply-body cap (issue #118): the configured input geometry.
-  // input_.length() is already bounded by CMRINET_NODE_MAX_INPUT_BYTES,
+  // input_.length() is already bounded by CMRINET_MAX_PAYLOAD_BYTES,
   // and setBody validates against kMaxBody. The former cap at
   // config_.outputBytes silently truncated replies on nodes with
   // NI > NO. SMINI escaped the bug by accident (its NI is smaller

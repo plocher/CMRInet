@@ -20,24 +20,38 @@ High-level changes, newest first.
   and other NI <= NO shapes are unaffected.
 
 ### Added
-- AVR mini-profile geometry defaults (`src/CMRIProfile.h`): AVR parts
-  with less than 4 KB SRAM (328P, 168, 32U4) compile with
-  `CMRINET_MAX_BODY` 24, `CMRINET_IO_BUFFER_MAX_BYTES` 20, node image
-  ceilings 20, and the stock serial queue depth 4. The values derive
-  from the cpNode-family ceilings, and the body ceiling keeps every
-  escaped wire frame inside the 64-byte AVR TX buffer (one gapless
-  write). Stock defaults need about 2.7 KB of static RAM and do not
-  fit the 2 KB SRAM of an ATmega328P (DESIGN.md D8).
-- `CMRIProfile.h` is the single source of truth for profile selection
-  and knob values: a closed profile set (`AVR_MINI` / `STOCK`,
-  auto-detected or forced with `-DCMRINET_PROFILE_*`, terminal
-  `#error` on an unknown platform or on forcing both) and
-  unconditional knob defines. The knob headers (`CMRIPacket.h`,
-  `transport/serial.h`, `IOBuffer.h`, `CMRINode.h`) consume only.
-  Per-knob `-D` overrides are removed: a pre-definition can no longer
-  shadow the profile in a single translation unit, and a conflicting
-  define is a macro-redefinition warning (a hard error under the
-  sketch-lint gate).
+- Small-AVR geometry defaults (`src/CMRIProfile.h`): AVR parts with
+  less than 4 KB SRAM (328P, 168, 32U4) compile with the one
+  geometry knob, `CMRINET_MAX_PAYLOAD_BYTES`, at 20 — the
+  cpNode-family ceiling. The value keeps every escaped wire frame
+  inside the 64-byte AVR TX buffer (one gapless write). The
+  default 118 needs about 2.7 KB of static RAM and does not fit
+  the 2 KB SRAM of an ATmega328P (DESIGN.md D8).
+- `CMRIProfile.h` is the single source of truth for the library
+  geometry, and it configures exactly one knob:
+  `CMRINET_MAX_PAYLOAD_BYTES`, the IO-image ceiling, assigned by a
+  closed chain of platform forks (terminal `#error` on an
+  unrecognized platform; a new board adds a fork). Everything else
+  is derived: the packet body ceiling equals the knob (the IO
+  image is the largest body any MT carries), and the codec derives
+  wire staging from it (max frame = max payload + framing
+  overhead). The former per-header knobs (`CMRINET_MAX_BODY`,
+  `CMRINET_IO_BUFFER_MAX_BYTES`, `CMRINET_NODE_MAX_*_BYTES`) were
+  one concept under four names and collapsed into the one define;
+  the serial RX queue depth (uniform 4, a polled-strategy
+  property) left the profile for `transport/serial.h`. Knob
+  headers consume only; `-D` overrides are gone — a
+  pre-definition can no longer shadow the profile in a single
+  translation unit, and a conflicting define is a
+  macro-redefinition warning (a hard error under the sketch-lint
+  gate). Fork values: 20 on small-RAM AVR, 118 on the fielded
+  instrument platforms (JMRI's reply ceiling), and 256 — the E7
+  protocol ceiling — on the desktop test hosts, so the symbolic
+  codec boundary, overflow, and staging tests exercise the
+  protocol maximum. Fielded builds therefore size frame decode
+  at 118 instead of the old 256; nothing fielded is affected
+  (JMRI caps replies at 118), and raising a fielded fork (128
+  fielded maximum) is a deliberate edit.
 - `sketch_lint.py` dual-FQBN linting: `ProMiniSMININode` (one sketch,
   two boards) lints under both `esp32:esp32:XIAO_ESP32C6` and
   `arduino:avr:pro:cpu=16MHzatmega328` via a per-sketch FQBN map, so
