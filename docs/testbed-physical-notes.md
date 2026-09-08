@@ -60,26 +60,39 @@ Hazard: two Hosts on one bus. Only one may drive the poll pair. The `quiesce`/`r
 - Termination and biasing: the board has an on-board termination option. A short bench pair usually works unterminated, but decide deliberately and record what the bench uses, so timing anomalies are not chased into the wrong layer.
 - Loopback jumpers invert: outputs are active low, so out 0 reads back as in 1. Scenario assertions must apply the inversion.
 - **Loopback safety rule (hardware-protecting, non-negotiable): a pin pair joined by a loopback jumper must never have both ends configured as outputs.** Configure exactly one end as OUTPUT and the other as INPUT — or both as INPUTs. Two push-pull drivers fighting through a jumper wire is a hardware-damage risk, and nothing in the protocol or the expander prevents it. Every sketch flashed to a jumpered node must be defensively configured against its board's jumper map before upload.
-- Bench I/O expander jumper inventory 
-  - UA31 (NI=3, NO=3): 
-    - bytes 0,1 phantom (not implemented)
-    - byte 2 IN bit 1 ↔ OUT byte 2 bit 1
-    - byte 2 IN bit 2 ↔ OUT byte 2 bit 2
-    - Walker on byte 2
-  - UA30 (NI=6, NO=6): 
-    - bytes 0,1 phantom. 
+- Bench I/O expander jumper inventory
+  - UA31 (electrically verified 2026-09-08 during the IoxJig #32
+    work; the node image on the board at the time was cpNode
+    `Xiao_I2C`, NI=4, NO=4):
+    - single MCP23017 at `0x20` — the IoxJig bus scan found no other
+      responders
+    - full 8-bit loopback: port A bit i ↔ port B bit i for all eight
+      bits, wired as one removable jumper per bit (a
+      single-conductor lift set for fault-injection runs)
+    - verified by `examples/IoxJig` v1.1.1: GREEN 624 steps across
+      all six rate blocks (100 kHz–1 MHz), and three blind
+      single-conductor lifts each identified exactly (bits 7, 6, 0)
+    - as of 2026-09-08 the board holds the IoxJig image, not the
+      node image — reflash cpNode `examples/Xiao_I2C` before any
+      node-role scenario
+  - UA30 (NI=6, NO=6 — NOT re-verified during the IoxJig work; this
+    inventory predates the 2026-09 UA31 rewiring and needs an
+    electrical recheck before being trusted):
+    - bytes 0,1 phantom.
     - byte 2 IN and OUT available
     - byte 3 IN bit 1 ↔ OUT byte 2 bit 1
     - byte 3 IN bit 2 ↔ OUT byte 2 bit 2
     - byte 4 IN all 8 bits  ↔ OUT byte 4
-    - byte 5 OUT bit 1 → byte 6 IN bit 1 (cross-byte). 
+    - byte 5 OUT bit 1 → byte 6 IN bit 1 (cross-byte).
     - Walker on byte 3
 
-  Scenario guidance: use the unjumpered chips (`0x20`, `0x23`, `0x24`)
-  for pure input reads, `0x21`/`0x22` for loopback assertions once T
-  lands (Phase 2). A scenario selects chips by I2C address; the
-  sketch's direction map must honor the safety rule above for
-  whichever chips it enables.
+  Scenario guidance: on UA31 every paired bit is jumpered, so any
+  sketch flashed there must drive port A and port B in opposite
+  directions (the safety rule above). `examples/IoxJig` enforces this
+  by refusing maps that pair two OUTPUT bits, and its README is the
+  wiring guide for the assembly. The former chip-address guidance
+  (`0x21`–`0x24` for loopback, unjumpered `0x20`/`0x23`/`0x24` for
+  pure reads) is obsolete: those chips are not on the UA31 bus.
 - Power: all boards can run from Mac USB during bench work. Note any externally powered configuration in the scenario, since brownout during pattern bursts would masquerade as protocol faults.
 - Manual production-test wiring (card N outputs to card M inputs) is operator work, guided step by step by the runner. The bench does not attempt relay matrices or automated patch panels.
 ## Wire-visible signatures for TracerHost stimulus generators
