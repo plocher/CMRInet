@@ -14,7 +14,7 @@ BUILD    := build
 
 LIB_SRCS := ../src/CMRIFrameCodec.cpp ../src/CMRIHost.cpp \
             ../src/CMRINode.cpp ../src/transport/mock.cpp \
-            ../src/transport/serial.cpp
+            ../src/transport/serial.cpp ../src/transport/tcp.cpp
 LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRINode.h \
             ../src/CMRIPacket.h ../src/CMRInet.h ../src/CMRITime.h \
             ../src/CMRITransport.h ../src/ConformanceFault.h \
@@ -22,9 +22,12 @@ LIB_HDRS := ../src/CMRIFrameCodec.h ../src/CMRIHost.h ../src/CMRINode.h \
             ../src/transport/mock.h ../src/transport/serial.h \
             ../src/transport/serialPort.h ../src/transport/serialStream.h \
             ../src/transport/serialESP32.h ../src/RemoteNodeHandle.h ../src/NodeInit.h \
-            ../src/SimpleHostMetrics.h
+            ../src/SimpleHostMetrics.h \
+            ../src/transport/tcp.h ../src/transport/tcpPort.h \
+            ../src/transport/tcpClient.h
 
 TESTS   := test_codec test_time test_mock_transport test_serial_transport \
+           test_tcp_transport \
            test_host test_node test_tracer test_host_display_metrics \
            test_xiao_generators test_conformance_fault test_cdc_line test_node_init \
            test_iox_jig
