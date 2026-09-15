@@ -5,6 +5,21 @@ High-level changes, newest first.
 ## Unreleased
 
 ### Added
+- `TcpCMRITransport` (`src/transport/tcp.h`, `src/transport/tcp.cpp`) and
+  abstract `TcpPort` seam (`src/transport/tcpPort.h`) for JMRI C/MRI over
+  IP interop (ADR-0004, DESIGN.md D1, D11):
+  - Rides the standard `CMRITransport` packet seam with `CMRIFrameCodec`
+    framing/escaping. Compatible with JMRI's `networkdriver` (raw C/MRI
+    frames over TCP stream).
+  - Non-blocking I/O throughout: `sendPacket()` writes directly with
+    backpressure tracking, `tick()` non-blocking pump, and dynamic
+    `stats().linkUp` reflecting socket connection state.
+  - Zero dynamic allocation after `begin()`.
+  - Default inter-byte timeout is disabled (0) to tolerate IP jitter and
+    TCP segment boundary variations, overridable via `setInterByteTimeoutMs()`.
+  - `ClientTcpPort` (`src/transport/tcpClient.h`): Arduino adapter wrapping
+    any `Client` (WiFiClient, EthernetClient) under `#ifdef ARDUINO`.
+  - Gated under 12 unit tests in `tests/test_tcp_transport.cpp` with `FakeTcpPort`.
 - `examples/IoxJig` — standalone cpNode-IOX manufacturing-validation
   jig (issue #32): a XIAO ESP32-C6 image that validates jumpered
   MCP23017 loopback assemblies with no Host and no bus —
