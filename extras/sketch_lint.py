@@ -89,6 +89,7 @@ DEFAULT_SKETCHES = (
     "XiaoNode",
     "ProMiniSMININode",
     "XiaoSMININode",
+    "XiaoNode-IP",
     "IoxJig",
     "extras/bench/XiaoBenchCal",
     "extras/bench/XiaoBenchEcho",
